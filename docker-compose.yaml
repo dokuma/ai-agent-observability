@@ -25,6 +25,9 @@ services:
   # ===========================================================
   ollama:
     image: ollama/ollama:latest
+    # build:
+    #   context: ./deploy/ollama
+    #   dockerfile: Dockerfile
     ports:
       - "11434:11434"
     volumes:
@@ -120,6 +123,9 @@ services:
   # Grafana 画像レンダラー（パネル PNG 出力に必要）
   grafana-renderer:
     image: grafana/grafana-image-renderer:3.11.1
+    # build:
+    #   context: ./deploy/grafana-image-renderer
+    #   dockerfile: Dockerfile
     ports:
       - "8081:8081"
     environment:
@@ -172,6 +178,9 @@ services:
 
   grafana-mcp:
     image: grafana/mcp-grafana:latest
+    # build:
+    #   context: ./deploy/grafana-mcp
+    #   dockerfile: Dockerfile
     ports:
       - "9093:8000"
     environment:
@@ -245,6 +254,9 @@ services:
 
   langfuse-worker:
     image: langfuse/langfuse-worker:3
+    # build:
+    #   context: ./deploy/langfuse-worker
+    #   dockerfile: Dockerfile
     depends_on:
       langfuse-postgres:
         condition: service_healthy
@@ -303,6 +315,9 @@ services:
 
   langfuse-clickhouse:
     image: clickhouse/clickhouse-server:24.3
+    # build:
+    #   context: ./deploy/clickhouse
+    #   dockerfile: Dockerfile
     volumes:
       - langfuse_clickhouse_data:/var/lib/clickhouse
       - langfuse_clickhouse_logs:/var/log/clickhouse-server
