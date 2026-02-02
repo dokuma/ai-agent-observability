@@ -348,7 +348,25 @@ services:
     networks:
       - monitoring
 
+  # ===========================================================
+  # Open WebUI
+  # ===========================================================
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    ports:
+      - "3080:8080"
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+      WEBUI_SECRET_KEY: dev-secret-key
+    volumes:
+      - open_webui_data:/app/backend/data
+    depends_on:
+      - ollama
+    networks:
+      - monitoring
+
 volumes:
+  open_webui_data:
   ollama_data:
   prometheus_data:
   loki_data:

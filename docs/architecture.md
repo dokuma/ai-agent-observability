@@ -6,66 +6,65 @@
 Prometheus / Loki / Grafana の監視スタックから MCP (Model Context Protocol) サーバ経由でデータを取得し、
 LLM が異常の調査・根本原因分析 (RCA) レポートを生成する。
 
-```
-┌──────────────────────────────────────────────────────────┐
-│                    FastAPI (port 8000)                    │
-│                    api/routes.py                          │
-└──────────┬───────────────────────────────────┬───────────┘
-           │  Alert / User Query               │
-           ▼                                   │
-┌─────────────────────┐                        │
-│  Orchestrator Agent  │ ── 調査計画策定 ──►    │
-│  (orchestrator.py)   │    Human-in-the-loop   │
-└──────┬───────┬───────┘    (interrupt)         │
-       │       │                                │
-       ▼       ▼                                │
-┌──────────┐ ┌──────────┐                      │
-│ Metrics  │ │  Logs    │  ← 並列実行           │
-│  Agent   │ │  Agent   │                      │
-└────┬─────┘ └────┬─────┘                      │
-     │            │                             │
-     ▼            ▼                             │
-┌─────────────────────┐                        │
-│    RCA Agent         │ ── レポート生成 ──►    │
-│  (rca_agent.py)      │                        │
-└──────────────────────┘                        │
-       │                                        │
-       ▼ MCP Protocol (HTTP/SSE)                │
-┌──────────┐ ┌──────────┐ ┌──────────┐         │
-│Prometheus│ │  Loki    │ │ Grafana  │         │
-│  MCP     │ │  MCP     │ │  MCP     │         │
-│ :9091    │ │ :9092    │ │ :9093    │         │
-└────┬─────┘ └────┬─────┘ └────┬─────┘         │
-     │            │            │                │
-     ▼            ▼            ▼                │
-┌──────────┐ ┌──────────┐ ┌──────────┐         │
-│Prometheus│ │  Loki    │ │ Grafana  │         │
-│  :9090   │ │  :3100   │ │  :3000   │         │
-└──────────┘ └──────────┘ └──────────┘         │
-                                                │
-┌──────────────────────────────────────────────┘
-│  Langfuse (port 3001) ── トレーシング・観測
-└──────────────────────────────────────────────
+```mermaid
+graph TD
+    subgraph API["FastAPI :8000"]
+        routes["api/routes.py"]
+    end
+
+    routes -->|"Alert / User Query"| orchestrator
+
+    subgraph Agents["LangGraph Multi-Agent"]
+        orchestrator["Orchestrator Agent<br/>調査計画策定 + Human-in-the-loop"]
+        metrics["Metrics Agent"]
+        logs["Logs Agent"]
+        rca["RCA Agent<br/>レポート生成"]
+
+        orchestrator -->|並列実行| metrics
+        orchestrator -->|並列実行| logs
+        metrics --> rca
+        logs --> rca
+    end
+
+    subgraph MCP["MCP Servers (HTTP/SSE)"]
+        prom_mcp["Prometheus MCP :9091"]
+        loki_mcp["Loki MCP :9092"]
+        grafana_mcp["Grafana MCP :9093"]
+    end
+
+    metrics --> prom_mcp
+    metrics --> grafana_mcp
+    logs --> loki_mcp
+    logs --> grafana_mcp
+    rca --> grafana_mcp
+
+    subgraph Infra["監視スタック"]
+        prometheus["Prometheus :9090"]
+        loki["Loki :3100"]
+        grafana["Grafana :3000"]
+    end
+
+    prom_mcp --> prometheus
+    loki_mcp --> loki
+    grafana_mcp --> grafana
+
+    langfuse["Langfuse :3001<br/>トレーシング・観測"]
+    Agents -.->|trace| langfuse
 ```
 
 ## Agent ワークフロー
 
-```
-analyze_input → plan_investigation → resolve_time_range
-                                          │
-                                    ┌─────┴─────┐
-                                    ▼           ▼
-                              investigate   investigate
-                              _metrics      _logs
-                                    │           │
-                                    └─────┬─────┘
-                                          ▼
-                                   evaluate_results
-                                     │         │
-                              INSUFFICIENT  SUFFICIENT
-                                     │         │
-                                     ▼         ▼
-                              plan_invest.  generate_rca → END
+```mermaid
+graph LR
+    A[analyze_input] --> B[plan_investigation]
+    B --> C[resolve_time_range]
+    C --> D[investigate_metrics]
+    C --> E[investigate_logs]
+    D --> F[evaluate_results]
+    E --> F
+    F -->|INSUFFICIENT| B
+    F -->|SUFFICIENT| G[generate_rca]
+    G --> H((END))
 ```
 
 1. **analyze_input** — アラートまたはユーザクエリの内容を LLM が分析
