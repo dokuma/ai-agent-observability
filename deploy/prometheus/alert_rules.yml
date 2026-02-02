@@ -1,0 +1,22 @@
+groups:
+  - name: test-alerts
+    rules:
+      # 結合テスト用：ダミーアプリのターゲットがダウンしたらアラート
+      - alert: InstanceDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Instance {{ $labels.instance }} is down"
+          description: "{{ $labels.instance }} of job {{ $labels.job }} has been down for more than 1 minute."
+
+      # 結合テスト用：高CPU使用率アラート
+      - alert: HighCPUUsage
+        expr: 100 - (avg by(instance) (rate(process_cpu_seconds_total[5m])) * 100) < 10
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+          description: "CPU usage is above 90% for more than 2 minutes."

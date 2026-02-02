@@ -1,0 +1,364 @@
+services:
+  # ===========================================================
+  # AI Agent Monitoring アプリケーション
+  # ===========================================================
+  agent:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      ollama:
+        condition: service_started
+      prometheus-mcp:
+        condition: service_started
+      loki-mcp:
+        condition: service_started
+      grafana-mcp:
+        condition: service_started
+    networks:
+      - monitoring
+
+  # ===========================================================
+  # LLM — Ollama (qwen2.5:0.5b)
+  # ===========================================================
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "cat /proc/1/status || exit 0"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - monitoring
+
+  # 起動後にモデルを自動ダウンロード
+  ollama-pull:
+    image: curlimages/curl:latest
+    depends_on:
+      ollama:
+        condition: service_started
+    entrypoint: >
+      sh -c "
+        echo 'Pulling qwen2.5:0.5b model...' &&
+        curl -sf http://ollama:11434/api/pull -d '{\"name\": \"qwen2.5:0.5b\"}' &&
+        echo 'Model pull complete.'
+      "
+    restart: "no"
+    networks:
+      - monitoring
+
+  # ===========================================================
+  # Monitoring Stack
+  # ===========================================================
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=7d"
+      - "--web.enable-lifecycle"
+    networks:
+      - monitoring
+
+  loki:
+    image: grafana/loki:3.1.0
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./deploy/loki/loki.yml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - monitoring
+
+  promtail:
+    image: grafana/promtail:3.1.0
+    volumes:
+      - ./deploy/promtail/promtail.yml:/etc/promtail/config.yml:ro
+      - /var/log:/var/log:ro
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+    networks:
+      - monitoring
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      # パネルレンダリング
+      GF_RENDERING_SERVER_URL: http://grafana-renderer:8081/render
+      GF_RENDERING_CALLBACK_URL: http://grafana:3000/
+      GF_LOG_FILTERS: rendering:debug
+      # Service Account Token（MCP用）
+      GF_SECURITY_SERVICE_ACCOUNT_TOKEN: ${GRAFANA_SERVICE_ACCOUNT_TOKEN:-}
+    depends_on:
+      - prometheus
+      - loki
+    networks:
+      - monitoring
+
+  # Grafana 画像レンダラー（パネル PNG 出力に必要）
+  grafana-renderer:
+    image: grafana/grafana-image-renderer:3.11.1
+    ports:
+      - "8081:8081"
+    environment:
+      ENABLE_METRICS: "true"
+    networks:
+      - monitoring
+
+  # テスト用ダミーアプリ（メトリクス＋ログ生成）
+  dummy-app:
+    image: grafana/tns-app:latest
+    ports:
+      - "8080:80"
+    command:
+      - -log.level=info
+    depends_on:
+      - loki
+    networks:
+      - monitoring
+
+  # ===========================================================
+  # MCP Servers
+  # ===========================================================
+  prometheus-mcp:
+    image: ghcr.io/pab1it0/prometheus-mcp-server:latest
+    ports:
+      - "9091:8080"
+    environment:
+      PROMETHEUS_URL: http://prometheus:9090
+      PROMETHEUS_MCP_SERVER_TRANSPORT: http
+      PROMETHEUS_MCP_BIND_HOST: "0.0.0.0"
+      PROMETHEUS_MCP_BIND_PORT: "8080"
+    depends_on:
+      - prometheus
+    networks:
+      - monitoring
+
+  loki-mcp:
+    build:
+      context: ./deploy/loki-mcp
+      dockerfile: Dockerfile
+    ports:
+      - "9092:8080"
+    environment:
+      LOKI_URL: http://loki:3100
+      SSE_PORT: "8080"
+    depends_on:
+      - loki
+    networks:
+      - monitoring
+
+  grafana-mcp:
+    image: grafana/mcp-grafana:latest
+    ports:
+      - "9093:8000"
+    environment:
+      GRAFANA_URL: http://grafana:3000
+      GRAFANA_SERVICE_ACCOUNT_TOKEN: ${GRAFANA_SERVICE_ACCOUNT_TOKEN:-glsa_test_token}
+    depends_on:
+      - grafana
+    networks:
+      - monitoring
+
+  # ===========================================================
+  # Langfuse (LLM Observability)
+  # ===========================================================
+  langfuse-web:
+    image: langfuse/langfuse:latest
+    ports:
+      - "3001:3000"
+    depends_on:
+      langfuse-postgres:
+        condition: service_healthy
+      langfuse-clickhouse:
+        condition: service_started
+      langfuse-redis:
+        condition: service_started
+      langfuse-minio:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-postgres:5432/langfuse
+      CLICKHOUSE_MIGRATION_URL: clickhouse://default:clickhouse@langfuse-clickhouse:9000
+      CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: clickhouse
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      REDIS_HOST: langfuse-redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: langfuse-redis-secret
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: us-east-1
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: langfuse-minio-secret
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_BATCH_EXPORT_BUCKET: langfuse
+      LANGFUSE_S3_BATCH_EXPORT_REGION: us-east-1
+      LANGFUSE_S3_BATCH_EXPORT_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_BATCH_EXPORT_ACCESS_KEY_ID: langfuse
+      LANGFUSE_S3_BATCH_EXPORT_SECRET_ACCESS_KEY: langfuse-minio-secret
+      LANGFUSE_S3_BATCH_EXPORT_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: us-east-1
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: langfuse-minio-secret
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-dev-secret-change-in-production}
+      SALT: ${LANGFUSE_SALT:-dev-salt-change-in-production}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:-0000000000000000000000000000000000000000000000000000000000000000}
+      NEXTAUTH_URL: http://localhost:3001
+      LANGFUSE_INIT_ORG_ID: default
+      LANGFUSE_INIT_ORG_NAME: "AI Agent Monitoring"
+      LANGFUSE_INIT_PROJECT_ID: default
+      LANGFUSE_INIT_PROJECT_NAME: "ai-agent-observability"
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: pk-lf-dev
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: sk-lf-dev
+      LANGFUSE_INIT_USER_EMAIL: admin@example.com
+      LANGFUSE_INIT_USER_NAME: admin
+      LANGFUSE_INIT_USER_PASSWORD: adminadmin
+    networks:
+      - monitoring
+
+  langfuse-worker:
+    image: langfuse/langfuse-worker:3
+    depends_on:
+      langfuse-postgres:
+        condition: service_healthy
+      langfuse-clickhouse:
+        condition: service_started
+      langfuse-redis:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-postgres:5432/langfuse
+      CLICKHOUSE_MIGRATION_URL: clickhouse://default:clickhouse@langfuse-clickhouse:9000
+      CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: clickhouse
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      REDIS_HOST: langfuse-redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: langfuse-redis-secret
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: us-east-1
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: langfuse-minio-secret
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_BATCH_EXPORT_BUCKET: langfuse
+      LANGFUSE_S3_BATCH_EXPORT_REGION: us-east-1
+      LANGFUSE_S3_BATCH_EXPORT_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_BATCH_EXPORT_ACCESS_KEY_ID: langfuse
+      LANGFUSE_S3_BATCH_EXPORT_SECRET_ACCESS_KEY: langfuse-minio-secret
+      LANGFUSE_S3_BATCH_EXPORT_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: us-east-1
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: langfuse-minio-secret
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:-0000000000000000000000000000000000000000000000000000000000000000}
+    networks:
+      - monitoring
+
+  langfuse-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse
+      POSTGRES_DB: langfuse
+    volumes:
+      - langfuse_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - monitoring
+
+  langfuse-clickhouse:
+    image: clickhouse/clickhouse-server:24.3
+    volumes:
+      - langfuse_clickhouse_data:/var/lib/clickhouse
+      - langfuse_clickhouse_logs:/var/log/clickhouse-server
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: clickhouse
+    networks:
+      - monitoring
+
+  langfuse-redis:
+    image: redis:7-alpine
+    command: redis-server --requirepass langfuse-redis-secret
+    volumes:
+      - langfuse_redis_data:/data
+    networks:
+      - monitoring
+
+  langfuse-minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: langfuse
+      MINIO_ROOT_PASSWORD: langfuse-minio-secret
+    volumes:
+      - langfuse_minio_data:/data
+    networks:
+      - monitoring
+
+  # MinIO バケット自動作成
+  langfuse-minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - langfuse-minio
+    entrypoint: >
+      sh -c "
+        sleep 5 &&
+        mc alias set langfuse http://langfuse-minio:9000 langfuse langfuse-minio-secret &&
+        mc mb --ignore-existing langfuse/langfuse &&
+        echo 'MinIO bucket created.'
+      "
+    restart: "no"
+    networks:
+      - monitoring
+
+volumes:
+  ollama_data:
+  prometheus_data:
+  loki_data:
+  grafana_data:
+  langfuse_postgres_data:
+  langfuse_clickhouse_data:
+  langfuse_clickhouse_logs:
+  langfuse_redis_data:
+  langfuse_minio_data:
+
+networks:
+  monitoring:
+    driver: bridge
