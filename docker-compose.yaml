@@ -39,7 +39,7 @@ services:
 
   # 起動後にモデルを自動ダウンロード
   ollama-pull:
-    image: curlimages/curl:latest
+    image: mirror.gcr.io/curlimages/curl:latest
     depends_on:
       ollama:
         condition: service_started
@@ -57,7 +57,7 @@ services:
   # Monitoring Stack
   # ===========================================================
   prometheus:
-    image: prom/prometheus:v2.53.0
+    image: mirror.gcr.io/prom/prometheus:v2.53.0
     ports:
       - "9090:9090"
     volumes:
@@ -72,7 +72,7 @@ services:
       - monitoring
 
   loki:
-    image: grafana/loki:3.1.0
+    image: mirror.gcr.io/grafana/loki:3.1.0
     ports:
       - "3100:3100"
     volumes:
@@ -83,7 +83,7 @@ services:
       - monitoring
 
   promtail:
-    image: grafana/promtail:3.1.0
+    image: mirror.gcr.io/grafana/promtail:3.1.0
     volumes:
       - ./deploy/promtail/promtail.yml:/etc/promtail/config.yml:ro
       - /var/log:/var/log:ro
@@ -94,7 +94,7 @@ services:
       - monitoring
 
   grafana:
-    image: grafana/grafana:11.1.0
+    image: mirror.gcr.io/grafana/grafana:11.1.0
     ports:
       - "3000:3000"
     volumes:
@@ -129,7 +129,7 @@ services:
 
   # テスト用ダミーアプリ（メトリクス＋ログ生成）
   dummy-app:
-    image: grafana/tns-app:latest
+    image: mirror.gcr.io/grafana/tns-app:latest
     ports:
       - "8080:80"
     command:
@@ -186,7 +186,7 @@ services:
   # Langfuse (LLM Observability)
   # ===========================================================
   langfuse-web:
-    image: langfuse/langfuse:latest
+    image: ghcr.io/langfuse/langfuse:latest
     ports:
       - "3001:3000"
     depends_on:
@@ -286,7 +286,7 @@ services:
       - monitoring
 
   langfuse-postgres:
-    image: postgres:16-alpine
+    image: public.ecr.aws/docker/library/postgres:16-alpine
     environment:
       POSTGRES_USER: langfuse
       POSTGRES_PASSWORD: langfuse
@@ -314,7 +314,7 @@ services:
       - monitoring
 
   langfuse-redis:
-    image: redis:7-alpine
+    image: public.ecr.aws/docker/library/redis:7-alpine
     command: redis-server --requirepass langfuse-redis-secret
     volumes:
       - langfuse_redis_data:/data
@@ -322,7 +322,7 @@ services:
       - monitoring
 
   langfuse-minio:
-    image: minio/minio:latest
+    image: mirror.gcr.io/minio/minio:latest
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: langfuse
@@ -334,7 +334,7 @@ services:
 
   # MinIO バケット自動作成
   langfuse-minio-init:
-    image: minio/mc:latest
+    image: mirror.gcr.io/minio/mc:latest
     depends_on:
       - langfuse-minio
     entrypoint: >
