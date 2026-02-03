@@ -149,7 +149,10 @@ services:
   # MCP Servers
   # ===========================================================
   prometheus-mcp:
-    image: ghcr.io/pab1it0/prometheus-mcp-server:latest
+    image: prometheus-mcp-server:custom
+    # build:
+    #   context: ./deploy/prometheus-mcp
+    #   dockerfile: Dockerfile
     ports:
       - "9091:8080"
     environment:

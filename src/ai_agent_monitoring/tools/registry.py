@@ -59,12 +59,26 @@ class ToolRegistry:
         )
 
     async def health_check(self) -> dict[str, bool]:
-        """全MCP Serverのヘルスチェックを実行."""
+        """全MCP Serverのヘルスチェックを実行.
+
+        各MCPサーバーのヘルスチェックエンドポイント:
+        - grafana: /healthz (専用エンドポイント)
+        - prometheus: /sse (SSE接続可能かで代用)
+        - loki: /sse (SSE接続可能かで代用)
+        """
+        # 各MCPサーバー固有のヘルスチェックエンドポイント
+        health_endpoints: dict[str, str] = {
+            "grafana": "/healthz",
+            "prometheus": "/sse",
+            "loki": "/sse",
+        }
+
         results: dict[str, bool] = {}
         for conn in self._all_connections:
+            endpoint = health_endpoints.get(conn.name, "/healthz")
             try:
                 async with httpx.AsyncClient(timeout=5.0) as client:
-                    response = await client.get(f"{conn.client.base_url}/health")
+                    response = await client.get(f"{conn.client.base_url}{endpoint}")
                     conn.healthy = response.status_code == 200
             except httpx.HTTPError:
                 conn.healthy = False

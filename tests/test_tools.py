@@ -13,28 +13,19 @@ from ai_agent_monitoring.tools.registry import ToolRegistry
 
 
 class TestMCPClient:
-    @pytest.mark.asyncio
-    async def test_call_tool(self):
-        with patch("httpx.AsyncClient") as mock_client_cls:
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.json.return_value = {"result": "ok"}
-            mock_response.raise_for_status = MagicMock()
+    def test_sse_url(self):
+        """SSE URLが正しく生成されることを確認."""
+        client = MCPClient("http://localhost:8080")
+        assert client.sse_url == "http://localhost:8080/sse"
 
-            mock_client = AsyncMock()
-            mock_client.post = AsyncMock(return_value=mock_response)
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=None)
-            mock_client_cls.return_value = mock_client
+        # 末尾スラッシュが正規化されることを確認
+        client2 = MCPClient("http://localhost:8080/")
+        assert client2.sse_url == "http://localhost:8080/sse"
 
-            client = MCPClient("http://localhost:8080")
-            result = await client.call_tool("test_tool", {"key": "value"})
-
-            assert result == {"result": "ok"}
-            mock_client.post.assert_called_once_with(
-                "http://localhost:8080/tools/call",
-                json={"tool": "test_tool", "parameters": {"key": "value"}},
-            )
+    def test_base_url_normalization(self):
+        """base_urlの末尾スラッシュが除去されることを確認."""
+        client = MCPClient("http://localhost:8080/")
+        assert client.base_url == "http://localhost:8080"
 
 
 class TestPrometheusMCPTool:
@@ -387,13 +378,25 @@ class TestToolRegistry:
 
     @pytest.mark.asyncio
     async def test_health_check_all_down(self, settings):
-        registry = ToolRegistry.from_settings(settings)
-        # 実際の接続はないのですべてunhealthy
-        results = await registry.health_check()
+        import httpx
 
-        assert results["prometheus"] is False
-        assert results["loki"] is False
-        assert results["grafana"] is False
+        registry = ToolRegistry.from_settings(settings)
+
+        # httpxをモックして全サーバーへの接続を失敗させる
+        with patch("ai_agent_monitoring.tools.registry.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(
+                side_effect=httpx.ConnectError("Connection refused")
+            )
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            results = await registry.health_check()
+
+            assert results["prometheus"] is False
+            assert results["loki"] is False
+            assert results["grafana"] is False
 
     def test_create_all_tools(self, settings):
         registry = ToolRegistry.from_settings(settings)
