@@ -43,3 +43,6 @@ Thumbs.db
 
 # RCA reports (runtime output)
 /tmp/rca_reports/
+
+# Local data (model files, etc.)
+data/

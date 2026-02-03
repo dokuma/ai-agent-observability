@@ -31,7 +31,7 @@ services:
     ports:
       - "11434:11434"
     volumes:
-      - ollama_data:/root/.ollama
+      - ./data/ollama:/root/.ollama
     healthcheck:
       test: ["CMD-SHELL", "cat /proc/1/status || exit 0"]
       interval: 10s
@@ -382,7 +382,6 @@ services:
 
 volumes:
   open_webui_data:
-  ollama_data:
   prometheus_data:
   loki_data:
   grafana_data:

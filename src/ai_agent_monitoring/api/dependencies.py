@@ -6,6 +6,7 @@ from datetime import datetime
 from uuid import uuid4
 
 from langchain_openai import ChatOpenAI
+from pydantic import SecretStr
 
 from ai_agent_monitoring.agents.orchestrator import OrchestratorAgent
 from ai_agent_monitoring.core.config import Settings
@@ -52,7 +53,7 @@ class AppState:
         llm = ChatOpenAI(
             base_url=self.settings.llm_endpoint,
             model=self.settings.llm_model,
-            api_key="not-needed",  # type: ignore[arg-type]  # vLLM等のローカルサービス用
+            api_key=SecretStr(self.settings.llm_api_key),
         )
 
         # Orchestrator

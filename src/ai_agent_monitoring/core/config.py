@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     # LLM
     llm_endpoint: str = "http://localhost:8000"
     llm_model: str = "llama-3.1-8b"
+    llm_api_key: str = "not-needed"
 
     # Monitoring Stack
     prometheus_url: str = "http://localhost:9090"
