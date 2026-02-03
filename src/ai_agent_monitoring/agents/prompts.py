@@ -26,14 +26,35 @@ Metrics Agent・Logs Agentに調査を委任し、最終的にRCAレポートを
 - 「昨日の16時ごろ」→ 昨日の15:30〜16:30（前後30分の幅を持たせる）
 - 「今日の午前中」→ 今日の09:00〜12:00
 
+## クエリ文法
+
+### PromQL (Prometheus Query Language)
+- 基本形式: `metric_name{{label="value", label2="value2"}}`
+- 範囲クエリ: `metric_name{{job="target"}}[5m]`
+- 集約: `rate(metric_name{{job="target"}}[5m])`
+- 例: `node_cpu_seconds_total{{job="node-exporter", mode="idle"}}`
+- 例: `rate(http_requests_total{{status="500"}}[5m])`
+
+### LogQL (Loki Query Language)
+- **重要**: LogQLはSQLではありません。以下の文法に厳密に従ってください。
+- 基本形式: `{{label="value", label2="value2"}}`
+- フィルタ: `{{job="varlogs"}} |= "error"`
+- パイプライン: `{{namespace="default"}} |= "error" | json | level="error"`
+- 時間範囲はクエリ内ではなくAPIパラメータで指定されます（クエリに含めないでください）
+- 正しい例: `{{job="varlogs", filename="/var/log/syslog"}} |= "error"`
+- 正しい例: `{{namespace="monitoring", container="prometheus"}} |~ "failed|error"`
+- **間違い例**: `kubernetes_pod_name = 'my-pod' AND log_time >= '...'` (これはSQLであり、LogQLではありません)
+
 ## 調査計画の出力形式
 以下のJSON形式で調査計画を出力してください。
-**重要**: promql_queries, logql_queries, target_instancesは、上記「監視環境」で
-示された利用可能なメトリクス・ラベル・インスタンスを使用してください。
+**重要**:
+- promql_queries, logql_queries, target_instancesは、
+  上記「監視環境」で示された利用可能なメトリクス・ラベル・インスタンスを使用
+- 上記「クエリ文法」に従った正しい構文でクエリを記述
 
 {{
-  "promql_queries": ["<利用可能なメトリクスを使ったPromQLクエリ>", ...],
-  "logql_queries": ["<利用可能なラベルを使ったLogQLクエリ>", ...],
+  "promql_queries": ["<PromQL文法に従ったクエリ>", ...],
+  "logql_queries": ["<LogQL文法に従ったクエリ - 中括弧で始まること>", ...],
   "target_instances": ["<利用可能なインスタンスから選択>", ...],
   "time_range": {{"start": "<ISO 8601絶対時刻>", "end": "<ISO 8601絶対時刻>"}}
 }}

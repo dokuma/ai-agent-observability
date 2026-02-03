@@ -17,6 +17,10 @@ from ai_agent_monitoring.core.config import Settings
 from ai_agent_monitoring.core.models import TriggerType
 from ai_agent_monitoring.core.state import AgentState, EnvironmentContext, InvestigationPlan, TimeRange
 from ai_agent_monitoring.tools.grafana import GrafanaMCPTool
+from ai_agent_monitoring.tools.query_validator import (
+    QueryValidator,
+    get_all_fewshot_examples,
+)
 from ai_agent_monitoring.tools.registry import ToolRegistry
 from ai_agent_monitoring.tools.time import create_time_tools
 
@@ -65,6 +69,10 @@ class OrchestratorAgent:
         ) if loki_mcp or self.grafana_mcp else None
 
         self.rca_agent = RCAAgent(llm, grafana_mcp=self.grafana_mcp)
+
+        # クエリバリデータ
+        self.query_validator = QueryValidator()
+
         self.graph = self._build_graph()
 
     def _build_graph(self) -> StateGraph[AgentState]:
@@ -81,6 +89,7 @@ class OrchestratorAgent:
         graph.add_node("discover_environment", self._discover_environment)
         graph.add_node("analyze_input", self._analyze_input)
         graph.add_node("plan_investigation", self._plan_investigation)
+        graph.add_node("validate_queries", self._validate_queries)
         graph.add_node("resolve_time_range", self._resolve_time_range_node)
         graph.add_node("evaluate_results", self._evaluate_results)
         graph.add_node("generate_rca", self.rca_agent.compile())
@@ -89,7 +98,8 @@ class OrchestratorAgent:
         graph.set_entry_point("discover_environment")
         graph.add_edge("discover_environment", "analyze_input")
         graph.add_edge("analyze_input", "plan_investigation")
-        graph.add_edge("plan_investigation", "resolve_time_range")
+        graph.add_edge("plan_investigation", "validate_queries")
+        graph.add_edge("validate_queries", "resolve_time_range")
 
         # Metrics/Logs Agentは利用可能な場合のみ追加
         metrics_agent = self.metrics_agent
@@ -396,8 +406,12 @@ class OrchestratorAgent:
             for q in env.example_logql_queries:
                 lines.append(f"  - {q}")
 
+        # Few-shot例を追加
+        lines.append("\n" + get_all_fewshot_examples())
+
         if not lines:
-            return "環境情報を取得できませんでした。一般的なメトリクス名を使用してください。"
+            # 環境情報がなくてもFew-shot例は提供
+            return get_all_fewshot_examples()
 
         return "\n".join(lines)
 
@@ -422,6 +436,128 @@ class OrchestratorAgent:
             "plan": plan,
             "iteration_count": state.get("iteration_count", 0) + 1,
         }
+
+    async def _validate_queries(self, state: AgentState) -> dict[str, Any]:
+        """生成されたクエリを検証し、必要に応じて修正.
+
+        LLMが生成したPromQL/LogQLクエリの文法を検証し、
+        エラーがある場合は修正を試みるか、LLMに再生成を依頼する。
+        """
+        plan = state.get("plan")
+        if not plan:
+            return {}
+
+        validation_errors: list[str] = []
+        corrected_promql: list[str] = []
+        corrected_logql: list[str] = []
+
+        # PromQLの検証
+        for query in plan.promql_queries:
+            result = self.query_validator.validate_promql(query)
+            if result.is_valid:
+                corrected_promql.append(query)
+            elif result.corrected_query:
+                # 修正されたクエリを再検証
+                revalidated = self.query_validator.validate_promql(
+                    result.corrected_query
+                )
+                if revalidated.is_valid:
+                    corrected_promql.append(result.corrected_query)
+                    logger.info(
+                        "PromQL auto-corrected: %s -> %s",
+                        query, result.corrected_query
+                    )
+                else:
+                    validation_errors.append(
+                        f"PromQL: {query} - {', '.join(result.errors or [])}"
+                    )
+            else:
+                validation_errors.append(
+                    f"PromQL: {query} - {', '.join(result.errors or [])}"
+                )
+
+        # LogQLの検証
+        for query in plan.logql_queries:
+            result = self.query_validator.validate_logql(query)
+            if result.is_valid:
+                corrected_logql.append(query)
+            elif result.corrected_query:
+                # 修正されたクエリを再検証
+                revalidated = self.query_validator.validate_logql(
+                    result.corrected_query
+                )
+                if revalidated.is_valid:
+                    corrected_logql.append(result.corrected_query)
+                    logger.info(
+                        "LogQL auto-corrected: %s -> %s",
+                        query, result.corrected_query
+                    )
+                else:
+                    validation_errors.append(
+                        f"LogQL: {query} - {', '.join(result.errors or [])}"
+                    )
+            else:
+                validation_errors.append(
+                    f"LogQL: {query} - {', '.join(result.errors or [])}"
+                )
+
+        # エラーがあればLLMに再生成を依頼
+        if validation_errors:
+            logger.warning("Query validation errors: %s", validation_errors)
+
+            # Few-shot例を含めて再生成を依頼
+            fewshot = get_all_fewshot_examples()
+            error_msg = "\n".join(validation_errors)
+
+            messages = [
+                *state["messages"],
+                HumanMessage(
+                    content=(
+                        f"生成されたクエリに文法エラーがありました:\n{error_msg}\n\n"
+                        f"以下のクエリ例を参考に、正しい文法でクエリを再生成してください:\n"
+                        f"{fewshot}\n\n"
+                        "修正した調査計画をJSON形式で出力してください。"
+                    )
+                ),
+            ]
+            response = await self.llm.ainvoke(messages)
+            new_plan = self._parse_plan(response.content)
+
+            # 再検証（再帰的に呼び出さない - 1回のみ）
+            final_promql = []
+            final_logql = []
+
+            for query in new_plan.promql_queries:
+                result = self.query_validator.validate_promql(query)
+                if result.is_valid:
+                    final_promql.append(query)
+                elif result.corrected_query:
+                    final_promql.append(result.corrected_query)
+                else:
+                    logger.error("PromQL still invalid after retry: %s", query)
+
+            for query in new_plan.logql_queries:
+                result = self.query_validator.validate_logql(query)
+                if result.is_valid:
+                    final_logql.append(query)
+                elif result.corrected_query:
+                    final_logql.append(result.corrected_query)
+                else:
+                    logger.error("LogQL still invalid after retry: %s", query)
+
+            new_plan.promql_queries = final_promql
+            new_plan.logql_queries = final_logql
+
+            return {
+                "messages": [response],
+                "plan": new_plan,
+            }
+
+        # エラーがなければ修正済みクエリを適用
+        plan.promql_queries = corrected_promql
+        plan.logql_queries = corrected_logql
+
+        return {"plan": plan}
 
     async def _resolve_time_range_node(self, state: AgentState) -> dict[str, Any]:
         """時間範囲を確定させるノード.
