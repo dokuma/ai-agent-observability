@@ -20,22 +20,38 @@ from ai_agent_monitoring.core.models import (
     UserQuery,
 )
 from ai_agent_monitoring.core.state import AgentState, InvestigationPlan
+from ai_agent_monitoring.tools.registry import MCPConnection, ToolRegistry
 
 # ---- ヘルパー ----
+
+
+def _make_mock_mcp():
+    """モックMCPクライアントを生成."""
+    mock_mcp = MagicMock()
+    mock_mcp.base_url = "http://mock:8080"
+    mock_mcp.timeout = 30.0
+    mock_mcp.call_tool = AsyncMock(return_value={})
+    return mock_mcp
+
+
+def _make_mock_registry():
+    """モックToolRegistryを生成（全て健全）."""
+    mock_mcp = _make_mock_mcp()
+    registry = MagicMock(spec=ToolRegistry)
+    registry.prometheus = MCPConnection(name="prometheus", client=mock_mcp, healthy=True)
+    registry.loki = MCPConnection(name="loki", client=mock_mcp, healthy=True)
+    registry.grafana = MCPConnection(name="grafana", client=mock_mcp, healthy=True)
+    return registry
+
 
 def _make_orchestrator():
     """テスト用OrchestratorAgentを生成."""
     llm = MagicMock()
     llm.bind_tools = MagicMock(return_value=llm)
-    mock_mcp = MagicMock()
-    mock_mcp.base_url = "http://mock:8080"
-    mock_mcp.timeout = 30.0
-    mock_mcp.call_tool = AsyncMock(return_value={})
+    registry = _make_mock_registry()
     agent = OrchestratorAgent(
         llm=llm,
-        prometheus_mcp=mock_mcp,
-        loki_mcp=mock_mcp,
-        grafana_mcp=mock_mcp,
+        registry=registry,
     )
     return agent, llm
 
@@ -45,11 +61,8 @@ def _make_metrics_agent():
     llm = MagicMock()
     llm.bind_tools = MagicMock(return_value=llm)
     llm.ainvoke = AsyncMock()
-    mock_mcp = MagicMock()
-    mock_mcp.base_url = "http://mock:8080"
-    mock_mcp.timeout = 30.0
-    mock_mcp.call_tool = AsyncMock(return_value={})
-    agent = MetricsAgent(llm, mock_mcp, grafana_mcp=mock_mcp)
+    mock_mcp = _make_mock_mcp()
+    agent = MetricsAgent(llm, prometheus_mcp=mock_mcp, grafana_mcp=mock_mcp)
     return agent, llm
 
 
@@ -58,11 +71,8 @@ def _make_logs_agent():
     llm = MagicMock()
     llm.bind_tools = MagicMock(return_value=llm)
     llm.ainvoke = AsyncMock()
-    mock_mcp = MagicMock()
-    mock_mcp.base_url = "http://mock:8080"
-    mock_mcp.timeout = 30.0
-    mock_mcp.call_tool = AsyncMock(return_value={})
-    agent = LogsAgent(llm, mock_mcp, grafana_mcp=mock_mcp)
+    mock_mcp = _make_mock_mcp()
+    agent = LogsAgent(llm, loki_mcp=mock_mcp, grafana_mcp=mock_mcp)
     return agent, llm
 
 

@@ -11,6 +11,7 @@ from ai_agent_monitoring.tools.base import MCPClient
 from ai_agent_monitoring.tools.grafana import create_grafana_tools
 from ai_agent_monitoring.tools.loki import create_loki_tools
 from ai_agent_monitoring.tools.prometheus import create_prometheus_tools
+from ai_agent_monitoring.tools.time import create_time_tools
 
 logger = logging.getLogger(__name__)
 
@@ -61,24 +62,29 @@ class ToolRegistry:
     async def health_check(self) -> dict[str, bool]:
         """全MCP Serverのヘルスチェックを実行.
 
-        各MCPサーバーのヘルスチェックエンドポイント:
-        - grafana: /healthz (専用エンドポイント)
-        - prometheus: /sse (SSE接続可能かで代用)
-        - loki: /sse (SSE接続可能かで代用)
+        各MCPサーバーのヘルスチェック方法:
+        - grafana: GET /healthz (専用エンドポイント)
+        - prometheus: HEAD /sse (SSEエンドポイントの存在確認)
+        - loki: HEAD /sse (SSEエンドポイントの存在確認)
         """
-        # 各MCPサーバー固有のヘルスチェックエンドポイント
-        health_endpoints: dict[str, str] = {
-            "grafana": "/healthz",
-            "prometheus": "/sse",
-            "loki": "/sse",
+        # 各MCPサーバー固有のヘルスチェック設定
+        # (endpoint, use_head_request)
+        health_config: dict[str, tuple[str, bool]] = {
+            "grafana": ("/healthz", False),  # GET
+            "prometheus": ("/sse", True),  # HEAD
+            "loki": ("/sse", True),  # HEAD
         }
 
         results: dict[str, bool] = {}
         for conn in self._all_connections:
-            endpoint = health_endpoints.get(conn.name, "/healthz")
+            endpoint, use_head = health_config.get(conn.name, ("/healthz", False))
             try:
                 async with httpx.AsyncClient(timeout=5.0) as client:
-                    response = await client.get(f"{conn.client.base_url}{endpoint}")
+                    url = f"{conn.client.base_url}{endpoint}"
+                    if use_head:
+                        response = await client.head(url)
+                    else:
+                        response = await client.get(url)
                     conn.healthy = response.status_code == 200
             except httpx.HTTPError:
                 conn.healthy = False
@@ -91,14 +97,94 @@ class ToolRegistry:
 
         return results
 
-    def create_all_tools(self) -> list[BaseTool]:
-        """全MCP Serverから利用可能なLangChain Toolを一括生成."""
+    def create_all_tools(self, healthy_only: bool = True) -> list[BaseTool]:
+        """全MCP Serverから利用可能なLangChain Toolを一括生成.
+
+        Args:
+            healthy_only: Trueの場合、healthyなMCPのみからツールを生成
+
+        Returns:
+            利用可能なツールのリスト
+        """
         tools: list[BaseTool] = []
-        tools += create_prometheus_tools(self.prometheus.client)
-        tools += create_loki_tools(self.loki.client)
-        tools += create_grafana_tools(self.grafana.client)
+
+        # 時刻ツールは常に追加（ローカルツールなのでヘルスチェック不要）
+        tools += create_time_tools()
+
+        if not healthy_only or self.prometheus.healthy:
+            tools += create_prometheus_tools(self.prometheus.client)
+        else:
+            logger.warning("Prometheus MCP is unhealthy, skipping tools")
+
+        if not healthy_only or self.loki.healthy:
+            tools += create_loki_tools(self.loki.client)
+        else:
+            logger.warning("Loki MCP is unhealthy, skipping tools")
+
+        if not healthy_only or self.grafana.healthy:
+            tools += create_grafana_tools(self.grafana.client)
+        else:
+            logger.warning("Grafana MCP is unhealthy, skipping tools")
+
+        return tools
+
+    def create_prioritized_tools(self, grafana_first: bool = True) -> list[BaseTool]:
+        """優先順位付きでツールを生成.
+
+        Grafana MCPを優先し、unhealthyなMCPはスキップする。
+        Grafana経由でPrometheus/Lokiにアクセスできる場合、
+        直接のprometheus-mcp/loki-mcpはフォールバックとして使用。
+
+        Args:
+            grafana_first: Grafanaツールを優先する場合True
+
+        Returns:
+            優先順位付きのツールリスト
+        """
+        tools: list[BaseTool] = []
+
+        # 時刻ツールは常に最初に追加
+        tools += create_time_tools()
+
+        if grafana_first and self.grafana.healthy:
+            # Grafana MCPが健全ならGrafanaツールを優先
+            tools += create_grafana_tools(self.grafana.client)
+            logger.info("Grafana MCP tools added (primary)")
+
+            # Grafana経由でアクセスできない場合のフォールバック
+            if self.prometheus.healthy:
+                tools += create_prometheus_tools(self.prometheus.client)
+                logger.info("Prometheus MCP tools added (fallback)")
+
+            if self.loki.healthy:
+                tools += create_loki_tools(self.loki.client)
+                logger.info("Loki MCP tools added (fallback)")
+        else:
+            # Grafanaが使えない場合は直接アクセス
+            if self.grafana.healthy:
+                tools += create_grafana_tools(self.grafana.client)
+
+            if self.prometheus.healthy:
+                tools += create_prometheus_tools(self.prometheus.client)
+                logger.info("Prometheus MCP tools added (direct)")
+            else:
+                logger.warning("Prometheus MCP is unhealthy, skipping")
+
+            if self.loki.healthy:
+                tools += create_loki_tools(self.loki.client)
+                logger.info("Loki MCP tools added (direct)")
+            else:
+                logger.warning("Loki MCP is unhealthy, skipping")
+
+        if not tools:
+            logger.error("No healthy MCP servers available!")
+
         return tools
 
     def get_healthy_connections(self) -> list[MCPConnection]:
         """ヘルスチェック済みで正常な接続のみ返す."""
         return [conn for conn in self._all_connections if conn.healthy]
+
+    def is_any_healthy(self) -> bool:
+        """少なくとも1つのMCPが健全かどうか."""
+        return any(conn.healthy for conn in self._all_connections)

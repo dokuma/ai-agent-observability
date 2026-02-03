@@ -22,13 +22,33 @@ class MetricsAgent:
 
     Orchestrator から委任された PromQL クエリを実行し、
     メトリクスデータの異常パターンを分析する。
+
+    Grafana MCP が利用可能な場合は優先的に使用し、
+    Prometheus MCP はフォールバックとして使用する。
     """
 
-    def __init__(self, llm: Any, prometheus_mcp: MCPClient, grafana_mcp: MCPClient | None = None) -> None:
-        self.tools = create_prometheus_tools(prometheus_mcp)
+    def __init__(
+        self,
+        llm: Any,
+        prometheus_mcp: MCPClient | None = None,
+        grafana_mcp: MCPClient | None = None,
+    ) -> None:
+        self.tools: list[Any] = []
+
+        # Grafana MCPを優先（Grafana経由でPrometheusにアクセス可能）
         if grafana_mcp:
             self.tools += create_grafana_tools(grafana_mcp)
-        self.llm = llm.bind_tools(self.tools)
+            logger.info("MetricsAgent: Using Grafana MCP (primary)")
+
+        # Prometheus MCPはフォールバック
+        if prometheus_mcp:
+            self.tools += create_prometheus_tools(prometheus_mcp)
+            logger.info("MetricsAgent: Using Prometheus MCP (fallback)")
+
+        if not self.tools:
+            logger.warning("MetricsAgent: No MCP tools available!")
+
+        self.llm = llm.bind_tools(self.tools) if self.tools else llm
         self.graph = self._build_graph()
 
     def _build_graph(self) -> StateGraph[AgentState]:

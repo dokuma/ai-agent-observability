@@ -400,10 +400,20 @@ class TestToolRegistry:
 
     def test_create_all_tools(self, settings):
         registry = ToolRegistry.from_settings(settings)
-        tools = registry.create_all_tools()
 
-        # prometheus(2) + loki(2) + grafana(7) = 11
-        assert len(tools) == 11
+        # healthy_only=False で全ツールを生成
+        tools = registry.create_all_tools(healthy_only=False)
+
+        # time(3) + prometheus(2) + loki(2) + grafana(7) = 14
+        assert len(tools) == 14
+
+    def test_create_all_tools_healthy_only(self, settings):
+        registry = ToolRegistry.from_settings(settings)
+
+        # デフォルト（healthy_only=True）で健全なMCPのみ
+        # 全てunhealthyなので時刻ツール(3)のみ
+        tools = registry.create_all_tools()
+        assert len(tools) == 3  # time tools only
 
     def test_get_healthy_connections(self, settings):
         registry = ToolRegistry.from_settings(settings)

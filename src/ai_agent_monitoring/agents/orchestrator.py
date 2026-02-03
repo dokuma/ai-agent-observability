@@ -16,8 +16,8 @@ from ai_agent_monitoring.agents.rca_agent import RCAAgent
 from ai_agent_monitoring.core.config import Settings
 from ai_agent_monitoring.core.models import TriggerType
 from ai_agent_monitoring.core.state import AgentState, InvestigationPlan, TimeRange
-from ai_agent_monitoring.tools.base import MCPClient
-from ai_agent_monitoring.tools.grafana import create_grafana_tools
+from ai_agent_monitoring.tools.registry import ToolRegistry
+from ai_agent_monitoring.tools.time import create_time_tools
 
 logger = logging.getLogger(__name__)
 
@@ -32,29 +32,50 @@ class OrchestratorAgent:
     def __init__(
         self,
         llm: Any,
-        prometheus_mcp: MCPClient,
-        loki_mcp: MCPClient,
-        grafana_mcp: MCPClient,
+        registry: ToolRegistry,
         settings: Settings | None = None,
     ) -> None:
         self.llm = llm
         self.settings = settings or Settings()
-        self.grafana_tools = create_grafana_tools(grafana_mcp)
-        self.metrics_agent = MetricsAgent(llm, prometheus_mcp, grafana_mcp)
-        self.logs_agent = LogsAgent(llm, loki_mcp, grafana_mcp)
+        self.registry = registry
+
+        # 時刻ツールは常に利用可能
+        self.time_tools = create_time_tools()
+
+        # 各Agentはregistryから健全なMCPクライアントを使用
+        # Grafana優先で、unhealthyなMCPはスキップ
+        grafana_mcp = registry.grafana.client if registry.grafana.healthy else None
+        prometheus_mcp = registry.prometheus.client if registry.prometheus.healthy else None
+        loki_mcp = registry.loki.client if registry.loki.healthy else None
+
+        self.metrics_agent = MetricsAgent(
+            llm,
+            prometheus_mcp=prometheus_mcp,
+            grafana_mcp=grafana_mcp,
+        ) if prometheus_mcp or grafana_mcp else None
+
+        self.logs_agent = LogsAgent(
+            llm,
+            loki_mcp=loki_mcp,
+            grafana_mcp=grafana_mcp,
+        ) if loki_mcp or grafana_mcp else None
+
         self.rca_agent = RCAAgent(llm, grafana_mcp=grafana_mcp)
         self.graph = self._build_graph()
 
     def _build_graph(self) -> StateGraph[AgentState]:
-        """LangGraphワークフローを構築."""
+        """LangGraphワークフローを構築.
+
+        利用可能なMCPに応じてグラフを動的に構築する。
+        - Grafana MCP優先
+        - unhealthyなMCPはスキップ
+        """
         graph = StateGraph(AgentState)
 
-        # ノード登録
+        # 基本ノード登録
         graph.add_node("analyze_input", self._analyze_input)
         graph.add_node("plan_investigation", self._plan_investigation)
         graph.add_node("resolve_time_range", self._resolve_time_range_node)
-        graph.add_node("investigate_metrics", self.metrics_agent.compile())
-        graph.add_node("investigate_logs", self.logs_agent.compile())
         graph.add_node("evaluate_results", self._evaluate_results)
         graph.add_node("generate_rca", self.rca_agent.compile())
 
@@ -62,10 +83,28 @@ class OrchestratorAgent:
         graph.set_entry_point("analyze_input")
         graph.add_edge("analyze_input", "plan_investigation")
         graph.add_edge("plan_investigation", "resolve_time_range")
-        graph.add_edge("resolve_time_range", "investigate_metrics")
-        graph.add_edge("resolve_time_range", "investigate_logs")
-        graph.add_edge("investigate_metrics", "evaluate_results")
-        graph.add_edge("investigate_logs", "evaluate_results")
+
+        # Metrics/Logs Agentは利用可能な場合のみ追加
+        metrics_agent = self.metrics_agent
+        logs_agent = self.logs_agent
+
+        if metrics_agent is not None:
+            graph.add_node("investigate_metrics", metrics_agent.compile())
+            graph.add_edge("resolve_time_range", "investigate_metrics")
+            graph.add_edge("investigate_metrics", "evaluate_results")
+        else:
+            logger.warning("MetricsAgent unavailable, skipping metrics investigation")
+
+        if logs_agent is not None:
+            graph.add_node("investigate_logs", logs_agent.compile())
+            graph.add_edge("resolve_time_range", "investigate_logs")
+            graph.add_edge("investigate_logs", "evaluate_results")
+        else:
+            logger.warning("LogsAgent unavailable, skipping logs investigation")
+
+        # 両方のAgentが使えない場合は直接評価へ
+        if metrics_agent is None and logs_agent is None:
+            graph.add_edge("resolve_time_range", "evaluate_results")
         graph.add_conditional_edges(
             "evaluate_results",
             self._should_continue,
@@ -107,8 +146,11 @@ class OrchestratorAgent:
             else:
                 content = "入力が不正です。アラートまたはユーザクエリが必要です。"
 
+        # 現在時刻を取得してプロンプトに注入
+        current_time = datetime.now(timezone.utc).isoformat()
         system_prompt = ORCHESTRATOR_SYSTEM_PROMPT.format(
             max_iterations=state.get("max_iterations", 3),
+            current_time=current_time,
         )
 
         messages = [

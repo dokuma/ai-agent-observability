@@ -56,12 +56,10 @@ class AppState:
             api_key=SecretStr(self.settings.llm_api_key),
         )
 
-        # Orchestrator
+        # Orchestrator（registryを渡してhealthy状態を考慮）
         self.orchestrator = OrchestratorAgent(
             llm=llm,
-            prometheus_mcp=self.registry.prometheus.client,
-            loki_mcp=self.registry.loki.client,
-            grafana_mcp=self.registry.grafana.client,
+            registry=self.registry,
             settings=self.settings,
         )
         logger.info("Orchestrator Agent initialized")

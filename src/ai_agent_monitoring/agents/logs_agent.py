@@ -22,13 +22,33 @@ class LogsAgent:
 
     Orchestrator から委任された LogQL クエリを実行し、
     エラーパターンやログの異常を分析する。
+
+    Grafana MCP が利用可能な場合は優先的に使用し、
+    Loki MCP はフォールバックとして使用する。
     """
 
-    def __init__(self, llm: Any, loki_mcp: MCPClient, grafana_mcp: MCPClient | None = None) -> None:
-        self.tools = create_loki_tools(loki_mcp)
+    def __init__(
+        self,
+        llm: Any,
+        loki_mcp: MCPClient | None = None,
+        grafana_mcp: MCPClient | None = None,
+    ) -> None:
+        self.tools: list[Any] = []
+
+        # Grafana MCPを優先（Grafana経由でLokiにアクセス可能）
         if grafana_mcp:
             self.tools += create_grafana_tools(grafana_mcp)
-        self.llm = llm.bind_tools(self.tools)
+            logger.info("LogsAgent: Using Grafana MCP (primary)")
+
+        # Loki MCPはフォールバック
+        if loki_mcp:
+            self.tools += create_loki_tools(loki_mcp)
+            logger.info("LogsAgent: Using Loki MCP (fallback)")
+
+        if not self.tools:
+            logger.warning("LogsAgent: No MCP tools available!")
+
+        self.llm = llm.bind_tools(self.tools) if self.tools else llm
         self.graph = self._build_graph()
 
     def _build_graph(self) -> StateGraph[AgentState]:
