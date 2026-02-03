@@ -296,11 +296,16 @@ class TestGrafanaMCPTool:
 
     def test_create_tools(self, mock_mcp_client):
         tools = create_grafana_tools(mock_mcp_client)
-        assert len(tools) == 7
+        # 既存7 + 環境発見ツール7 = 14
+        assert len(tools) == 14
         names = [t.name for t in tools]
         assert "grafana_list_dashboards" in names
         assert "grafana_query_prometheus" in names
         assert "grafana_get_firing_alerts" in names
+        # 環境発見ツールの確認
+        assert "grafana_list_datasources" in names
+        assert "grafana_list_prometheus_metrics" in names
+        assert "grafana_list_loki_labels" in names
 
 
 class TestGrafanaToolFunctions:
@@ -404,8 +409,8 @@ class TestToolRegistry:
         # healthy_only=False で全ツールを生成
         tools = registry.create_all_tools(healthy_only=False)
 
-        # time(3) + prometheus(2) + loki(2) + grafana(7) = 14
-        assert len(tools) == 14
+        # time(3) + prometheus(2) + loki(2) + grafana(14) = 21
+        assert len(tools) == 21
 
     def test_create_all_tools_healthy_only(self, settings):
         registry = ToolRegistry.from_settings(settings)

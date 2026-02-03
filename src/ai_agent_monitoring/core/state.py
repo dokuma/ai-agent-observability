@@ -28,6 +28,33 @@ class TimeRange(BaseModel):
     end: datetime
 
 
+class EnvironmentContext(BaseModel):
+    """監視環境のコンテキスト情報.
+
+    Grafana MCPから取得した環境情報を格納する。
+    調査計画の生成時に利用可能なメトリクス・ラベル・
+    ターゲットを把握するために使用。
+    """
+
+    # データソース情報
+    prometheus_datasource_uid: str = ""
+    loki_datasource_uid: str = ""
+
+    # 利用可能なメトリクスとラベル
+    available_metrics: list[str] = Field(default_factory=list)
+    available_labels: list[str] = Field(default_factory=list)
+    available_jobs: list[str] = Field(default_factory=list)
+    available_instances: list[str] = Field(default_factory=list)
+
+    # Lokiのラベル情報
+    loki_labels: list[str] = Field(default_factory=list)
+    loki_jobs: list[str] = Field(default_factory=list)
+
+    # 既存ダッシュボードから学習したクエリパターン
+    example_promql_queries: list[str] = Field(default_factory=list)
+    example_logql_queries: list[str] = Field(default_factory=list)
+
+
 class InvestigationPlan(BaseModel):
     """Orchestratorが生成する調査計画."""
 
@@ -48,6 +75,9 @@ class AgentState(MessagesState):
     alert: Alert | None = None  # type: ignore[misc]
     user_query: UserQuery | None = None  # type: ignore[misc]
     plan: InvestigationPlan | None = None  # type: ignore[misc]
+
+    # 環境コンテキスト（利用可能なメトリクス・ラベル・ターゲット）
+    environment: EnvironmentContext | None = None  # type: ignore[misc]
 
     # 各Agentの分析結果（リストでマージ）
     metrics_results: Annotated[list[MetricsResult], _merge_list]

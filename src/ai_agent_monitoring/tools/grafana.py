@@ -139,6 +139,132 @@ class GrafanaMCPTool:
             {"query": query},
         )
 
+    # ===========================================================
+    # 環境発見ツール（Discovery Tools）
+    # ===========================================================
+
+    async def list_datasources(self, ds_type: str = "") -> dict[str, Any]:
+        """データソース一覧を取得.
+
+        Args:
+            ds_type: フィルタするデータソースタイプ（例: prometheus, loki）
+        """
+        logger.info("Grafana: list datasources type=%s", ds_type or "all")
+        params: dict[str, Any] = {}
+        if ds_type:
+            params["type"] = ds_type
+        return await self.mcp_client.call_tool("list_datasources", params)
+
+    async def list_prometheus_metric_names(
+        self,
+        datasource_uid: str,
+        regex: str = "",
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """Prometheusで利用可能なメトリクス名一覧を取得.
+
+        Args:
+            datasource_uid: データソースのUID
+            regex: フィルタ用の正規表現
+            limit: 取得件数上限
+        """
+        logger.info("Grafana: list prometheus metrics datasource=%s", datasource_uid)
+        params: dict[str, Any] = {"datasourceUid": datasource_uid, "limit": limit}
+        if regex:
+            params["regex"] = regex
+        return await self.mcp_client.call_tool("list_prometheus_metric_names", params)
+
+    async def list_prometheus_label_names(
+        self,
+        datasource_uid: str,
+        matches: str = "",
+    ) -> dict[str, Any]:
+        """Prometheusで利用可能なラベル名一覧を取得.
+
+        Args:
+            datasource_uid: データソースのUID
+            matches: フィルタ用のメトリクスセレクタ
+        """
+        logger.info("Grafana: list prometheus label names datasource=%s", datasource_uid)
+        params: dict[str, Any] = {"datasourceUid": datasource_uid}
+        if matches:
+            params["matches"] = matches
+        return await self.mcp_client.call_tool("list_prometheus_label_names", params)
+
+    async def list_prometheus_label_values(
+        self,
+        datasource_uid: str,
+        label_name: str,
+        matches: str = "",
+    ) -> dict[str, Any]:
+        """Prometheusの特定ラベルの値一覧を取得.
+
+        Args:
+            datasource_uid: データソースのUID
+            label_name: ラベル名
+            matches: フィルタ用のメトリクスセレクタ
+        """
+        logger.info(
+            "Grafana: list prometheus label values datasource=%s label=%s",
+            datasource_uid,
+            label_name,
+        )
+        params: dict[str, Any] = {
+            "datasourceUid": datasource_uid,
+            "labelName": label_name,
+        }
+        if matches:
+            params["matches"] = matches
+        return await self.mcp_client.call_tool("list_prometheus_label_values", params)
+
+    async def list_loki_label_names(
+        self,
+        datasource_uid: str,
+    ) -> dict[str, Any]:
+        """Lokiで利用可能なラベル名一覧を取得.
+
+        Args:
+            datasource_uid: データソースのUID
+        """
+        logger.info("Grafana: list loki label names datasource=%s", datasource_uid)
+        return await self.mcp_client.call_tool(
+            "list_loki_label_names",
+            {"datasourceUid": datasource_uid},
+        )
+
+    async def list_loki_label_values(
+        self,
+        datasource_uid: str,
+        label_name: str,
+    ) -> dict[str, Any]:
+        """Lokiの特定ラベルの値一覧を取得.
+
+        Args:
+            datasource_uid: データソースのUID
+            label_name: ラベル名
+        """
+        logger.info(
+            "Grafana: list loki label values datasource=%s label=%s",
+            datasource_uid,
+            label_name,
+        )
+        return await self.mcp_client.call_tool(
+            "list_loki_label_values",
+            {"datasourceUid": datasource_uid, "labelName": label_name},
+        )
+
+    async def get_dashboard_panel_queries(self, uid: str) -> dict[str, Any]:
+        """ダッシュボードのパネルで使用されているクエリを取得.
+
+        Args:
+            uid: ダッシュボードのUID
+        """
+        logger.info("Grafana: get dashboard panel queries uid=%s", uid)
+        return await self.mcp_client.call_tool(
+            "get_dashboard_panel_queries",
+            {"uid": uid},
+        )
+
 
 def create_grafana_tools(mcp_client: MCPClient) -> list[BaseTool]:
     """LangChain Tool としてラップされた Grafana ツール群を生成."""
@@ -193,7 +319,65 @@ def create_grafana_tools(mcp_client: MCPClient) -> list[BaseTool]:
         """現在発火中のGrafanaアラートを取得します。"""
         return await grafana.get_firing_alerts()
 
+    # ===========================================================
+    # 環境発見ツール
+    # ===========================================================
+
+    @tool
+    async def grafana_list_datasources(ds_type: str = "") -> dict[str, Any]:
+        """Grafanaに登録されているデータソース一覧を取得します。
+        ds_typeでprometheus/lokiなどでフィルタできます。"""
+        return await grafana.list_datasources(ds_type)
+
+    @tool
+    async def grafana_list_prometheus_metrics(
+        datasource_uid: str,
+        regex: str = "",
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """Prometheusで利用可能なメトリクス名一覧を取得します。
+        datasource_uidはgrafana_list_datasourcesで取得できます。"""
+        return await grafana.list_prometheus_metric_names(datasource_uid, regex, limit)
+
+    @tool
+    async def grafana_list_prometheus_labels(
+        datasource_uid: str,
+        matches: str = "",
+    ) -> dict[str, Any]:
+        """Prometheusで利用可能なラベル名一覧を取得します。"""
+        return await grafana.list_prometheus_label_names(datasource_uid, matches)
+
+    @tool
+    async def grafana_list_prometheus_label_values(
+        datasource_uid: str,
+        label_name: str,
+        matches: str = "",
+    ) -> dict[str, Any]:
+        """Prometheusの特定ラベルの値一覧を取得します。
+        例: label_name='job'でjobラベルの全値を取得。"""
+        return await grafana.list_prometheus_label_values(datasource_uid, label_name, matches)
+
+    @tool
+    async def grafana_list_loki_labels(datasource_uid: str) -> dict[str, Any]:
+        """Lokiで利用可能なラベル名一覧を取得します。"""
+        return await grafana.list_loki_label_names(datasource_uid)
+
+    @tool
+    async def grafana_list_loki_label_values(
+        datasource_uid: str,
+        label_name: str,
+    ) -> dict[str, Any]:
+        """Lokiの特定ラベルの値一覧を取得します。"""
+        return await grafana.list_loki_label_values(datasource_uid, label_name)
+
+    @tool
+    async def grafana_get_panel_queries(uid: str) -> dict[str, Any]:
+        """ダッシュボードのパネルで使用されているPromQL/LogQLクエリを取得します。
+        既存のダッシュボードからクエリパターンを学習するのに便利です。"""
+        return await grafana.get_dashboard_panel_queries(uid)
+
     return [
+        # 既存ツール
         grafana_list_dashboards,
         grafana_get_dashboard,
         grafana_search_dashboards,
@@ -201,4 +385,12 @@ def create_grafana_tools(mcp_client: MCPClient) -> list[BaseTool]:
         grafana_query_loki,
         grafana_list_alert_rules,
         grafana_get_firing_alerts,
+        # 環境発見ツール
+        grafana_list_datasources,
+        grafana_list_prometheus_metrics,
+        grafana_list_prometheus_labels,
+        grafana_list_prometheus_label_values,
+        grafana_list_loki_labels,
+        grafana_list_loki_label_values,
+        grafana_get_panel_queries,
     ]

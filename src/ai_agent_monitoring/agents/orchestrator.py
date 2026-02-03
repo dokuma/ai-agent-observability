@@ -15,7 +15,8 @@ from ai_agent_monitoring.agents.prompts import ORCHESTRATOR_SYSTEM_PROMPT
 from ai_agent_monitoring.agents.rca_agent import RCAAgent
 from ai_agent_monitoring.core.config import Settings
 from ai_agent_monitoring.core.models import TriggerType
-from ai_agent_monitoring.core.state import AgentState, InvestigationPlan, TimeRange
+from ai_agent_monitoring.core.state import AgentState, EnvironmentContext, InvestigationPlan, TimeRange
+from ai_agent_monitoring.tools.grafana import GrafanaMCPTool
 from ai_agent_monitoring.tools.registry import ToolRegistry
 from ai_agent_monitoring.tools.time import create_time_tools
 
@@ -44,23 +45,26 @@ class OrchestratorAgent:
 
         # 各Agentはregistryから健全なMCPクライアントを使用
         # Grafana優先で、unhealthyなMCPはスキップ
-        grafana_mcp = registry.grafana.client if registry.grafana.healthy else None
+        self.grafana_mcp = registry.grafana.client if registry.grafana.healthy else None
         prometheus_mcp = registry.prometheus.client if registry.prometheus.healthy else None
         loki_mcp = registry.loki.client if registry.loki.healthy else None
+
+        # Grafana MCP Toolクラス（環境発見用）
+        self.grafana_tool = GrafanaMCPTool(self.grafana_mcp) if self.grafana_mcp else None
 
         self.metrics_agent = MetricsAgent(
             llm,
             prometheus_mcp=prometheus_mcp,
-            grafana_mcp=grafana_mcp,
-        ) if prometheus_mcp or grafana_mcp else None
+            grafana_mcp=self.grafana_mcp,
+        ) if prometheus_mcp or self.grafana_mcp else None
 
         self.logs_agent = LogsAgent(
             llm,
             loki_mcp=loki_mcp,
-            grafana_mcp=grafana_mcp,
-        ) if loki_mcp or grafana_mcp else None
+            grafana_mcp=self.grafana_mcp,
+        ) if loki_mcp or self.grafana_mcp else None
 
-        self.rca_agent = RCAAgent(llm, grafana_mcp=grafana_mcp)
+        self.rca_agent = RCAAgent(llm, grafana_mcp=self.grafana_mcp)
         self.graph = self._build_graph()
 
     def _build_graph(self) -> StateGraph[AgentState]:
@@ -69,10 +73,12 @@ class OrchestratorAgent:
         利用可能なMCPに応じてグラフを動的に構築する。
         - Grafana MCP優先
         - unhealthyなMCPはスキップ
+        - 最初に環境発見を行い、利用可能なメトリクス・ラベルを取得
         """
         graph = StateGraph(AgentState)
 
         # 基本ノード登録
+        graph.add_node("discover_environment", self._discover_environment)
         graph.add_node("analyze_input", self._analyze_input)
         graph.add_node("plan_investigation", self._plan_investigation)
         graph.add_node("resolve_time_range", self._resolve_time_range_node)
@@ -80,7 +86,8 @@ class OrchestratorAgent:
         graph.add_node("generate_rca", self.rca_agent.compile())
 
         # エッジ定義
-        graph.set_entry_point("analyze_input")
+        graph.set_entry_point("discover_environment")
+        graph.add_edge("discover_environment", "analyze_input")
         graph.add_edge("analyze_input", "plan_investigation")
         graph.add_edge("plan_investigation", "resolve_time_range")
 
@@ -123,6 +130,177 @@ class OrchestratorAgent:
 
     # ---- ノード関数 ----
 
+    async def _discover_environment(self, state: AgentState) -> dict[str, Any]:
+        """環境情報を収集.
+
+        Grafana MCP経由で利用可能なメトリクス・ラベル・ターゲットを取得し、
+        調査計画の生成に必要なコンテキストを構築する。
+        """
+        if not self.grafana_tool:
+            logger.warning("Grafana MCP unavailable, skipping environment discovery")
+            return {"environment": EnvironmentContext()}
+
+        env = EnvironmentContext()
+
+        try:
+            # 1. データソース一覧を取得
+            datasources_result = await self.grafana_tool.list_datasources()
+            datasources = self._extract_content_text(datasources_result)
+
+            # Prometheus/Lokiデータソースを特定
+            for ds in self._parse_datasources(datasources):
+                if ds.get("type") == "prometheus" and not env.prometheus_datasource_uid:
+                    env.prometheus_datasource_uid = ds.get("uid", "")
+                    logger.info("Found Prometheus datasource: %s", env.prometheus_datasource_uid)
+                elif ds.get("type") == "loki" and not env.loki_datasource_uid:
+                    env.loki_datasource_uid = ds.get("uid", "")
+                    logger.info("Found Loki datasource: %s", env.loki_datasource_uid)
+
+            # 2. Prometheusメトリクス・ラベル情報を取得
+            if env.prometheus_datasource_uid:
+                try:
+                    # メトリクス名一覧（上位100件）
+                    metrics_result = await self.grafana_tool.list_prometheus_metric_names(
+                        env.prometheus_datasource_uid,
+                        limit=100,
+                    )
+                    env.available_metrics = self._extract_list_from_result(metrics_result)
+                    logger.info("Found %d Prometheus metrics", len(env.available_metrics))
+
+                    # ラベル名一覧
+                    labels_result = await self.grafana_tool.list_prometheus_label_names(
+                        env.prometheus_datasource_uid,
+                    )
+                    env.available_labels = self._extract_list_from_result(labels_result)
+
+                    # jobラベルの値を取得（どんなサービスが監視されているか）
+                    if "job" in env.available_labels:
+                        jobs_result = await self.grafana_tool.list_prometheus_label_values(
+                            env.prometheus_datasource_uid,
+                            "job",
+                        )
+                        env.available_jobs = self._extract_list_from_result(jobs_result)
+                        logger.info("Found %d jobs: %s", len(env.available_jobs), env.available_jobs[:5])
+
+                    # instanceラベルの値を取得（どんなインスタンスがあるか）
+                    if "instance" in env.available_labels:
+                        instances_result = await self.grafana_tool.list_prometheus_label_values(
+                            env.prometheus_datasource_uid,
+                            "instance",
+                        )
+                        env.available_instances = self._extract_list_from_result(instances_result)
+                        logger.info("Found %d instances", len(env.available_instances))
+                except Exception as e:
+                    logger.warning("Failed to get Prometheus info: %s", e)
+
+            # 3. Lokiラベル情報を取得
+            if env.loki_datasource_uid:
+                try:
+                    loki_labels_result = await self.grafana_tool.list_loki_label_names(
+                        env.loki_datasource_uid,
+                    )
+                    env.loki_labels = self._extract_list_from_result(loki_labels_result)
+                    logger.info("Found %d Loki labels", len(env.loki_labels))
+
+                    # jobラベルの値
+                    if "job" in env.loki_labels:
+                        loki_jobs_result = await self.grafana_tool.list_loki_label_values(
+                            env.loki_datasource_uid,
+                            "job",
+                        )
+                        env.loki_jobs = self._extract_list_from_result(loki_jobs_result)
+                except Exception as e:
+                    logger.warning("Failed to get Loki info: %s", e)
+
+            # 4. 既存ダッシュボードからクエリパターンを学習
+            try:
+                dashboards_result = await self.grafana_tool.list_dashboards()
+                dashboards = self._extract_content_text(dashboards_result)
+                dashboard_list = self._parse_dashboards(dashboards)
+
+                # 最初のダッシュボードからクエリパターンを取得
+                if dashboard_list:
+                    first_uid = dashboard_list[0].get("uid", "")
+                    if first_uid:
+                        queries_result = await self.grafana_tool.get_dashboard_panel_queries(first_uid)
+                        queries_text = self._extract_content_text(queries_result)
+                        promql, logql = self._extract_queries_from_panels(queries_text)
+                        env.example_promql_queries = promql[:5]
+                        env.example_logql_queries = logql[:5]
+                        logger.info(
+                            "Extracted %d PromQL, %d LogQL example queries",
+                            len(env.example_promql_queries),
+                            len(env.example_logql_queries),
+                        )
+            except Exception as e:
+                logger.warning("Failed to get dashboard queries: %s", e)
+
+        except Exception as e:
+            logger.error("Environment discovery failed: %s", e)
+
+        return {"environment": env}
+
+    def _extract_content_text(self, result: dict[str, Any]) -> str:
+        """MCPツール結果からテキストコンテンツを抽出."""
+        content = result.get("content", [])
+        texts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                texts.append(item.get("text", ""))
+        return "\n".join(texts)
+
+    def _extract_list_from_result(self, result: dict[str, Any]) -> list[str]:
+        """MCPツール結果からリストを抽出."""
+        text = self._extract_content_text(result)
+        # JSON配列またはカンマ区切りリストをパース
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return [str(x) for x in parsed]
+        except json.JSONDecodeError:
+            pass
+        # 改行区切りで試行
+        return [line.strip() for line in text.split("\n") if line.strip()]
+
+    def _parse_datasources(self, text: str) -> list[dict[str, Any]]:
+        """データソーステキストをパース."""
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+        return []
+
+    def _parse_dashboards(self, text: str) -> list[dict[str, Any]]:
+        """ダッシュボードテキストをパース."""
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+        return []
+
+    def _extract_queries_from_panels(self, text: str) -> tuple[list[str], list[str]]:
+        """パネルクエリテキストからPromQL/LogQLを抽出."""
+        promql_queries: list[str] = []
+        logql_queries: list[str] = []
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                for panel in parsed:
+                    expr = panel.get("expr", "") or panel.get("query", "")
+                    if expr:
+                        # LogQLは{で始まることが多い
+                        if expr.strip().startswith("{"):
+                            logql_queries.append(expr)
+                        else:
+                            promql_queries.append(expr)
+        except json.JSONDecodeError:
+            pass
+        return promql_queries, logql_queries
+
     async def _analyze_input(self, state: AgentState) -> dict[str, Any]:
         """入力（アラートまたはユーザクエリ）を分析."""
         user_query = state.get("user_query")
@@ -148,9 +326,15 @@ class OrchestratorAgent:
 
         # 現在時刻を取得してプロンプトに注入
         current_time = datetime.now(timezone.utc).isoformat()
+
+        # 環境コンテキストをフォーマット
+        env = state.get("environment")
+        environment_context = self._format_environment_context(env)
+
         system_prompt = ORCHESTRATOR_SYSTEM_PROMPT.format(
             max_iterations=state.get("max_iterations", 3),
             current_time=current_time,
+            environment_context=environment_context,
         )
 
         messages = [
@@ -160,6 +344,62 @@ class OrchestratorAgent:
         response = await self.llm.ainvoke(messages)
 
         return {"messages": [response]}
+
+    def _format_environment_context(self, env: EnvironmentContext | None) -> str:
+        """環境コンテキストをプロンプト用テキストにフォーマット."""
+        if env is None:
+            return "環境情報は利用できません。"
+
+        lines = []
+
+        # Prometheusメトリクス情報
+        if env.available_metrics:
+            lines.append("### 利用可能なPrometheusメトリクス（一部）")
+            for metric in env.available_metrics[:20]:
+                lines.append(f"  - {metric}")
+            if len(env.available_metrics) > 20:
+                lines.append(f"  ... 他 {len(env.available_metrics) - 20} 件")
+
+        # 利用可能なジョブ
+        if env.available_jobs:
+            lines.append("\n### 利用可能なjobラベル値")
+            for job in env.available_jobs:
+                lines.append(f"  - {job}")
+
+        # 利用可能なインスタンス
+        if env.available_instances:
+            lines.append("\n### 利用可能なinstanceラベル値（一部）")
+            for inst in env.available_instances[:10]:
+                lines.append(f"  - {inst}")
+            if len(env.available_instances) > 10:
+                lines.append(f"  ... 他 {len(env.available_instances) - 10} 件")
+
+        # Lokiラベル情報
+        if env.loki_labels:
+            lines.append("\n### 利用可能なLokiラベル")
+            for label in env.loki_labels:
+                lines.append(f"  - {label}")
+
+        if env.loki_jobs:
+            lines.append("\n### Lokiで利用可能なjobラベル値")
+            for job in env.loki_jobs:
+                lines.append(f"  - {job}")
+
+        # 既存ダッシュボードからの例
+        if env.example_promql_queries:
+            lines.append("\n### 参考: 既存ダッシュボードのPromQLクエリ例")
+            for q in env.example_promql_queries:
+                lines.append(f"  - {q}")
+
+        if env.example_logql_queries:
+            lines.append("\n### 参考: 既存ダッシュボードのLogQLクエリ例")
+            for q in env.example_logql_queries:
+                lines.append(f"  - {q}")
+
+        if not lines:
+            return "環境情報を取得できませんでした。一般的なメトリクス名を使用してください。"
+
+        return "\n".join(lines)
 
     async def _plan_investigation(self, state: AgentState) -> dict[str, Any]:
         """調査計画を策定."""
