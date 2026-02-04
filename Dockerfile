@@ -8,6 +8,7 @@ COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-dev
 
 COPY src/ src/
+COPY docs/query_reference/ docs/query_reference/
 
 EXPOSE 8000
 
