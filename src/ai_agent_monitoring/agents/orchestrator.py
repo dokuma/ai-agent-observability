@@ -17,6 +17,7 @@ from ai_agent_monitoring.core.config import Settings
 from ai_agent_monitoring.core.models import TriggerType
 from ai_agent_monitoring.core.state import AgentState, EnvironmentContext, InvestigationPlan, TimeRange
 from ai_agent_monitoring.tools.grafana import GrafanaMCPTool
+from ai_agent_monitoring.tools.query_rag import get_query_rag
 from ai_agent_monitoring.tools.query_validator import (
     QueryValidator,
     get_all_fewshot_examples,
@@ -314,7 +315,10 @@ class OrchestratorAgent:
     async def _analyze_input(self, state: AgentState) -> dict[str, Any]:
         """入力（アラートまたはユーザクエリ）を分析."""
         user_query = state.get("user_query")
+        query_text = ""  # RAG検索用
+
         if state["trigger_type"] == TriggerType.USER_QUERY and user_query is not None:
+            query_text = user_query.raw_input
             content = (
                 f"ユーザからの問い合わせ:\n{user_query.raw_input}\n\n"
                 "この問い合わせ内容を分析し、何を調査すべきか整理してください。"
@@ -322,6 +326,7 @@ class OrchestratorAgent:
         else:
             alert = state.get("alert")
             if alert is not None:
+                query_text = f"{alert.alert_name} {alert.summary} {alert.description}"
                 content = (
                     f"アラートを受信しました:\n"
                     f"名前: {alert.alert_name}\n"
@@ -341,11 +346,18 @@ class OrchestratorAgent:
         env = state.get("environment")
         environment_context = self._format_environment_context(env)
 
+        # RAGから関連ドキュメントを取得
+        rag_context = self._get_rag_context(query_text)
+
         system_prompt = ORCHESTRATOR_SYSTEM_PROMPT.format(
             max_iterations=state.get("max_iterations", 3),
             current_time=current_time,
             environment_context=environment_context,
         )
+
+        # RAGコンテキストがある場合はシステムプロンプトに追加
+        if rag_context:
+            system_prompt += f"\n\n## クエリリファレンス（関連ドキュメント）\n{rag_context}"
 
         messages = [
             SystemMessage(content=system_prompt),
@@ -354,6 +366,18 @@ class OrchestratorAgent:
         response = await self.llm.ainvoke(messages)
 
         return {"messages": [response]}
+
+    def _get_rag_context(self, query: str, max_tokens: int = 1500) -> str:
+        """RAGから関連ドキュメントを取得."""
+        if not query:
+            return ""
+
+        try:
+            rag = get_query_rag()
+            return rag.get_relevant_context(query, max_tokens=max_tokens)
+        except Exception as e:
+            logger.warning("Failed to get RAG context: %s", e)
+            return ""
 
     def _format_environment_context(self, env: EnvironmentContext | None) -> str:
         """環境コンテキストをプロンプト用テキストにフォーマット."""
@@ -524,20 +548,30 @@ class OrchestratorAgent:
         if validation_errors:
             logger.warning("Query validation errors: %s", validation_errors)
 
+            # RAGから関連ドキュメントを取得
+            error_keywords = " ".join(
+                q.split(":")[0] for q in validation_errors
+            )
+            rag_context = self._get_rag_context(error_keywords, max_tokens=1000)
+
             # Few-shot例を含めて再生成を依頼
             fewshot = get_all_fewshot_examples()
             error_msg = "\n".join(validation_errors)
 
+            retry_content = (
+                f"生成されたクエリに文法エラーがありました:\n{error_msg}\n\n"
+            )
+            if rag_context:
+                retry_content += f"参考ドキュメント:\n{rag_context}\n\n"
+            retry_content += (
+                f"以下のクエリ例を参考に、正しい文法でクエリを再生成してください:\n"
+                f"{fewshot}\n\n"
+                "修正した調査計画をJSON形式で出力してください。"
+            )
+
             messages = [
                 *state["messages"],
-                HumanMessage(
-                    content=(
-                        f"生成されたクエリに文法エラーがありました:\n{error_msg}\n\n"
-                        f"以下のクエリ例を参考に、正しい文法でクエリを再生成してください:\n"
-                        f"{fewshot}\n\n"
-                        "修正した調査計画をJSON形式で出力してください。"
-                    )
-                ),
+                HumanMessage(content=retry_content),
             ]
             response = await self.llm.ainvoke(messages)
             new_plan = self._parse_plan(response.content)
