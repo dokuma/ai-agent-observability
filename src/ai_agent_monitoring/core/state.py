@@ -58,6 +58,10 @@ class EnvironmentContext(BaseModel):
 class InvestigationPlan(BaseModel):
     """Orchestratorが生成する調査計画."""
 
+    # データソースUID（クエリ実行時に必須）
+    prometheus_datasource_uid: str = ""
+    loki_datasource_uid: str = ""
+
     promql_queries: list[str] = Field(default_factory=list)
     logql_queries: list[str] = Field(default_factory=list)
     target_instances: list[str] = Field(default_factory=list)

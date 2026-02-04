@@ -362,6 +362,17 @@ class OrchestratorAgent:
 
         lines = []
 
+        # データソースUID（クエリ実行時に必須）
+        lines.append("### データソースUID（クエリ実行時に必須）")
+        if env.prometheus_datasource_uid:
+            lines.append(f"  - Prometheus: `{env.prometheus_datasource_uid}`")
+        else:
+            lines.append("  - Prometheus: 未設定")
+        if env.loki_datasource_uid:
+            lines.append(f"  - Loki: `{env.loki_datasource_uid}`")
+        else:
+            lines.append("  - Loki: 未設定")
+
         # Prometheusメトリクス情報
         if env.available_metrics:
             lines.append("### 利用可能なPrometheusメトリクス（一部）")
@@ -430,6 +441,14 @@ class OrchestratorAgent:
         response = await self.llm.ainvoke(messages)
 
         plan = self._parse_plan(response.content)
+
+        # 環境コンテキストからdatasource UIDを自動設定
+        env = state.get("environment")
+        if env:
+            if not plan.prometheus_datasource_uid and env.prometheus_datasource_uid:
+                plan.prometheus_datasource_uid = env.prometheus_datasource_uid
+            if not plan.loki_datasource_uid and env.loki_datasource_uid:
+                plan.loki_datasource_uid = env.loki_datasource_uid
 
         return {
             "messages": [response],

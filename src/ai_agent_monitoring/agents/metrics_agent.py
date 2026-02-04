@@ -92,13 +92,17 @@ class MetricsAgent:
                 )
 
             queries_text = "\n".join(f"- {q}" for q in plan.promql_queries)
+            datasource_uid = plan.prometheus_datasource_uid or "(未設定)"
             setup_messages = [
                 SystemMessage(content=METRICS_AGENT_SYSTEM_PROMPT),
                 HumanMessage(
                     content=(
                         f"以下のPromQLクエリでメトリクスを調査してください:\n{queries_text}\n"
                         f"対象インスタンス: {', '.join(plan.target_instances) or '全て'}\n"
-                        f"時間範囲: {time_desc}\n\n"
+                        f"時間範囲: {time_desc}\n"
+                        f"Prometheusデータソースuid: {datasource_uid}\n\n"
+                        "**重要**: grafana_query_prometheusを使用する際は、"
+                        f"datasource_uid='{datasource_uid}'を必ず指定してください。\n"
                         "Toolを使ってクエリを実行し、結果を分析してください。"
                     )
                 ),

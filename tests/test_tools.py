@@ -193,15 +193,22 @@ class TestGrafanaMCPTool:
         start = datetime(2026, 2, 1, 15, 0, tzinfo=timezone.utc)
         end = datetime(2026, 2, 1, 16, 0, tzinfo=timezone.utc)
 
-        await grafana.query_prometheus("up", start=start, end=end, step="5m")
+        await grafana.query_prometheus(
+            datasource_uid="prom-uid",
+            expr="up",
+            start=start,
+            end=end,
+            step_seconds=300,
+        )
 
         call_args = mock_mcp_client.call_tool.call_args
         assert call_args[0][0] == "query_prometheus"
         params = call_args[0][1]
-        assert params["query"] == "up"
-        assert params["step"] == "5m"
-        assert "start" in params
-        assert "end" in params
+        assert params["expr"] == "up"
+        assert params["datasourceUid"] == "prom-uid"
+        assert params["stepSeconds"] == 300
+        assert "startTime" in params
+        assert "endTime" in params
 
     @pytest.mark.asyncio
     async def test_query_loki(self, mock_mcp_client):
@@ -209,12 +216,21 @@ class TestGrafanaMCPTool:
         start = datetime(2026, 2, 1, 15, 0, tzinfo=timezone.utc)
         end = datetime(2026, 2, 1, 16, 0, tzinfo=timezone.utc)
 
-        await grafana.query_loki('{job="app"}', start=start, end=end, limit=50)
+        await grafana.query_loki(
+            datasource_uid="loki-uid",
+            logql='{job="app"}',
+            start=start,
+            end=end,
+            limit=50,
+        )
 
         call_args = mock_mcp_client.call_tool.call_args
+        assert call_args[0][0] == "query_loki_logs"
         params = call_args[0][1]
+        assert params["logql"] == '{job="app"}'
+        assert params["datasourceUid"] == "loki-uid"
         assert params["limit"] == 50
-        assert "start" in params
+        assert "startRfc3339" in params
 
     @pytest.mark.asyncio
     async def test_list_alert_rules(self, mock_mcp_client):
@@ -337,25 +353,30 @@ class TestGrafanaToolFunctions:
         tools = create_grafana_tools(mock_mcp_client)
         tool = next(t for t in tools if t.name == "grafana_query_prometheus")
         await tool.ainvoke({
-            "query": "up",
+            "datasource_uid": "prom-uid",
+            "expr": "up",
             "start": "2026-02-01T15:00:00+00:00",
             "end": "2026-02-01T16:00:00+00:00",
-            "step": "1m",
+            "step_seconds": 60,
         })
         call_args = mock_mcp_client.call_tool.call_args[0][1]
-        assert "start" in call_args
+        assert "startTime" in call_args
+        assert call_args["datasourceUid"] == "prom-uid"
 
     @pytest.mark.asyncio
     async def test_grafana_query_loki_with_time(self, mock_mcp_client):
         tools = create_grafana_tools(mock_mcp_client)
         tool = next(t for t in tools if t.name == "grafana_query_loki")
         await tool.ainvoke({
-            "query": '{job="app"}',
+            "datasource_uid": "loki-uid",
+            "logql": '{job="app"}',
             "start": "2026-02-01T15:00:00+00:00",
             "end": "2026-02-01T16:00:00+00:00",
             "limit": 100,
         })
-        mock_mcp_client.call_tool.assert_called()
+        call_args = mock_mcp_client.call_tool.call_args[0][1]
+        assert call_args["datasourceUid"] == "loki-uid"
+        assert call_args["logql"] == '{job="app"}'
 
     @pytest.mark.asyncio
     async def test_grafana_list_alert_rules(self, mock_mcp_client):

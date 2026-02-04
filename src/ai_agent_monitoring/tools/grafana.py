@@ -45,37 +45,73 @@ class GrafanaMCPTool:
 
     async def query_prometheus(
         self,
-        query: str,
+        datasource_uid: str,
+        expr: str,
         start: datetime | None = None,
         end: datetime | None = None,
-        step: str = "1m",
+        step_seconds: int = 60,
+        query_type: str = "range",
     ) -> dict[str, Any]:
-        """Grafana経由でPromQLクエリを実行."""
-        params: dict[str, Any] = {"query": query, "step": step}
-        if start:
-            params["start"] = start.isoformat()
-        if end:
-            params["end"] = end.isoformat()
+        """Grafana経由でPromQLクエリを実行.
 
-        logger.info("Grafana: PromQL query: %s", query)
+        Args:
+            datasource_uid: データソースのUID（必須）
+            expr: PromQLクエリ式（必須）
+            start: 開始時刻（必須）
+            end: 終了時刻（rangeクエリの場合必須）
+            step_seconds: 時系列のステップサイズ（秒）
+            query_type: クエリタイプ（"range" or "instant"）
+        """
+        # startTimeは必須
+        if not start:
+            start = datetime.now()
+
+        params: dict[str, Any] = {
+            "datasourceUid": datasource_uid,
+            "expr": expr,
+            "startTime": start.isoformat(),
+            "queryType": query_type,
+        }
+        if end:
+            params["endTime"] = end.isoformat()
+        if query_type == "range":
+            params["stepSeconds"] = step_seconds
+
+        logger.info("Grafana: PromQL query: %s (datasource=%s)", expr, datasource_uid)
         return await self.mcp_client.call_tool("query_prometheus", params)
 
     async def query_loki(
         self,
-        query: str,
+        datasource_uid: str,
+        logql: str,
         start: datetime | None = None,
         end: datetime | None = None,
         limit: int = 100,
+        direction: str = "backward",
     ) -> dict[str, Any]:
-        """Grafana経由でLogQLクエリを実行."""
-        params: dict[str, Any] = {"query": query, "limit": limit}
-        if start:
-            params["start"] = start.isoformat()
-        if end:
-            params["end"] = end.isoformat()
+        """Grafana経由でLogQLクエリを実行.
 
-        logger.info("Grafana: LogQL query: %s", query)
-        return await self.mcp_client.call_tool("query_loki", params)
+        Args:
+            datasource_uid: データソースのUID（必須）
+            logql: LogQLクエリ（必須）
+            start: 開始時刻
+            end: 終了時刻
+            limit: 返すログ行の最大数（最大100）
+            direction: クエリの方向（"forward" or "backward"）
+        """
+        params: dict[str, Any] = {
+            "datasourceUid": datasource_uid,
+            "logql": logql,
+            "limit": min(limit, 100),  # 最大100
+            "direction": direction,
+        }
+        if start:
+            params["startRfc3339"] = start.isoformat()
+        if end:
+            params["endRfc3339"] = end.isoformat()
+
+        logger.info("Grafana: LogQL query: %s (datasource=%s)", logql, datasource_uid)
+        return await self.mcp_client.call_tool("query_loki_logs", params)
 
     async def list_alert_rules(self) -> dict[str, Any]:
         """アラートルール一覧を取得."""
@@ -287,27 +323,47 @@ def create_grafana_tools(mcp_client: MCPClient) -> list[BaseTool]:
 
     @tool
     async def grafana_query_prometheus(
-        query: str,
+        datasource_uid: str,
+        expr: str,
         start: str = "",
         end: str = "",
-        step: str = "1m",
+        step_seconds: int = 60,
+        query_type: str = "range",
     ) -> dict[str, Any]:
-        """Grafana経由でPromQLクエリを実行します。start/endはISO 8601形式。"""
+        """Grafana経由でPromQLクエリを実行します。
+
+        Args:
+            datasource_uid: Prometheusデータソースのuid（必須）
+            expr: PromQLクエリ式（必須）
+            start: 開始時刻（ISO 8601形式、必須）
+            end: 終了時刻（ISO 8601形式、rangeクエリの場合必須）
+            step_seconds: 時系列のステップサイズ（秒）
+            query_type: 'range' または 'instant'
+        """
         s = datetime.fromisoformat(start) if start else None
         e = datetime.fromisoformat(end) if end else None
-        return await grafana.query_prometheus(query, s, e, step)
+        return await grafana.query_prometheus(datasource_uid, expr, s, e, step_seconds, query_type)
 
     @tool
     async def grafana_query_loki(
-        query: str,
+        datasource_uid: str,
+        logql: str,
         start: str = "",
         end: str = "",
         limit: int = 100,
     ) -> dict[str, Any]:
-        """Grafana経由でLogQLクエリを実行します。start/endはISO 8601形式。"""
+        """Grafana経由でLogQLクエリを実行します。
+
+        Args:
+            datasource_uid: Lokiデータソースのuid（必須）
+            logql: LogQLクエリ（必須）。{job="xxx"} |= "error" の形式
+            start: 開始時刻（ISO 8601形式）
+            end: 終了時刻（ISO 8601形式）
+            limit: 返すログ行の最大数（最大100）
+        """
         s = datetime.fromisoformat(start) if start else None
         e = datetime.fromisoformat(end) if end else None
-        return await grafana.query_loki(query, s, e, limit)
+        return await grafana.query_loki(datasource_uid, logql, s, e, limit)
 
     @tool
     async def grafana_list_alert_rules() -> dict[str, Any]:
