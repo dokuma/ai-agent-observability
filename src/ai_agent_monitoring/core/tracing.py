@@ -95,10 +95,12 @@ def build_runnable_config(
     """LangGraph invoke 用の config を構築.
 
     Langfuse が有効ならコールバックを含め、無効なら空の config を返す。
+    run_id を設定することで、同じ調査のすべてのLLM呼び出しが
+    同じLangfuseトレースに収まるようにする。
 
     Args:
         settings: アプリケーション設定
-        investigation_id: 調査ID（Langfuse session_id に対応）
+        investigation_id: 調査ID（Langfuse session_id および run_id に対応）
         trigger_type: "alert" or "user_query"
         extra_tags: 追加タグ
 
@@ -122,5 +124,13 @@ def build_runnable_config(
     config: dict[str, Any] = {}
     if handler:
         config["callbacks"] = [handler]
+
+    # run_id を設定して同じトレースに収める
+    # LangChain/LangGraphはrun_idをLangfuseのtrace_idとして使用する
+    if investigation_id:
+        # investigation_idをUUID形式に変換（LangChainはUUID形式のrun_idを要求）
+        namespace = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")  # URL namespace
+        run_uuid = uuid.uuid5(namespace, investigation_id)
+        config["run_id"] = run_uuid
 
     return config

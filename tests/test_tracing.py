@@ -89,7 +89,9 @@ class TestBuildRunnableConfig:
 
         settings = self._get_settings(langfuse_enabled=False)
         config = build_runnable_config(settings, investigation_id="inv-1", trigger_type="alert")
-        assert config == {}
+        # Langfuseが無効でもrun_idは設定される（同じ調査のトレースを統合するため）
+        assert "callbacks" not in config
+        assert "run_id" in config
 
     def test_with_handler(self):
         from ai_agent_monitoring.core.tracing import build_runnable_config
@@ -101,6 +103,8 @@ class TestBuildRunnableConfig:
 
         assert "callbacks" in config
         assert config["callbacks"] == [mock_handler]
+        # run_idが設定されていることを確認（同じ調査のトレースを統合するため）
+        assert "run_id" in config
 
     def test_extra_tags(self):
         from ai_agent_monitoring.core.tracing import build_runnable_config
