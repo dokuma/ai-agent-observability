@@ -6,16 +6,23 @@ from typing import Any
 
 from langchain_core.tools import BaseTool, tool
 
-from ai_agent_monitoring.tools.base import MCPClient
+from ai_agent_monitoring.tools.base import BaseMCPTool, MCPClient
 
 logger = logging.getLogger(__name__)
 
 
-class PrometheusMCPTool:
-    """Prometheus MCP Server 経由の PromQL 実行ツール群."""
+class PrometheusMCPTool(BaseMCPTool):
+    """Prometheus MCP Server 経由の PromQL 実行ツール群.
 
-    def __init__(self, mcp_client: MCPClient):
-        self.mcp_client = mcp_client
+    セッション再利用:
+        複数のツールを連続で呼び出す場合は session_context() を使用して
+        セッションを再利用することを推奨。
+
+        使用例:
+            async with prom_tool.session_context() as ctx:
+                result1 = await ctx.instant_query("up")
+                result2 = await ctx.range_query("rate(http_requests[5m])", start, end)
+    """
 
     async def instant_query(self, query: str, time: datetime | None = None) -> dict[str, Any]:
         """PromQL インスタントクエリを実行."""
@@ -24,7 +31,7 @@ class PrometheusMCPTool:
             params["time"] = time.isoformat()
 
         logger.info("Prometheus instant query: %s", query)
-        return await self.mcp_client.call_tool("query_prometheus", params)
+        return await self._call_tool("query_prometheus", params)
 
     async def range_query(
         self,
@@ -43,21 +50,15 @@ class PrometheusMCPTool:
         }
 
         logger.info("Prometheus range query: %s (%s ~ %s)", query, start, end)
-        return await self.mcp_client.call_tool("query_prometheus", params)
+        return await self._call_tool("query_prometheus", params)
 
     async def get_metric_metadata(self, metric: str) -> dict[str, Any]:
         """メトリクスのメタデータを取得."""
-        return await self.mcp_client.call_tool(
-            "get_metric_metadata",
-            {"metric": metric},
-        )
+        return await self._call_tool("get_metric_metadata", {"metric": metric})
 
     async def get_label_values(self, label: str) -> dict[str, Any]:
         """ラベルの値一覧を取得."""
-        return await self.mcp_client.call_tool(
-            "get_label_values",
-            {"label": label},
-        )
+        return await self._call_tool("get_label_values", {"label": label})
 
 
 def create_prometheus_tools(mcp_client: MCPClient) -> list[BaseTool]:

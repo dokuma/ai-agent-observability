@@ -6,16 +6,23 @@ from typing import Any
 
 from langchain_core.tools import BaseTool, tool
 
-from ai_agent_monitoring.tools.base import MCPClient
+from ai_agent_monitoring.tools.base import BaseMCPTool, MCPClient
 
 logger = logging.getLogger(__name__)
 
 
-class LokiMCPTool:
-    """Loki MCP Server 経由の LogQL 実行ツール群."""
+class LokiMCPTool(BaseMCPTool):
+    """Loki MCP Server 経由の LogQL 実行ツール群.
 
-    def __init__(self, mcp_client: MCPClient):
-        self.mcp_client = mcp_client
+    セッション再利用:
+        複数のツールを連続で呼び出す場合は session_context() を使用して
+        セッションを再利用することを推奨。
+
+        使用例:
+            async with loki_tool.session_context() as ctx:
+                logs = await ctx.query_logs('{job="app"}')
+                errors = await ctx.find_error_patterns("app")
+    """
 
     async def query_logs(
         self,
@@ -32,7 +39,7 @@ class LokiMCPTool:
             params["end"] = end.isoformat()
 
         logger.info("Loki log query: %s (limit=%d)", query, limit)
-        return await self.mcp_client.call_tool("query_loki", params)
+        return await self._call_tool("query_loki", params)
 
     async def query_metrics(
         self,
@@ -49,7 +56,7 @@ class LokiMCPTool:
             params["end"] = end.isoformat()
 
         logger.info("Loki metric query: %s", query)
-        return await self.mcp_client.call_tool("query_loki_metrics", params)
+        return await self._call_tool("query_loki_metrics", params)
 
     async def find_error_patterns(
         self,
@@ -65,7 +72,7 @@ class LokiMCPTool:
             params["end"] = end.isoformat()
 
         logger.info("Loki error pattern detection: service=%s", service)
-        return await self.mcp_client.call_tool("find_error_patterns", params)
+        return await self._call_tool("find_error_patterns", params)
 
 
 def create_loki_tools(mcp_client: MCPClient) -> list[BaseTool]:

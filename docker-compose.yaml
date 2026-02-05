@@ -189,6 +189,9 @@ services:
     environment:
       GRAFANA_URL: http://grafana:3000
       GRAFANA_SERVICE_ACCOUNT_TOKEN: ${GRAFANA_SERVICE_ACCOUNT_TOKEN:-glsa_test_token}
+    # ログレベルを debug に設定（トラブルシューティング用）
+    # 本番環境では --log-level info に戻すこと
+    command: ["--transport", "sse", "--address", "0.0.0.0:8000", "--log-level", "debug"]
     depends_on:
       - grafana
     networks:

@@ -7,41 +7,42 @@ from typing import Any
 import httpx
 from langchain_core.tools import BaseTool, tool
 
-from ai_agent_monitoring.tools.base import MCPClient
+from ai_agent_monitoring.tools.base import BaseMCPTool, MCPClient
 
 logger = logging.getLogger(__name__)
 
 
-class GrafanaMCPTool:
+class GrafanaMCPTool(BaseMCPTool):
     """Grafana MCP Server 経由のダッシュボード・アラート操作ツール群.
 
     grafana/mcp-grafana が提供する機能をラップする。
     PromQL/LogQLの実行もGrafana MCP経由で可能。
-    """
 
-    def __init__(self, mcp_client: MCPClient):
-        self.mcp_client = mcp_client
+    セッション再利用:
+        複数のツールを連続で呼び出す場合は session_context() を使用して
+        セッションを再利用することを推奨。これによりSSE接続の
+        オーバーヘッドを削減できる。
+
+        使用例:
+            async with grafana_tool.session_context() as ctx:
+                dashboards = await ctx.list_dashboards()
+                alerts = await ctx.get_firing_alerts()
+    """
 
     async def list_dashboards(self) -> dict[str, Any]:
         """ダッシュボード一覧を取得."""
         logger.info("Grafana: list dashboards")
-        return await self.mcp_client.call_tool("list_dashboards", {})
+        return await self._call_tool("list_dashboards", {})
 
     async def get_dashboard_by_uid(self, uid: str) -> dict[str, Any]:
         """UIDを指定してダッシュボードの詳細を取得."""
         logger.info("Grafana: get dashboard uid=%s", uid)
-        return await self.mcp_client.call_tool(
-            "get_dashboard_by_uid",
-            {"uid": uid},
-        )
+        return await self._call_tool("get_dashboard_by_uid", {"uid": uid})
 
     async def get_dashboard_panels(self, uid: str) -> dict[str, Any]:
         """ダッシュボードのパネル一覧を取得."""
         logger.info("Grafana: get panels for dashboard uid=%s", uid)
-        return await self.mcp_client.call_tool(
-            "get_dashboard_panels",
-            {"uid": uid},
-        )
+        return await self._call_tool("get_dashboard_panels", {"uid": uid})
 
     async def query_prometheus(
         self,
@@ -78,7 +79,7 @@ class GrafanaMCPTool:
             params["stepSeconds"] = step_seconds
 
         logger.info("Grafana: PromQL query: %s (datasource=%s)", expr, datasource_uid)
-        return await self.mcp_client.call_tool("query_prometheus", params)
+        return await self._call_tool("query_prometheus", params)
 
     async def query_loki(
         self,
@@ -111,25 +112,22 @@ class GrafanaMCPTool:
             params["endRfc3339"] = end.isoformat()
 
         logger.info("Grafana: LogQL query: %s (datasource=%s)", logql, datasource_uid)
-        return await self.mcp_client.call_tool("query_loki_logs", params)
+        return await self._call_tool("query_loki_logs", params)
 
     async def list_alert_rules(self) -> dict[str, Any]:
         """アラートルール一覧を取得."""
         logger.info("Grafana: list alert rules")
-        return await self.mcp_client.call_tool("list_alert_rules", {})
+        return await self._call_tool("list_alert_rules", {})
 
     async def get_alert_rule(self, uid: str) -> dict[str, Any]:
         """特定のアラートルールを取得."""
         logger.info("Grafana: get alert rule uid=%s", uid)
-        return await self.mcp_client.call_tool(
-            "get_alert_rule",
-            {"uid": uid},
-        )
+        return await self._call_tool("get_alert_rule", {"uid": uid})
 
     async def get_firing_alerts(self) -> dict[str, Any]:
         """現在発火中のアラートを取得."""
         logger.info("Grafana: get firing alerts")
-        return await self.mcp_client.call_tool("get_firing_alerts", {})
+        return await self._call_tool("get_firing_alerts", {})
 
     async def render_panel_image(
         self,
@@ -170,10 +168,7 @@ class GrafanaMCPTool:
     async def search_dashboards(self, query: str) -> dict[str, Any]:
         """ダッシュボードをキーワード検索."""
         logger.info("Grafana: search dashboards query=%s", query)
-        return await self.mcp_client.call_tool(
-            "search_dashboards",
-            {"query": query},
-        )
+        return await self._call_tool("search_dashboards", {"query": query})
 
     # ===========================================================
     # 環境発見ツール（Discovery Tools）
@@ -189,7 +184,7 @@ class GrafanaMCPTool:
         params: dict[str, Any] = {}
         if ds_type:
             params["type"] = ds_type
-        return await self.mcp_client.call_tool("list_datasources", params)
+        return await self._call_tool("list_datasources", params)
 
     async def list_prometheus_metric_names(
         self,
@@ -208,7 +203,7 @@ class GrafanaMCPTool:
         params: dict[str, Any] = {"datasourceUid": datasource_uid, "limit": limit}
         if regex:
             params["regex"] = regex
-        return await self.mcp_client.call_tool("list_prometheus_metric_names", params)
+        return await self._call_tool("list_prometheus_metric_names", params)
 
     async def list_prometheus_label_names(
         self,
@@ -225,7 +220,7 @@ class GrafanaMCPTool:
         params: dict[str, Any] = {"datasourceUid": datasource_uid}
         if matches:
             params["matches"] = matches
-        return await self.mcp_client.call_tool("list_prometheus_label_names", params)
+        return await self._call_tool("list_prometheus_label_names", params)
 
     async def list_prometheus_label_values(
         self,
@@ -251,7 +246,7 @@ class GrafanaMCPTool:
         }
         if matches:
             params["matches"] = matches
-        return await self.mcp_client.call_tool("list_prometheus_label_values", params)
+        return await self._call_tool("list_prometheus_label_values", params)
 
     async def list_loki_label_names(
         self,
@@ -263,10 +258,7 @@ class GrafanaMCPTool:
             datasource_uid: データソースのUID
         """
         logger.info("Grafana: list loki label names datasource=%s", datasource_uid)
-        return await self.mcp_client.call_tool(
-            "list_loki_label_names",
-            {"datasourceUid": datasource_uid},
-        )
+        return await self._call_tool("list_loki_label_names", {"datasourceUid": datasource_uid})
 
     async def list_loki_label_values(
         self,
@@ -284,7 +276,7 @@ class GrafanaMCPTool:
             datasource_uid,
             label_name,
         )
-        return await self.mcp_client.call_tool(
+        return await self._call_tool(
             "list_loki_label_values",
             {"datasourceUid": datasource_uid, "labelName": label_name},
         )
@@ -296,10 +288,7 @@ class GrafanaMCPTool:
             uid: ダッシュボードのUID
         """
         logger.info("Grafana: get dashboard panel queries uid=%s", uid)
-        return await self.mcp_client.call_tool(
-            "get_dashboard_panel_queries",
-            {"uid": uid},
-        )
+        return await self._call_tool("get_dashboard_panel_queries", {"uid": uid})
 
 
 def create_grafana_tools(mcp_client: MCPClient) -> list[BaseTool]:

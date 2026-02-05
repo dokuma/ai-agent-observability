@@ -1,9 +1,11 @@
 """Orchestrator Agent — Multi-Agentワークフローの制御."""
 
+from __future__ import annotations
+
 import json
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
@@ -24,6 +26,9 @@ from ai_agent_monitoring.tools.query_validator import (
 )
 from ai_agent_monitoring.tools.registry import ToolRegistry
 from ai_agent_monitoring.tools.time import create_time_tools
+
+if TYPE_CHECKING:
+    from ai_agent_monitoring.tools.grafana import GrafanaMCPTool
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +151,8 @@ class OrchestratorAgent:
 
         Grafana MCP経由で利用可能なメトリクス・ラベル・ターゲットを取得し、
         調査計画の生成に必要なコンテキストを構築する。
+
+        セッションを再利用して効率的にMCP呼び出しを行う。
         """
         if not self.grafana_tool:
             logger.warning("Grafana MCP unavailable, skipping environment discovery")
@@ -153,12 +160,32 @@ class OrchestratorAgent:
 
         env = EnvironmentContext()
 
-        # 1. データソース一覧を取得
         try:
-            datasources_result = await self.grafana_tool.list_datasources()
+            # セッションを再利用して複数のMCP呼び出しを効率化
+            async with self.grafana_tool.session_context() as grafana:
+                await self._discover_datasources(grafana, env)
+                await self._discover_prometheus_info(grafana, env)
+                await self._discover_loki_info(grafana, env)
+                await self._discover_dashboard_queries(grafana, env)
+        except Exception as e:
+            logger.warning(
+                "Environment discovery failed: %s: %s",
+                type(e).__name__,
+                e,
+            )
+
+        return {"environment": env}
+
+    async def _discover_datasources(
+        self,
+        grafana: "GrafanaMCPTool",
+        env: EnvironmentContext,
+    ) -> None:
+        """データソース一覧を取得."""
+        try:
+            datasources_result = await grafana.list_datasources()
             datasources = self._extract_content_text(datasources_result)
 
-            # Prometheus/Lokiデータソースを特定
             for ds in self._parse_datasources(datasources):
                 if ds.get("type") == "prometheus" and not env.prometheus_datasource_uid:
                     env.prometheus_datasource_uid = ds.get("uid", "")
@@ -167,88 +194,91 @@ class OrchestratorAgent:
                     env.loki_datasource_uid = ds.get("uid", "")
                     logger.info("Found Loki datasource: %s", env.loki_datasource_uid)
         except Exception as e:
-            logger.warning(
-                "Failed to list datasources: %s: %s",
-                type(e).__name__,
-                e,
-            )
+            logger.warning("Failed to list datasources: %s: %s", type(e).__name__, e)
 
-        # 2. Prometheusメトリクス・ラベル情報を取得
-        if env.prometheus_datasource_uid:
-            try:
-                # メトリクス名一覧（上位100件）
-                metrics_result = await self.grafana_tool.list_prometheus_metric_names(
-                    env.prometheus_datasource_uid,
-                    limit=100,
-                )
-                env.available_metrics = self._extract_list_from_result(metrics_result)
-                logger.info("Found %d Prometheus metrics", len(env.available_metrics))
+    async def _discover_prometheus_info(
+        self,
+        grafana: "GrafanaMCPTool",
+        env: EnvironmentContext,
+    ) -> None:
+        """Prometheusメトリクス・ラベル情報を取得."""
+        if not env.prometheus_datasource_uid:
+            return
 
-                # ラベル名一覧
-                labels_result = await self.grafana_tool.list_prometheus_label_names(
-                    env.prometheus_datasource_uid,
-                )
-                env.available_labels = self._extract_list_from_result(labels_result)
-
-                # jobラベルの値を取得（どんなサービスが監視されているか）
-                if "job" in env.available_labels:
-                    jobs_result = await self.grafana_tool.list_prometheus_label_values(
-                        env.prometheus_datasource_uid,
-                        "job",
-                    )
-                    env.available_jobs = self._extract_list_from_result(jobs_result)
-                    logger.info("Found %d jobs: %s", len(env.available_jobs), env.available_jobs[:5])
-
-                # instanceラベルの値を取得（どんなインスタンスがあるか）
-                if "instance" in env.available_labels:
-                    instances_result = await self.grafana_tool.list_prometheus_label_values(
-                        env.prometheus_datasource_uid,
-                        "instance",
-                    )
-                    env.available_instances = self._extract_list_from_result(instances_result)
-                    logger.info("Found %d instances", len(env.available_instances))
-            except Exception as e:
-                logger.warning(
-                    "Failed to get Prometheus info: %s: %s",
-                    type(e).__name__,
-                    e,
-                )
-
-        # 3. Lokiラベル情報を取得
-        if env.loki_datasource_uid:
-            try:
-                loki_labels_result = await self.grafana_tool.list_loki_label_names(
-                    env.loki_datasource_uid,
-                )
-                env.loki_labels = self._extract_list_from_result(loki_labels_result)
-                logger.info("Found %d Loki labels", len(env.loki_labels))
-
-                # jobラベルの値
-                if "job" in env.loki_labels:
-                    loki_jobs_result = await self.grafana_tool.list_loki_label_values(
-                        env.loki_datasource_uid,
-                        "job",
-                    )
-                    env.loki_jobs = self._extract_list_from_result(loki_jobs_result)
-            except Exception as e:
-                logger.warning(
-                    "Failed to get Loki info: %s: %s",
-                    type(e).__name__,
-                    e,
-                )
-
-        # 4. 既存ダッシュボードからクエリパターンを学習
         try:
-            dashboards_result = await self.grafana_tool.list_dashboards()
+            # メトリクス名一覧（上位100件）
+            metrics_result = await grafana.list_prometheus_metric_names(
+                env.prometheus_datasource_uid,
+                limit=100,
+            )
+            env.available_metrics = self._extract_list_from_result(metrics_result)
+            logger.info("Found %d Prometheus metrics", len(env.available_metrics))
+
+            # ラベル名一覧
+            labels_result = await grafana.list_prometheus_label_names(
+                env.prometheus_datasource_uid,
+            )
+            env.available_labels = self._extract_list_from_result(labels_result)
+
+            # jobラベルの値を取得
+            if "job" in env.available_labels:
+                jobs_result = await grafana.list_prometheus_label_values(
+                    env.prometheus_datasource_uid,
+                    "job",
+                )
+                env.available_jobs = self._extract_list_from_result(jobs_result)
+                logger.info("Found %d jobs: %s", len(env.available_jobs), env.available_jobs[:5])
+
+            # instanceラベルの値を取得
+            if "instance" in env.available_labels:
+                instances_result = await grafana.list_prometheus_label_values(
+                    env.prometheus_datasource_uid,
+                    "instance",
+                )
+                env.available_instances = self._extract_list_from_result(instances_result)
+                logger.info("Found %d instances", len(env.available_instances))
+        except Exception as e:
+            logger.warning("Failed to get Prometheus info: %s: %s", type(e).__name__, e)
+
+    async def _discover_loki_info(
+        self,
+        grafana: "GrafanaMCPTool",
+        env: EnvironmentContext,
+    ) -> None:
+        """Lokiラベル情報を取得."""
+        if not env.loki_datasource_uid:
+            return
+
+        try:
+            loki_labels_result = await grafana.list_loki_label_names(env.loki_datasource_uid)
+            env.loki_labels = self._extract_list_from_result(loki_labels_result)
+            logger.info("Found %d Loki labels", len(env.loki_labels))
+
+            if "job" in env.loki_labels:
+                loki_jobs_result = await grafana.list_loki_label_values(
+                    env.loki_datasource_uid,
+                    "job",
+                )
+                env.loki_jobs = self._extract_list_from_result(loki_jobs_result)
+        except Exception as e:
+            logger.warning("Failed to get Loki info: %s: %s", type(e).__name__, e)
+
+    async def _discover_dashboard_queries(
+        self,
+        grafana: "GrafanaMCPTool",
+        env: EnvironmentContext,
+    ) -> None:
+        """既存ダッシュボードからクエリパターンを学習."""
+        try:
+            dashboards_result = await grafana.list_dashboards()
             dashboards = self._extract_content_text(dashboards_result)
             dashboard_list = self._parse_dashboards(dashboards)
 
-            # 最初のダッシュボードからクエリパターンを取得
             if dashboard_list:
                 first_uid = dashboard_list[0].get("uid", "")
                 if first_uid:
                     try:
-                        queries_result = await self.grafana_tool.get_dashboard_panel_queries(first_uid)
+                        queries_result = await grafana.get_dashboard_panel_queries(first_uid)
                         queries_text = self._extract_content_text(queries_result)
                         promql, logql = self._extract_queries_from_panels(queries_text)
                         env.example_promql_queries = promql[:5]
@@ -266,13 +296,7 @@ class OrchestratorAgent:
                             panel_err,
                         )
         except Exception as e:
-            logger.warning(
-                "Failed to list dashboards: %s: %s",
-                type(e).__name__,
-                e,
-            )
-
-        return {"environment": env}
+            logger.warning("Failed to list dashboards: %s: %s", type(e).__name__, e)
 
     def _extract_content_text(self, result: dict[str, Any]) -> str:
         """MCPツール結果からテキストコンテンツを抽出."""
