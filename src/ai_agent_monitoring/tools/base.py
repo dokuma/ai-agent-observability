@@ -159,7 +159,8 @@ class MCPClient:
             for content in result.content:
                 if isinstance(content, types.TextContent):
                     error_text += content.text
-            logger.error("MCP tool error: %s", error_text)
+            # WARNING レベルで出力（呼び出し側でエラーを処理する想定）
+            logger.warning("MCP tool returned error: %s", error_text)
             return {"error": error_text}
 
         # 結果からコンテンツを抽出

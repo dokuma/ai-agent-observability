@@ -268,42 +268,59 @@ class OrchestratorAgent:
         grafana: "GrafanaMCPTool",
         env: EnvironmentContext,
     ) -> None:
-        """既存ダッシュボードからクエリパターンを学習."""
+        """既存ダッシュボードからクエリパターンを学習.
+
+        複数のダッシュボードを試行し、有効なクエリが見つかるまで続ける。
+        """
         try:
             dashboards_result = await grafana.list_dashboards()
             dashboards = self._extract_content_text(dashboards_result)
             dashboard_list = self._parse_dashboards(dashboards)
 
-            if dashboard_list:
-                first_uid = dashboard_list[0].get("uid", "")
-                if first_uid:
-                    try:
-                        queries_result = await grafana.get_dashboard_panel_queries(first_uid)
+            # 最大3つのダッシュボードを試行
+            for dashboard in dashboard_list[:3]:
+                uid = dashboard.get("uid", "")
+                if not uid:
+                    continue
 
-                        # エラーレスポンスをチェック
-                        if "error" in queries_result:
-                            logger.warning(
-                                "get_dashboard_panel_queries returned error: %s",
-                                queries_result.get("error"),
-                            )
-                            return
+                try:
+                    queries_result = await grafana.get_dashboard_panel_queries(uid)
 
-                        queries_text = self._extract_content_text(queries_result)
-                        promql, logql = self._extract_queries_from_panels(queries_text)
+                    # エラーレスポンスをチェック（パネルが無いダッシュボードなど）
+                    if "error" in queries_result:
+                        logger.debug(
+                            "Skipping dashboard %s: %s",
+                            uid,
+                            queries_result.get("error"),
+                        )
+                        continue
+
+                    queries_text = self._extract_content_text(queries_result)
+                    promql, logql = self._extract_queries_from_panels(queries_text)
+
+                    if promql or logql:
                         env.example_promql_queries = promql[:5]
                         env.example_logql_queries = logql[:5]
                         logger.info(
-                            "Extracted %d PromQL, %d LogQL example queries",
+                            "Extracted %d PromQL, %d LogQL example queries from dashboard %s",
                             len(env.example_promql_queries),
                             len(env.example_logql_queries),
+                            uid,
                         )
-                    except Exception as panel_err:
-                        logger.warning(
-                            "Failed to get panel queries for dashboard %s: %s: %s",
-                            first_uid,
-                            type(panel_err).__name__,
-                            panel_err,
-                        )
+                        return  # 成功したら終了
+
+                except Exception as panel_err:
+                    logger.debug(
+                        "Failed to get panel queries for dashboard %s: %s: %s",
+                        uid,
+                        type(panel_err).__name__,
+                        panel_err,
+                    )
+                    continue
+
+            # 全て失敗した場合
+            logger.debug("No example queries found from any dashboard")
+
         except Exception as e:
             logger.warning("Failed to list dashboards: %s: %s", type(e).__name__, e)
 
