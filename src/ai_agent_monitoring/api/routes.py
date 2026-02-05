@@ -1,5 +1,6 @@
 """API ルーター定義."""
 
+import asyncio
 import logging
 from datetime import datetime
 
@@ -165,6 +166,8 @@ async def _run_alert_investigation(inv_id: str, alert: Alert) -> None:
         app_state.fail_investigation(inv_id, "Orchestrator not initialized")
         return
 
+    timeout = app_state.settings.investigation_timeout_seconds
+
     try:
         logger.info("Starting alert investigation: %s (%s)", inv_id, alert.alert_name)
         compiled = app_state.orchestrator.compile()
@@ -174,18 +177,26 @@ async def _run_alert_investigation(inv_id: str, alert: Alert) -> None:
             trigger_type="alert",
             extra_tags=[alert.alert_name, alert.severity],
         )
-        result = await compiled.ainvoke(
-            {
-                "investigation_id": inv_id,
-                "trigger_type": TriggerType.ALERT,
-                "alert": alert,
-                "messages": [],
-            },
-            config=config,
+
+        # タイムアウト付きで実行
+        result = await asyncio.wait_for(
+            compiled.ainvoke(
+                {
+                    "investigation_id": inv_id,
+                    "trigger_type": TriggerType.ALERT,
+                    "alert": alert,
+                    "messages": [],
+                },
+                config=config,
+            ),
+            timeout=timeout,
         )
         rca_report = result.get("rca_report")
         app_state.complete_investigation(inv_id, rca_report=rca_report)
         logger.info("Investigation completed: %s", inv_id)
+    except asyncio.TimeoutError:
+        logger.warning("Investigation timed out after %ds: %s", timeout, inv_id)
+        app_state.fail_investigation(inv_id, f"調査がタイムアウトしました ({timeout}秒)")
     except Exception as e:
         logger.exception("Investigation failed: %s", inv_id)
         app_state.fail_investigation(inv_id, str(e))
@@ -197,6 +208,8 @@ async def _run_user_query_investigation(inv_id: str, user_query: UserQuery) -> N
         app_state.fail_investigation(inv_id, "Orchestrator not initialized")
         return
 
+    timeout = app_state.settings.investigation_timeout_seconds
+
     try:
         logger.info("Starting user query investigation: %s", inv_id)
         compiled = app_state.orchestrator.compile()
@@ -205,18 +218,26 @@ async def _run_user_query_investigation(inv_id: str, user_query: UserQuery) -> N
             investigation_id=inv_id,
             trigger_type="user_query",
         )
-        result = await compiled.ainvoke(
-            {
-                "investigation_id": inv_id,
-                "trigger_type": TriggerType.USER_QUERY,
-                "user_query": user_query,
-                "messages": [],
-            },
-            config=config,
+
+        # タイムアウト付きで実行
+        result = await asyncio.wait_for(
+            compiled.ainvoke(
+                {
+                    "investigation_id": inv_id,
+                    "trigger_type": TriggerType.USER_QUERY,
+                    "user_query": user_query,
+                    "messages": [],
+                },
+                config=config,
+            ),
+            timeout=timeout,
         )
         rca_report = result.get("rca_report")
         app_state.complete_investigation(inv_id, rca_report=rca_report)
         logger.info("Investigation completed: %s", inv_id)
+    except asyncio.TimeoutError:
+        logger.warning("Investigation timed out after %ds: %s", timeout, inv_id)
+        app_state.fail_investigation(inv_id, f"調査がタイムアウトしました ({timeout}秒)")
     except Exception as e:
         logger.exception("Investigation failed: %s", inv_id)
         app_state.fail_investigation(inv_id, str(e))

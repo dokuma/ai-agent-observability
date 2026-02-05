@@ -221,3 +221,41 @@ class TestInvestigationStageUpdate:
         data = response.json()
         assert data["current_stage"] == "メトリクスを調査中"
         assert data["iteration_count"] == 1
+
+
+class TestInvestigationTimeout:
+    """調査タイムアウトのテスト."""
+
+    @pytest.mark.asyncio
+    async def test_investigation_timeout(self):
+        """調査がタイムアウトした場合、failedステータスになる."""
+        import asyncio
+        from ai_agent_monitoring.api.routes import _run_user_query_investigation
+        from ai_agent_monitoring.core.models import UserQuery
+
+        # タイムアウトを短く設定
+        app_state.settings.investigation_timeout_seconds = 1
+
+        # 遅延するモックオーケストレータ
+        mock_orchestrator = MagicMock()
+        compiled = MagicMock()
+
+        async def slow_invoke(*args, **kwargs):
+            await asyncio.sleep(5)  # 5秒待機（タイムアウトより長い）
+            return {"rca_report": None}
+
+        compiled.ainvoke = slow_invoke
+        mock_orchestrator.compile.return_value = compiled
+        app_state.orchestrator = mock_orchestrator
+
+        # 調査を作成
+        inv_id = app_state.create_investigation("user_query")
+        user_query = UserQuery(raw_input="test query")
+
+        # タイムアウトが発生することを確認
+        await _run_user_query_investigation(inv_id, user_query)
+
+        # ステータスがfailedになっている
+        record = app_state.get_investigation(inv_id)
+        assert record.status == "failed"
+        assert "タイムアウト" in record.error
