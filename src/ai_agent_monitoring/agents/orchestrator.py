@@ -279,6 +279,15 @@ class OrchestratorAgent:
                 if first_uid:
                     try:
                         queries_result = await grafana.get_dashboard_panel_queries(first_uid)
+
+                        # エラーレスポンスをチェック
+                        if "error" in queries_result:
+                            logger.warning(
+                                "get_dashboard_panel_queries returned error: %s",
+                                queries_result.get("error"),
+                            )
+                            return
+
                         queries_text = self._extract_content_text(queries_result)
                         promql, logql = self._extract_queries_from_panels(queries_text)
                         env.example_promql_queries = promql[:5]
@@ -784,19 +793,26 @@ class OrchestratorAgent:
     # ---- パーサー ----
 
     def _parse_plan(self, content: str) -> InvestigationPlan:
-        """LLM出力から調査計画をパース."""
+        """LLM出力から調査計画をパース.
+
+        パースに失敗した場合は例外を発生させ、デフォルト計画にフォールバックしない。
+        これにより、意味のない調査が実行されることを防ぐ。
+
+        Raises:
+            ValueError: 調査計画のパースに失敗した場合
+        """
         try:
             json_str = self._extract_json(content)
             data = json.loads(json_str)
             return InvestigationPlan(**data)
         except (json.JSONDecodeError, ValueError) as e:
             # エラーの詳細をログ出力
-            logger.warning(
-                "調査計画のパースに失敗。デフォルト計画を使用。error=%s, content_preview=%s",
+            logger.error(
+                "調査計画のパースに失敗。error=%s, content_preview=%s",
                 e,
                 content[:500] if content else "(empty)",
             )
-            return InvestigationPlan()
+            raise ValueError(f"調査計画のパースに失敗しました: {e}") from e
 
     @staticmethod
     def _format_time_range(time_range: TimeRange | None) -> str:

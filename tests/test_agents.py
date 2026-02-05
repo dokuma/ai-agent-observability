@@ -124,11 +124,10 @@ class TestOrchestratorParsePlan:
 
     def test_parse_plan_invalid_json(self):
         content = "This is not valid JSON at all"
-        plan = self.agent._parse_plan(content)
 
-        # デフォルト計画が返る
-        assert plan.promql_queries == []
-        assert plan.time_range is None
+        # パース失敗時は例外が発生する（デフォルト計画にフォールバックしない）
+        with pytest.raises(ValueError, match="調査計画のパースに失敗しました"):
+            self.agent._parse_plan(content)
 
 
 class TestOrchestratorExtractJson:
