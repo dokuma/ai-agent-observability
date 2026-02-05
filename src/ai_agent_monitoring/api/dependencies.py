@@ -24,6 +24,7 @@ class InvestigationRecord:
     status: str  # "running" | "completed" | "failed"
     trigger_type: str
     iteration_count: int = 0
+    current_stage: str = ""  # 現在のステージ（例: "環境発見中", "メトリクス調査中"）
     created_at: datetime = field(default_factory=datetime.now)
     completed_at: datetime | None = None
     error: str = ""
@@ -61,6 +62,7 @@ class AppState:
             llm=llm,
             registry=self.registry,
             settings=self.settings,
+            stage_update_callback=self.update_investigation_stage,
         )
         logger.info("Orchestrator Agent initialized")
 
@@ -97,6 +99,17 @@ class AppState:
             record.status = "failed"
             record.completed_at = datetime.now()
             record.error = error
+
+    def update_investigation_stage(
+        self, inv_id: str, stage: str, iteration_count: int | None = None
+    ) -> None:
+        """調査の現在ステージを更新."""
+        record = self.investigations.get(inv_id)
+        if record:
+            record.current_stage = stage
+            if iteration_count is not None:
+                record.iteration_count = iteration_count
+            logger.debug("Investigation %s: stage=%s", inv_id, stage)
 
 
 # シングルトンインスタンス

@@ -114,10 +114,10 @@ def create_time_tools(default_tz: str = DEFAULT_TIMEZONE) -> list[BaseTool]:
                 result_time = now - timedelta(hours=hours)
             except ValueError:
                 pass
-        elif "昨日" in expression:
-            result_time = now - timedelta(days=1)
         elif "一昨日" in expression or "おととい" in expression:
             result_time = now - timedelta(days=2)
+        elif "昨日" in expression:
+            result_time = now - timedelta(days=1)
 
         return {
             "original_expression": expression,

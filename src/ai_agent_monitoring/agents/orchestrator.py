@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
@@ -32,6 +32,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# ステージ更新用コールバック型
+StageUpdateCallback = Callable[[str, str, int | None], None]
+
 
 class OrchestratorAgent:
     """Orchestrator Agent.
@@ -45,10 +48,12 @@ class OrchestratorAgent:
         llm: Any,
         registry: ToolRegistry,
         settings: Settings | None = None,
+        stage_update_callback: StageUpdateCallback | None = None,
     ) -> None:
         self.llm = llm
         self.settings = settings or Settings()
         self.registry = registry
+        self._stage_callback = stage_update_callback
 
         # 時刻ツールは常に利用可能
         self.time_tools = create_time_tools()
@@ -81,6 +86,24 @@ class OrchestratorAgent:
 
         self.graph = self._build_graph()
 
+    def _update_stage(self, state: AgentState, stage: str) -> None:
+        """調査ステージを更新."""
+        inv_id = state.get("investigation_id", "")
+        iteration = state.get("iteration_count", 0)
+        if inv_id and self._stage_callback:
+            self._stage_callback(inv_id, stage, iteration)
+
+    def _wrap_with_stage(self, subgraph: Any, stage_name: str) -> Any:
+        """サブグラフをステージ更新でラップ.
+
+        サブグラフ（MetricsAgent, LogsAgent, RCAAgent）の実行前に
+        ステージを更新するラッパー関数を返す。
+        """
+        async def wrapped(state: AgentState) -> dict[str, Any]:
+            self._update_stage(state, stage_name)
+            return await subgraph.ainvoke(state)
+        return wrapped
+
     def _build_graph(self) -> StateGraph[AgentState]:
         """LangGraphワークフローを構築.
 
@@ -98,7 +121,6 @@ class OrchestratorAgent:
         graph.add_node("validate_queries", self._validate_queries)
         graph.add_node("resolve_time_range", self._resolve_time_range_node)
         graph.add_node("evaluate_results", self._evaluate_results)
-        graph.add_node("generate_rca", self.rca_agent.compile())
 
         # エッジ定義
         graph.set_entry_point("discover_environment")
@@ -112,14 +134,20 @@ class OrchestratorAgent:
         logs_agent = self.logs_agent
 
         if metrics_agent is not None:
-            graph.add_node("investigate_metrics", metrics_agent.compile())
+            graph.add_node("investigate_metrics", self._wrap_with_stage(
+                metrics_agent.compile(),
+                "メトリクスを調査中",
+            ))
             graph.add_edge("resolve_time_range", "investigate_metrics")
             graph.add_edge("investigate_metrics", "evaluate_results")
         else:
             logger.warning("MetricsAgent unavailable, skipping metrics investigation")
 
         if logs_agent is not None:
-            graph.add_node("investigate_logs", logs_agent.compile())
+            graph.add_node("investigate_logs", self._wrap_with_stage(
+                logs_agent.compile(),
+                "ログを調査中",
+            ))
             graph.add_edge("resolve_time_range", "investigate_logs")
             graph.add_edge("investigate_logs", "evaluate_results")
         else:
@@ -136,6 +164,12 @@ class OrchestratorAgent:
                 "finish": "generate_rca",
             },
         )
+
+        # RCA Agentをステージ更新でラップ
+        graph.add_node("generate_rca", self._wrap_with_stage(
+            self.rca_agent.compile(),
+            "RCAレポートを生成中",
+        ))
         graph.add_edge("generate_rca", END)
 
         return graph
@@ -154,6 +188,8 @@ class OrchestratorAgent:
 
         セッションを再利用して効率的にMCP呼び出しを行う。
         """
+        self._update_stage(state, "環境情報を収集中")
+
         if not self.grafana_tool:
             logger.warning("Grafana MCP unavailable, skipping environment discovery")
             return {"environment": EnvironmentContext()}
@@ -387,6 +423,8 @@ class OrchestratorAgent:
 
     async def _analyze_input(self, state: AgentState) -> dict[str, Any]:
         """入力（アラートまたはユーザクエリ）を分析."""
+        self._update_stage(state, "入力を分析中")
+
         user_query = state.get("user_query")
         query_text = ""  # RAG検索用
 
@@ -525,6 +563,9 @@ class OrchestratorAgent:
 
     async def _plan_investigation(self, state: AgentState) -> dict[str, Any]:
         """調査計画を策定."""
+        iteration = state.get("iteration_count", 0) + 1
+        self._update_stage(state, f"調査計画を策定中 (イテレーション {iteration})")
+
         messages = [
             *state["messages"],
             HumanMessage(
@@ -559,6 +600,8 @@ class OrchestratorAgent:
         LLMが生成したPromQL/LogQLクエリの文法を検証し、
         エラーがある場合は修正を試みるか、LLMに再生成を依頼する。
         """
+        self._update_stage(state, "クエリを検証中")
+
         plan = state.get("plan")
         if not plan:
             return {}
@@ -694,6 +737,8 @@ class OrchestratorAgent:
         - ユーザクエリ起動: UserQueryの解析済み時間があればそれを使用、
           なければinterruptでユーザに問い合わせる
         """
+        self._update_stage(state, "時間範囲を確定中")
+
         plan = state.get("plan")
         if not plan:
             return {}
@@ -767,6 +812,8 @@ class OrchestratorAgent:
 
     async def _evaluate_results(self, state: AgentState) -> dict[str, Any]:
         """調査結果を評価し、追加調査が必要か判断."""
+        self._update_stage(state, "調査結果を評価中")
+
         # Metrics/Logs Agentの結果サマリを構築
         results_summary = []
         for mr in state.get("metrics_results", []):

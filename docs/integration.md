@@ -29,17 +29,21 @@ Open WebUI のサイドバーにカスタムモデルとして表示され、チ
 """
 title: AI Agent Monitoring
 description: システム監視 AI Agent にクエリを送信し RCA レポートを取得する
-version: 0.1.0
+version: 0.2.0
 """
 
-import time
+import asyncio
+from typing import AsyncGenerator
 
 import requests
 from pydantic import BaseModel, Field
 
 
 class Pipe:
-    """Open WebUI Pipe Function for AI Agent Monitoring."""
+    """Open WebUI Pipe Function for AI Agent Monitoring.
+
+    ストリーミングを使用して調査の進捗をリアルタイムで表示する。
+    """
 
     class Valves(BaseModel):
         API_BASE_URL: str = Field(
@@ -47,7 +51,7 @@ class Pipe:
             description="AI Agent Monitoring API のベース URL",
         )
         POLL_INTERVAL: int = Field(
-            default=5, description="ポーリング間隔 (秒)"
+            default=3, description="ポーリング間隔 (秒)"
         )
         POLL_TIMEOUT: int = Field(
             default=300, description="ポーリングタイムアウト (秒)"
@@ -59,60 +63,93 @@ class Pipe:
     def pipes(self):
         return [{"id": "agent-monitoring", "name": "System Monitoring Agent"}]
 
-    async def pipe(self, body: dict) -> str:
+    async def pipe(self, body: dict) -> AsyncGenerator[str, None]:
+        """ストリーミングで進捗を返しながら調査を実行."""
         messages = body.get("messages", [])
         if not messages:
-            return "クエリを入力してください。"
+            yield "クエリを入力してください。"
+            return
 
         query = messages[-1].get("content", "")
         base = self.valves.API_BASE_URL.rstrip("/")
 
         # 1. 調査開始
-        res = requests.post(
-            f"{base}/query",
-            json={"query": query},
-            timeout=30,
-        )
-        res.raise_for_status()
+        try:
+            res = requests.post(
+                f"{base}/query",
+                json={"query": query},
+                timeout=30,
+            )
+            res.raise_for_status()
+        except Exception as e:
+            yield f"❌ 調査の開始に失敗しました: {e}"
+            return
+
         data = res.json()
         inv_id = data["investigation_id"]
+        yield f"🔍 調査を開始しました (ID: `{inv_id}`)\n\n"
 
-        # 2. 完了までポーリング
+        # 2. 完了までポーリング（進捗を表示）
         elapsed = 0
+        last_stage = ""
         while elapsed < self.valves.POLL_TIMEOUT:
-            time.sleep(self.valves.POLL_INTERVAL)
+            await asyncio.sleep(self.valves.POLL_INTERVAL)
             elapsed += self.valves.POLL_INTERVAL
-            status_res = requests.get(
-                f"{base}/investigations/{inv_id}", timeout=10
-            )
-            status = status_res.json()
+
+            try:
+                status_res = requests.get(
+                    f"{base}/investigations/{inv_id}", timeout=10
+                )
+                status = status_res.json()
+            except Exception:
+                continue  # 一時的な通信エラーは無視
+
+            # ステージが変わったら表示を更新
+            current_stage = status.get("current_stage", "")
+            if current_stage and current_stage != last_stage:
+                iteration = status.get("iteration_count", 0)
+                if iteration > 0:
+                    yield f"⏳ {current_stage} (イテレーション {iteration})\n"
+                else:
+                    yield f"⏳ {current_stage}\n"
+                last_stage = current_stage
+
             if status["status"] == "completed":
+                yield "\n✅ 調査が完了しました。レポートを取得中...\n\n"
                 break
             if status["status"] == "failed":
-                return f"調査が失敗しました (ID: {inv_id})"
+                yield f"\n❌ 調査が失敗しました (ID: {inv_id})"
+                return
         else:
-            return f"調査がタイムアウトしました (ID: {inv_id})"
+            yield f"\n⏰ 調査がタイムアウトしました (ID: {inv_id})"
+            return
 
         # 3. レポート取得
-        report_res = requests.get(
-            f"{base}/investigations/{inv_id}/report", timeout=10
-        )
+        try:
+            report_res = requests.get(
+                f"{base}/investigations/{inv_id}/report", timeout=10
+            )
+        except Exception as e:
+            yield f"❌ レポートの取得に失敗しました: {e}"
+            return
 
         # レポートが未生成 (404) の場合はステータス情報を返す
         if report_res.status_code != 200:
-            return (
+            yield (
                 f"## 調査完了 ({inv_id})\n\n"
                 f"調査は完了しましたが、詳細レポートを生成できませんでした。\n"
                 f"イテレーション: {status.get('iteration_count', '不明')}\n\n"
                 f"*モデルの応答精度が十分でない可能性があります。"
                 f"より大きなモデル (llama3, qwen2.5:7b 等) の使用を推奨します。*"
             )
+            return
 
         report = report_res.json()
 
         # Markdown レポートがあればそのまま返す
         if report.get("markdown"):
-            return report["markdown"]
+            yield report["markdown"]
+            return
 
         # フォールバック: 構造化データを整形
         lines = [f"## RCA レポート ({inv_id})\n"]
@@ -131,7 +168,7 @@ class Pipe:
                 "\n*レポートの内容が空です。"
                 "より大きなモデルの使用を推奨します。*"
             )
-        return "\n".join(lines)
+        yield "\n".join(lines)
 ```
 
 ### 使い方

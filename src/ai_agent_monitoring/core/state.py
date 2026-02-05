@@ -74,6 +74,9 @@ class AgentState(MessagesState):
     Orchestrator → Metrics/Logs Agent → RCA Agent 間で共有される。
     """
 
+    # 調査ID（ステージ更新用）
+    investigation_id: str = ""  # type: ignore[misc]
+
     # トリガー（どちらか一方が設定される）
     trigger_type: TriggerType = TriggerType.ALERT  # type: ignore[misc]
     alert: Alert | None = None  # type: ignore[misc]

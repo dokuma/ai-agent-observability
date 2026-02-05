@@ -120,6 +120,7 @@ async def get_investigation_status(investigation_id: str) -> InvestigationStatus
         status=record.status,
         trigger_type=record.trigger_type,
         iteration_count=record.iteration_count,
+        current_stage=record.current_stage,
         created_at=record.created_at,
         completed_at=record.completed_at,
     )
@@ -175,6 +176,7 @@ async def _run_alert_investigation(inv_id: str, alert: Alert) -> None:
         )
         result = await compiled.ainvoke(
             {
+                "investigation_id": inv_id,
                 "trigger_type": TriggerType.ALERT,
                 "alert": alert,
                 "messages": [],
@@ -205,6 +207,7 @@ async def _run_user_query_investigation(inv_id: str, user_query: UserQuery) -> N
         )
         result = await compiled.ainvoke(
             {
+                "investigation_id": inv_id,
                 "trigger_type": TriggerType.USER_QUERY,
                 "user_query": user_query,
                 "messages": [],

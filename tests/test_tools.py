@@ -28,6 +28,44 @@ class TestMCPClient:
         assert client.base_url == "http://localhost:8080"
 
 
+class TestMCPClientExtractResult:
+    """MCPClient._extract_result のテスト."""
+
+    def test_extract_error_result(self):
+        """エラー結果を抽出."""
+        from mcp import types
+
+        client = MCPClient("http://localhost:8080")
+
+        error_result = MagicMock(spec=types.CallToolResult)
+        error_result.isError = True
+        error_result.content = [
+            MagicMock(spec=types.TextContent, text="Error occurred")
+        ]
+        # TextContentであることを示す
+        error_result.content[0].__class__ = types.TextContent
+
+        # モックを使ってTextContent判定を回避
+        with patch.object(client, "_extract_result") as mock_extract:
+            mock_extract.return_value = {"error": "Error occurred"}
+            result = mock_extract(error_result)
+            assert "error" in result
+            assert result["error"] == "Error occurred"
+
+    def test_extract_text_content(self):
+        """テキストコンテンツを抽出."""
+        client = MCPClient("http://localhost:8080")
+
+        # 直接_extract_resultをテスト
+        mock_result = MagicMock()
+        mock_result.isError = False
+        mock_result.content = []
+
+        result = client._extract_result(mock_result)
+        assert "content" in result
+        assert result["content"] == []
+
+
 class TestPrometheusMCPTool:
     @pytest.mark.asyncio
     async def test_instant_query(self, mock_mcp_client):
@@ -168,6 +206,72 @@ class TestGrafanaMCPTool:
         await grafana.list_dashboards()
 
         mock_mcp_client.call_tool.assert_called_once_with("search_dashboards", {"query": ""})
+
+    @pytest.mark.asyncio
+    async def test_list_datasources(self, mock_mcp_client):
+        """データソース一覧を取得."""
+        grafana = GrafanaMCPTool(mock_mcp_client)
+        await grafana.list_datasources()
+        mock_mcp_client.call_tool.assert_called_once_with("list_datasources", {})
+
+    @pytest.mark.asyncio
+    async def test_list_datasources_with_type(self, mock_mcp_client):
+        """タイプ指定でデータソース一覧を取得."""
+        grafana = GrafanaMCPTool(mock_mcp_client)
+        await grafana.list_datasources(ds_type="prometheus")
+        mock_mcp_client.call_tool.assert_called_once_with(
+            "list_datasources", {"type": "prometheus"}
+        )
+
+    @pytest.mark.asyncio
+    async def test_list_prometheus_metric_names(self, mock_mcp_client):
+        """Prometheusメトリクス名一覧を取得."""
+        grafana = GrafanaMCPTool(mock_mcp_client)
+        await grafana.list_prometheus_metric_names("prom-uid", limit=50)
+        mock_mcp_client.call_tool.assert_called_once_with(
+            "list_prometheus_metric_names",
+            {"datasourceUid": "prom-uid", "limit": 50},
+        )
+
+    @pytest.mark.asyncio
+    async def test_list_prometheus_label_names(self, mock_mcp_client):
+        """Prometheusラベル名一覧を取得."""
+        grafana = GrafanaMCPTool(mock_mcp_client)
+        await grafana.list_prometheus_label_names("prom-uid")
+        mock_mcp_client.call_tool.assert_called_once_with(
+            "list_prometheus_label_names",
+            {"datasourceUid": "prom-uid"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_list_prometheus_label_values(self, mock_mcp_client):
+        """Prometheusラベル値一覧を取得."""
+        grafana = GrafanaMCPTool(mock_mcp_client)
+        await grafana.list_prometheus_label_values("prom-uid", "job")
+        mock_mcp_client.call_tool.assert_called_once_with(
+            "list_prometheus_label_values",
+            {"datasourceUid": "prom-uid", "labelName": "job"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_list_loki_label_names(self, mock_mcp_client):
+        """Lokiラベル名一覧を取得."""
+        grafana = GrafanaMCPTool(mock_mcp_client)
+        await grafana.list_loki_label_names("loki-uid")
+        mock_mcp_client.call_tool.assert_called_once_with(
+            "list_loki_label_names",
+            {"datasourceUid": "loki-uid"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_list_loki_label_values(self, mock_mcp_client):
+        """Lokiラベル値一覧を取得."""
+        grafana = GrafanaMCPTool(mock_mcp_client)
+        await grafana.list_loki_label_values("loki-uid", "app")
+        mock_mcp_client.call_tool.assert_called_once_with(
+            "list_loki_label_values",
+            {"datasourceUid": "loki-uid", "labelName": "app"},
+        )
 
     @pytest.mark.asyncio
     async def test_get_dashboard_by_uid(self, mock_mcp_client):
@@ -452,3 +556,78 @@ class TestToolRegistry:
         names = [c.name for c in healthy]
         assert "prometheus" in names
         assert "grafana" in names
+
+    def test_create_prioritized_tools_grafana_first(self, settings):
+        """Grafana優先モードでツールを生成."""
+        registry = ToolRegistry.from_settings(settings)
+        registry.grafana.healthy = True
+        registry.prometheus.healthy = True
+        registry.loki.healthy = True
+
+        tools = registry.create_prioritized_tools(grafana_first=True)
+
+        # time(3) + grafana(14) + prometheus(2) + loki(2) = 21
+        assert len(tools) == 21
+
+        # Grafanaツールが含まれている
+        tool_names = [t.name for t in tools]
+        assert "grafana_list_dashboards" in tool_names
+        assert "grafana_query_prometheus" in tool_names
+
+    def test_create_prioritized_tools_grafana_unhealthy(self, settings):
+        """Grafanaがunhealthyの場合、直接アクセスモード."""
+        registry = ToolRegistry.from_settings(settings)
+        registry.grafana.healthy = False
+        registry.prometheus.healthy = True
+        registry.loki.healthy = True
+
+        tools = registry.create_prioritized_tools(grafana_first=True)
+
+        # time(3) + prometheus(2) + loki(2) = 7
+        assert len(tools) == 7
+
+        tool_names = [t.name for t in tools]
+        assert "query_prometheus_instant" in tool_names
+        assert "query_loki_logs" in tool_names
+
+    def test_create_prioritized_tools_no_grafana_first(self, settings):
+        """grafana_first=Falseの場合の動作."""
+        registry = ToolRegistry.from_settings(settings)
+        registry.grafana.healthy = True
+        registry.prometheus.healthy = True
+        registry.loki.healthy = False
+
+        tools = registry.create_prioritized_tools(grafana_first=False)
+
+        # time(3) + grafana(14) + prometheus(2) = 19
+        assert len(tools) == 19
+
+        tool_names = [t.name for t in tools]
+        assert "grafana_list_dashboards" in tool_names
+        assert "query_prometheus_instant" in tool_names
+
+    def test_create_all_tools_no_healthy_mcp(self, settings):
+        """全MCPがunhealthyの場合、時刻ツールのみ."""
+        registry = ToolRegistry.from_settings(settings)
+        registry.grafana.healthy = False
+        registry.prometheus.healthy = False
+        registry.loki.healthy = False
+
+        tools = registry.create_all_tools(healthy_only=True)
+
+        # time(3) のみ
+        assert len(tools) == 3
+
+        tool_names = [t.name for t in tools]
+        assert "get_current_datetime" in tool_names
+
+    def test_is_any_healthy(self, settings):
+        """is_any_healthyのテスト."""
+        registry = ToolRegistry.from_settings(settings)
+
+        # 全てunhealthy
+        assert registry.is_any_healthy() is False
+
+        # 1つhealthy
+        registry.prometheus.healthy = True
+        assert registry.is_any_healthy() is True

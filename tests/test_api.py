@@ -24,6 +24,52 @@ class TestHealthEndpoint:
         data = response.json()
         assert data["status"] == "unhealthy"
 
+    def test_health_all_healthy(self, client):
+        """全MCPが正常な場合はhealthy."""
+        mock_registry = MagicMock()
+        mock_registry.health_check = AsyncMock(return_value={
+            "prometheus": True,
+            "loki": True,
+            "grafana": True,
+        })
+        app_state.registry = mock_registry
+
+        response = client.get("/api/v1/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "healthy"
+        assert data["mcp_servers"]["prometheus"] is True
+
+    def test_health_degraded(self, client):
+        """一部のMCPがunhealthyな場合はdegraded."""
+        mock_registry = MagicMock()
+        mock_registry.health_check = AsyncMock(return_value={
+            "prometheus": True,
+            "loki": False,
+            "grafana": True,
+        })
+        app_state.registry = mock_registry
+
+        response = client.get("/api/v1/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "degraded"
+
+    def test_health_all_unhealthy(self, client):
+        """全MCPがunhealthyな場合はunhealthy."""
+        mock_registry = MagicMock()
+        mock_registry.health_check = AsyncMock(return_value={
+            "prometheus": False,
+            "loki": False,
+            "grafana": False,
+        })
+        app_state.registry = mock_registry
+
+        response = client.get("/api/v1/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "unhealthy"
+
 
 class TestAlertWebhook:
     def test_webhook_empty_alerts(self, client):
@@ -136,3 +182,42 @@ class TestInvestigationReport:
         assert data["markdown"] == "# Test Report"
         assert len(data["root_causes"]) == 1
         assert data["root_causes"][0]["confidence"] == 0.8
+
+
+class TestInvestigationStageUpdate:
+    """調査ステージ更新のテスト."""
+
+    def test_update_stage(self, client):
+        """ステージが正しく更新される."""
+        inv_id = app_state.create_investigation("user_query")
+
+        # 初期状態
+        record = app_state.get_investigation(inv_id)
+        assert record.current_stage == ""
+
+        # ステージ更新
+        app_state.update_investigation_stage(inv_id, "環境情報を収集中")
+        record = app_state.get_investigation(inv_id)
+        assert record.current_stage == "環境情報を収集中"
+
+        # ステージ更新（iteration_countも更新）
+        app_state.update_investigation_stage(inv_id, "調査計画を策定中", iteration_count=2)
+        record = app_state.get_investigation(inv_id)
+        assert record.current_stage == "調査計画を策定中"
+        assert record.iteration_count == 2
+
+    def test_update_stage_nonexistent(self, client):
+        """存在しない調査IDでは何もしない."""
+        # 例外が発生しないことを確認
+        app_state.update_investigation_stage("nonexistent-id", "テスト")
+
+    def test_status_includes_current_stage(self, client):
+        """APIレスポンスにcurrent_stageが含まれる."""
+        inv_id = app_state.create_investigation("user_query")
+        app_state.update_investigation_stage(inv_id, "メトリクスを調査中", iteration_count=1)
+
+        response = client.get(f"/api/v1/investigations/{inv_id}")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["current_stage"] == "メトリクスを調査中"
+        assert data["iteration_count"] == 1

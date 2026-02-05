@@ -425,6 +425,399 @@ class TestOrchestratorCompile:
         assert compiled is not None
 
 
+class TestOrchestratorStageUpdate:
+    """Orchestrator のステージ更新機能のテスト."""
+
+    def test_update_stage_with_callback(self):
+        """コールバックが設定されている場合にステージが更新される."""
+        llm = MagicMock()
+        llm.bind_tools = MagicMock(return_value=llm)
+        registry = _make_mock_registry()
+
+        # コールバックをモック
+        callback = MagicMock()
+        agent = OrchestratorAgent(
+            llm=llm,
+            registry=registry,
+            stage_update_callback=callback,
+        )
+
+        state = AgentState(
+            messages=[],
+            investigation_id="test-inv-123",
+            iteration_count=2,
+        )
+
+        agent._update_stage(state, "テストステージ")
+
+        callback.assert_called_once_with("test-inv-123", "テストステージ", 2)
+
+    def test_update_stage_no_callback(self):
+        """コールバックが未設定の場合は何もしない."""
+        agent, _ = _make_orchestrator()
+        state = AgentState(
+            messages=[],
+            investigation_id="test-inv-123",
+            iteration_count=1,
+        )
+
+        # 例外が発生しないことを確認
+        agent._update_stage(state, "テストステージ")
+
+    def test_update_stage_no_investigation_id(self):
+        """investigation_idが空の場合はコールバックを呼ばない."""
+        llm = MagicMock()
+        llm.bind_tools = MagicMock(return_value=llm)
+        registry = _make_mock_registry()
+
+        callback = MagicMock()
+        agent = OrchestratorAgent(
+            llm=llm,
+            registry=registry,
+            stage_update_callback=callback,
+        )
+
+        state = AgentState(
+            messages=[],
+            investigation_id="",  # 空
+            iteration_count=1,
+        )
+
+        agent._update_stage(state, "テストステージ")
+
+        callback.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_wrap_with_stage(self):
+        """_wrap_with_stageがサブグラフ実行前にステージを更新する."""
+        llm = MagicMock()
+        llm.bind_tools = MagicMock(return_value=llm)
+        registry = _make_mock_registry()
+
+        callback = MagicMock()
+        agent = OrchestratorAgent(
+            llm=llm,
+            registry=registry,
+            stage_update_callback=callback,
+        )
+
+        # モックのサブグラフ
+        mock_subgraph = MagicMock()
+        mock_subgraph.ainvoke = AsyncMock(return_value={"test_result": "ok"})
+
+        wrapped = agent._wrap_with_stage(mock_subgraph, "ラップテスト")
+
+        state = AgentState(
+            messages=[],
+            investigation_id="test-inv-456",
+            iteration_count=0,
+        )
+
+        result = await wrapped(state)
+
+        # コールバックが呼ばれた
+        callback.assert_called_once_with("test-inv-456", "ラップテスト", 0)
+        # サブグラフが実行された
+        mock_subgraph.ainvoke.assert_called_once_with(state)
+        # 結果が返された
+        assert result == {"test_result": "ok"}
+
+    @pytest.mark.asyncio
+    async def test_discover_environment_updates_stage(self):
+        """_discover_environmentがステージを更新する."""
+        llm = MagicMock()
+        llm.bind_tools = MagicMock(return_value=llm)
+        registry = _make_mock_registry()
+
+        callback = MagicMock()
+        agent = OrchestratorAgent(
+            llm=llm,
+            registry=registry,
+            stage_update_callback=callback,
+        )
+
+        state = AgentState(
+            messages=[],
+            investigation_id="test-inv-789",
+            iteration_count=0,
+        )
+
+        # grafana_toolをNoneに設定してスキップ
+        agent.grafana_tool = None
+
+        await agent._discover_environment(state)
+
+        callback.assert_called_with("test-inv-789", "環境情報を収集中", 0)
+
+
+class TestOrchestratorEnvironmentDiscovery:
+    """Orchestrator の環境発見機能のテスト."""
+
+    @pytest.mark.asyncio
+    async def test_discover_environment_no_grafana(self):
+        """Grafana MCPがない場合は空のコンテキストを返す."""
+        agent, _ = _make_orchestrator()
+        agent.grafana_tool = None
+
+        state = AgentState(messages=[])
+        result = await agent._discover_environment(state)
+
+        assert "environment" in result
+        env = result["environment"]
+        assert env.prometheus_datasource_uid == ""
+        assert env.loki_datasource_uid == ""
+        assert env.available_metrics == []
+
+    def test_extract_content_text(self):
+        """MCPツール結果からテキストを抽出."""
+        agent, _ = _make_orchestrator()
+
+        result = {
+            "content": [
+                {"type": "text", "text": "hello"},
+                {"type": "text", "text": "world"},
+            ]
+        }
+        text = agent._extract_content_text(result)
+        assert text == "hello\nworld"
+
+    def test_extract_content_text_empty(self):
+        """空の結果から抽出."""
+        agent, _ = _make_orchestrator()
+
+        result = {"content": []}
+        text = agent._extract_content_text(result)
+        assert text == ""
+
+    def test_extract_list_from_result_json(self):
+        """JSONリストを抽出."""
+        agent, _ = _make_orchestrator()
+
+        result = {
+            "content": [{"type": "text", "text": '["metric1", "metric2", "metric3"]'}]
+        }
+        items = agent._extract_list_from_result(result)
+        assert items == ["metric1", "metric2", "metric3"]
+
+    def test_extract_list_from_result_newlines(self):
+        """改行区切りリストを抽出."""
+        agent, _ = _make_orchestrator()
+
+        result = {
+            "content": [{"type": "text", "text": "item1\nitem2\nitem3"}]
+        }
+        items = agent._extract_list_from_result(result)
+        assert items == ["item1", "item2", "item3"]
+
+    def test_parse_datasources_valid(self):
+        """有効なデータソーステキストをパース."""
+        agent, _ = _make_orchestrator()
+
+        text = '[{"type": "prometheus", "uid": "prom-123"}, {"type": "loki", "uid": "loki-456"}]'
+        result = agent._parse_datasources(text)
+        assert len(result) == 2
+        assert result[0]["type"] == "prometheus"
+        assert result[1]["uid"] == "loki-456"
+
+    def test_parse_datasources_invalid(self):
+        """無効なテキストは空リストを返す."""
+        agent, _ = _make_orchestrator()
+
+        text = "not valid json"
+        result = agent._parse_datasources(text)
+        assert result == []
+
+    def test_parse_dashboards_valid(self):
+        """有効なダッシュボードテキストをパース."""
+        agent, _ = _make_orchestrator()
+
+        text = '[{"uid": "dash-1", "title": "Test"}, {"uid": "dash-2", "title": "Test2"}]'
+        result = agent._parse_dashboards(text)
+        assert len(result) == 2
+        assert result[0]["uid"] == "dash-1"
+
+    def test_parse_dashboards_invalid(self):
+        """無効なテキストは空リストを返す."""
+        agent, _ = _make_orchestrator()
+
+        text = "invalid"
+        result = agent._parse_dashboards(text)
+        assert result == []
+
+    def test_extract_queries_from_panels_promql(self):
+        """パネルからPromQLクエリを抽出."""
+        agent, _ = _make_orchestrator()
+
+        text = '[{"expr": "rate(http_requests_total[5m])"}, {"query": "node_cpu_seconds_total"}]'
+        promql, logql = agent._extract_queries_from_panels(text)
+        assert len(promql) == 2
+        assert "rate(http_requests_total[5m])" in promql
+        assert "node_cpu_seconds_total" in promql
+        assert len(logql) == 0
+
+    def test_extract_queries_from_panels_logql(self):
+        """パネルからLogQLクエリを抽出."""
+        agent, _ = _make_orchestrator()
+
+        text = '[{"expr": "{job=\\"app\\"} |= \\"error\\""}, {"expr": "up"}]'
+        promql, logql = agent._extract_queries_from_panels(text)
+        assert len(logql) == 1
+        assert len(promql) == 1
+
+    def test_extract_queries_from_panels_invalid(self):
+        """無効なJSONは空リストを返す."""
+        agent, _ = _make_orchestrator()
+
+        text = "not json"
+        promql, logql = agent._extract_queries_from_panels(text)
+        assert promql == []
+        assert logql == []
+
+
+class TestOrchestratorFormatEnvironmentContext:
+    """Orchestrator の _format_environment_context テスト."""
+
+    def test_none_environment(self):
+        """Noneの場合はメッセージを返す."""
+        agent, _ = _make_orchestrator()
+        result = agent._format_environment_context(None)
+        assert "環境情報は利用できません" in result
+
+    def test_with_prometheus_datasource(self):
+        """Prometheusデータソースが含まれる."""
+        from ai_agent_monitoring.core.state import EnvironmentContext
+
+        agent, _ = _make_orchestrator()
+        env = EnvironmentContext(prometheus_datasource_uid="prom-uid-123")
+        result = agent._format_environment_context(env)
+        assert "prom-uid-123" in result
+
+    def test_with_metrics(self):
+        """メトリクスが含まれる."""
+        from ai_agent_monitoring.core.state import EnvironmentContext
+
+        agent, _ = _make_orchestrator()
+        env = EnvironmentContext(
+            available_metrics=["cpu_usage", "memory_usage", "disk_io"]
+        )
+        result = agent._format_environment_context(env)
+        assert "cpu_usage" in result
+        assert "利用可能なPrometheusメトリクス" in result
+
+    def test_with_jobs(self):
+        """ジョブが含まれる."""
+        from ai_agent_monitoring.core.state import EnvironmentContext
+
+        agent, _ = _make_orchestrator()
+        env = EnvironmentContext(available_jobs=["node_exporter", "prometheus"])
+        result = agent._format_environment_context(env)
+        assert "node_exporter" in result
+        assert "jobラベル値" in result
+
+
+class TestOrchestratorValidateQueries:
+    """Orchestrator の _validate_queries テスト."""
+
+    @pytest.mark.asyncio
+    async def test_no_plan(self):
+        """プランがない場合は何もしない."""
+        agent, _ = _make_orchestrator()
+        state = AgentState(messages=[], plan=None)
+        result = await agent._validate_queries(state)
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_valid_promql_queries(self):
+        """有効なPromQLクエリはそのまま通過."""
+        agent, _ = _make_orchestrator()
+        plan = InvestigationPlan(
+            promql_queries=["up", "rate(http_requests_total[5m])"],
+            logql_queries=[],
+        )
+        state = AgentState(messages=[], plan=plan)
+
+        result = await agent._validate_queries(state)
+
+        # 有効なクエリは維持される
+        assert result["plan"].promql_queries == ["up", "rate(http_requests_total[5m])"]
+
+    @pytest.mark.asyncio
+    async def test_valid_logql_queries(self):
+        """有効なLogQLクエリはそのまま通過."""
+        agent, _ = _make_orchestrator()
+        plan = InvestigationPlan(
+            promql_queries=[],
+            logql_queries=['{job="app"}', '{job="nginx"} |= "error"'],
+        )
+        state = AgentState(messages=[], plan=plan)
+
+        result = await agent._validate_queries(state)
+
+        assert len(result["plan"].logql_queries) == 2
+
+    @pytest.mark.asyncio
+    async def test_auto_correct_promql(self):
+        """自動修正可能なPromQLクエリは修正される."""
+        agent, llm = _make_orchestrator()
+
+        # LLMの応答を設定（再生成時に呼ばれる）
+        response = MagicMock()
+        response.content = '{"promql_queries": ["rate(http_requests_total[5m])"], "logql_queries": []}'
+        llm.ainvoke = AsyncMock(return_value=response)
+
+        # 閉じ括弧が足りないクエリ
+        plan = InvestigationPlan(
+            promql_queries=["rate(http_requests_total[5m]"],  # 閉じ括弧不足
+            logql_queries=[],
+        )
+        state = AgentState(messages=[], plan=plan)
+
+        result = await agent._validate_queries(state)
+
+        # 自動修正されるか、LLMで再生成される
+        assert "plan" in result
+
+    @pytest.mark.asyncio
+    async def test_invalid_query_triggers_llm_retry(self):
+        """無効なクエリがある場合、LLMに再生成を依頼."""
+        agent, llm = _make_orchestrator()
+
+        # LLMの応答を設定
+        response = MagicMock()
+        response.content = '{"promql_queries": ["up"], "logql_queries": []}'
+        llm.ainvoke = AsyncMock(return_value=response)
+
+        # 完全に無効なクエリ
+        plan = InvestigationPlan(
+            promql_queries=["invalid query {{{{"],
+            logql_queries=[],
+        )
+        state = AgentState(messages=[], plan=plan)
+
+        result = await agent._validate_queries(state)
+
+        # LLMが呼ばれた
+        assert llm.ainvoke.called
+
+
+class TestOrchestratorGetRagContext:
+    """Orchestrator の _get_rag_context テスト."""
+
+    def test_empty_query(self):
+        """空のクエリは空文字を返す."""
+        agent, _ = _make_orchestrator()
+        result = agent._get_rag_context("")
+        assert result == ""
+
+    def test_with_query(self):
+        """クエリがある場合はRAGを検索."""
+        agent, _ = _make_orchestrator()
+        # RAGが設定されていない環境では空または例外をキャッチ
+        result = agent._get_rag_context("CPU usage high")
+        # 結果は文字列（空でもOK）
+        assert isinstance(result, str)
+
+
 # ================================================================
 # Metrics Agent テスト
 # ================================================================
