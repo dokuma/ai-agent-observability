@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import uuid
 from typing import TYPE_CHECKING, Any
 
 from ai_agent_monitoring.core.config import Settings
@@ -69,9 +70,14 @@ def create_langfuse_handler(
     _configure_langfuse_env(settings)
 
     # trace_context でセッションID等をトレースに紐付ける
+    # Langfuseはtrace_idとして32文字の16進数(UUID形式)を要求する
     trace_context: dict[str, Any] = {}
     if session_id:
-        trace_context["trace_id"] = session_id
+        # session_idをUUID名前空間でハッシュして有効なtrace_idを生成
+        namespace = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")  # URL namespace
+        valid_trace_id = str(uuid.uuid5(namespace, session_id)).replace("-", "")
+        trace_context["trace_id"] = valid_trace_id
+        trace_context["session_id"] = session_id  # 元のsession_idも保持
 
     handler = LangfuseCallbackHandler(
         trace_context=trace_context or None,  # type: ignore[arg-type]

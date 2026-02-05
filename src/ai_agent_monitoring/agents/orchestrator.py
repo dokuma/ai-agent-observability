@@ -233,18 +233,30 @@ class OrchestratorAgent:
                 if dashboard_list:
                     first_uid = dashboard_list[0].get("uid", "")
                     if first_uid:
-                        queries_result = await self.grafana_tool.get_dashboard_panel_queries(first_uid)
-                        queries_text = self._extract_content_text(queries_result)
-                        promql, logql = self._extract_queries_from_panels(queries_text)
-                        env.example_promql_queries = promql[:5]
-                        env.example_logql_queries = logql[:5]
-                        logger.info(
-                            "Extracted %d PromQL, %d LogQL example queries",
-                            len(env.example_promql_queries),
-                            len(env.example_logql_queries),
-                        )
+                        try:
+                            queries_result = await self.grafana_tool.get_dashboard_panel_queries(first_uid)
+                            queries_text = self._extract_content_text(queries_result)
+                            promql, logql = self._extract_queries_from_panels(queries_text)
+                            env.example_promql_queries = promql[:5]
+                            env.example_logql_queries = logql[:5]
+                            logger.info(
+                                "Extracted %d PromQL, %d LogQL example queries",
+                                len(env.example_promql_queries),
+                                len(env.example_logql_queries),
+                            )
+                        except Exception as panel_err:
+                            logger.warning(
+                                "Failed to get panel queries for dashboard %s: %s: %s",
+                                first_uid,
+                                type(panel_err).__name__,
+                                panel_err,
+                            )
             except Exception as e:
-                logger.warning("Failed to get dashboard queries: %s", e)
+                logger.warning(
+                    "Failed to list dashboards: %s: %s",
+                    type(e).__name__,
+                    e,
+                )
 
         except Exception as e:
             logger.error("Environment discovery failed: %s", e)
