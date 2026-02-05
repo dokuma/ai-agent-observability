@@ -92,7 +92,22 @@ class MetricsAgent:
                 )
 
             queries_text = "\n".join(f"- {q}" for q in plan.promql_queries)
-            datasource_uid = plan.prometheus_datasource_uid or "(未設定)"
+            datasource_uid = plan.prometheus_datasource_uid
+
+            # datasource_uid が有効かどうかでプロンプトを分岐
+            if datasource_uid and not datasource_uid.startswith("("):
+                datasource_instruction = (
+                    f"Prometheusデータソースuid: `{datasource_uid}`\n\n"
+                    "**重要**: grafana_query_prometheusを使用する際は、"
+                    f"必ず `datasource_uid='{datasource_uid}'` を指定してください。"
+                )
+            else:
+                datasource_instruction = (
+                    "**注意**: Prometheusデータソースuidが設定されていません。\n"
+                    "最初に grafana_list_datasources を呼び出してPrometheusデータソースの"
+                    "uidを取得し、そのuidを grafana_query_prometheus に指定してください。"
+                )
+
             setup_messages = [
                 SystemMessage(content=METRICS_AGENT_SYSTEM_PROMPT),
                 HumanMessage(
@@ -100,9 +115,7 @@ class MetricsAgent:
                         f"以下のPromQLクエリでメトリクスを調査してください:\n{queries_text}\n"
                         f"対象インスタンス: {', '.join(plan.target_instances) or '全て'}\n"
                         f"時間範囲: {time_desc}\n"
-                        f"Prometheusデータソースuid: {datasource_uid}\n\n"
-                        "**重要**: grafana_query_prometheusを使用する際は、"
-                        f"datasource_uid='{datasource_uid}'を必ず指定してください。\n"
+                        f"{datasource_instruction}\n"
                         "Toolを使ってクエリを実行し、結果を分析してください。"
                     )
                 ),

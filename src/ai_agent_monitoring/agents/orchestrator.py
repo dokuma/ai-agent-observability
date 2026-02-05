@@ -763,11 +763,15 @@ class OrchestratorAgent:
         if env.prometheus_datasource_uid:
             lines.append(f"  - Prometheus: `{env.prometheus_datasource_uid}`")
         else:
-            lines.append("  - Prometheus: 未設定")
+            lines.append(
+                "  - Prometheus: (grafana_list_datasources で取得してください)"
+            )
         if env.loki_datasource_uid:
             lines.append(f"  - Loki: `{env.loki_datasource_uid}`")
         else:
-            lines.append("  - Loki: 未設定")
+            lines.append(
+                "  - Loki: (grafana_list_datasources で取得してください)"
+            )
 
         # Prometheusメトリクス情報
         if env.available_metrics:

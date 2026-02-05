@@ -92,7 +92,22 @@ class LogsAgent:
                 )
 
             queries_text = "\n".join(f"- {q}" for q in plan.logql_queries)
-            datasource_uid = plan.loki_datasource_uid or "(未設定)"
+            datasource_uid = plan.loki_datasource_uid
+
+            # datasource_uid が有効かどうかでプロンプトを分岐
+            if datasource_uid and not datasource_uid.startswith("("):
+                datasource_instruction = (
+                    f"LokiデータソースUID: `{datasource_uid}`\n\n"
+                    "**重要**: grafana_query_lokiを使用する際は、"
+                    f"必ず `datasource_uid='{datasource_uid}'` を指定してください。"
+                )
+            else:
+                datasource_instruction = (
+                    "**注意**: LokiデータソースUIDが設定されていません。\n"
+                    "最初に grafana_list_datasources を呼び出してLokiデータソースの"
+                    "uidを取得し、そのuidを grafana_query_loki に指定してください。"
+                )
+
             setup_messages = [
                 SystemMessage(content=LOGS_AGENT_SYSTEM_PROMPT),
                 HumanMessage(
@@ -100,11 +115,9 @@ class LogsAgent:
                         f"以下のLogQLクエリでログを調査してください:\n{queries_text}\n"
                         f"対象インスタンス: {', '.join(plan.target_instances) or '全て'}\n"
                         f"時間範囲: {time_desc}\n"
-                        f"LokiデータソースUID: {datasource_uid}\n\n"
-                        "**重要**: grafana_query_lokiを使用する際は、"
-                        f"datasource_uid='{datasource_uid}'を必ず指定してください。\n"
-                        "**重要**: LogQLは{{job=\"xxx\"}} |= \"error\" の形式です。"
-                        "SQLではありません。\n"
+                        f"{datasource_instruction}\n"
+                        "**重要**: LogQLは {job=\"xxx\"} |= \"error\" の形式です。"
+                        "SQLではありません。二重ブレース {{...}} は使用しないでください。\n"
                         "Toolを使ってクエリを実行し、エラーパターンを分析してください。"
                     )
                 ),
