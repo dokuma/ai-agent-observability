@@ -153,8 +153,8 @@ class OrchestratorAgent:
 
         env = EnvironmentContext()
 
+        # 1. データソース一覧を取得
         try:
-            # 1. データソース一覧を取得
             datasources_result = await self.grafana_tool.list_datasources()
             datasources = self._extract_content_text(datasources_result)
 
@@ -166,100 +166,111 @@ class OrchestratorAgent:
                 elif ds.get("type") == "loki" and not env.loki_datasource_uid:
                     env.loki_datasource_uid = ds.get("uid", "")
                     logger.info("Found Loki datasource: %s", env.loki_datasource_uid)
+        except Exception as e:
+            logger.warning(
+                "Failed to list datasources: %s: %s",
+                type(e).__name__,
+                e,
+            )
 
-            # 2. Prometheusメトリクス・ラベル情報を取得
-            if env.prometheus_datasource_uid:
-                try:
-                    # メトリクス名一覧（上位100件）
-                    metrics_result = await self.grafana_tool.list_prometheus_metric_names(
-                        env.prometheus_datasource_uid,
-                        limit=100,
-                    )
-                    env.available_metrics = self._extract_list_from_result(metrics_result)
-                    logger.info("Found %d Prometheus metrics", len(env.available_metrics))
-
-                    # ラベル名一覧
-                    labels_result = await self.grafana_tool.list_prometheus_label_names(
-                        env.prometheus_datasource_uid,
-                    )
-                    env.available_labels = self._extract_list_from_result(labels_result)
-
-                    # jobラベルの値を取得（どんなサービスが監視されているか）
-                    if "job" in env.available_labels:
-                        jobs_result = await self.grafana_tool.list_prometheus_label_values(
-                            env.prometheus_datasource_uid,
-                            "job",
-                        )
-                        env.available_jobs = self._extract_list_from_result(jobs_result)
-                        logger.info("Found %d jobs: %s", len(env.available_jobs), env.available_jobs[:5])
-
-                    # instanceラベルの値を取得（どんなインスタンスがあるか）
-                    if "instance" in env.available_labels:
-                        instances_result = await self.grafana_tool.list_prometheus_label_values(
-                            env.prometheus_datasource_uid,
-                            "instance",
-                        )
-                        env.available_instances = self._extract_list_from_result(instances_result)
-                        logger.info("Found %d instances", len(env.available_instances))
-                except Exception as e:
-                    logger.warning("Failed to get Prometheus info: %s", e)
-
-            # 3. Lokiラベル情報を取得
-            if env.loki_datasource_uid:
-                try:
-                    loki_labels_result = await self.grafana_tool.list_loki_label_names(
-                        env.loki_datasource_uid,
-                    )
-                    env.loki_labels = self._extract_list_from_result(loki_labels_result)
-                    logger.info("Found %d Loki labels", len(env.loki_labels))
-
-                    # jobラベルの値
-                    if "job" in env.loki_labels:
-                        loki_jobs_result = await self.grafana_tool.list_loki_label_values(
-                            env.loki_datasource_uid,
-                            "job",
-                        )
-                        env.loki_jobs = self._extract_list_from_result(loki_jobs_result)
-                except Exception as e:
-                    logger.warning("Failed to get Loki info: %s", e)
-
-            # 4. 既存ダッシュボードからクエリパターンを学習
+        # 2. Prometheusメトリクス・ラベル情報を取得
+        if env.prometheus_datasource_uid:
             try:
-                dashboards_result = await self.grafana_tool.list_dashboards()
-                dashboards = self._extract_content_text(dashboards_result)
-                dashboard_list = self._parse_dashboards(dashboards)
+                # メトリクス名一覧（上位100件）
+                metrics_result = await self.grafana_tool.list_prometheus_metric_names(
+                    env.prometheus_datasource_uid,
+                    limit=100,
+                )
+                env.available_metrics = self._extract_list_from_result(metrics_result)
+                logger.info("Found %d Prometheus metrics", len(env.available_metrics))
 
-                # 最初のダッシュボードからクエリパターンを取得
-                if dashboard_list:
-                    first_uid = dashboard_list[0].get("uid", "")
-                    if first_uid:
-                        try:
-                            queries_result = await self.grafana_tool.get_dashboard_panel_queries(first_uid)
-                            queries_text = self._extract_content_text(queries_result)
-                            promql, logql = self._extract_queries_from_panels(queries_text)
-                            env.example_promql_queries = promql[:5]
-                            env.example_logql_queries = logql[:5]
-                            logger.info(
-                                "Extracted %d PromQL, %d LogQL example queries",
-                                len(env.example_promql_queries),
-                                len(env.example_logql_queries),
-                            )
-                        except Exception as panel_err:
-                            logger.warning(
-                                "Failed to get panel queries for dashboard %s: %s: %s",
-                                first_uid,
-                                type(panel_err).__name__,
-                                panel_err,
-                            )
+                # ラベル名一覧
+                labels_result = await self.grafana_tool.list_prometheus_label_names(
+                    env.prometheus_datasource_uid,
+                )
+                env.available_labels = self._extract_list_from_result(labels_result)
+
+                # jobラベルの値を取得（どんなサービスが監視されているか）
+                if "job" in env.available_labels:
+                    jobs_result = await self.grafana_tool.list_prometheus_label_values(
+                        env.prometheus_datasource_uid,
+                        "job",
+                    )
+                    env.available_jobs = self._extract_list_from_result(jobs_result)
+                    logger.info("Found %d jobs: %s", len(env.available_jobs), env.available_jobs[:5])
+
+                # instanceラベルの値を取得（どんなインスタンスがあるか）
+                if "instance" in env.available_labels:
+                    instances_result = await self.grafana_tool.list_prometheus_label_values(
+                        env.prometheus_datasource_uid,
+                        "instance",
+                    )
+                    env.available_instances = self._extract_list_from_result(instances_result)
+                    logger.info("Found %d instances", len(env.available_instances))
             except Exception as e:
                 logger.warning(
-                    "Failed to list dashboards: %s: %s",
+                    "Failed to get Prometheus info: %s: %s",
                     type(e).__name__,
                     e,
                 )
 
+        # 3. Lokiラベル情報を取得
+        if env.loki_datasource_uid:
+            try:
+                loki_labels_result = await self.grafana_tool.list_loki_label_names(
+                    env.loki_datasource_uid,
+                )
+                env.loki_labels = self._extract_list_from_result(loki_labels_result)
+                logger.info("Found %d Loki labels", len(env.loki_labels))
+
+                # jobラベルの値
+                if "job" in env.loki_labels:
+                    loki_jobs_result = await self.grafana_tool.list_loki_label_values(
+                        env.loki_datasource_uid,
+                        "job",
+                    )
+                    env.loki_jobs = self._extract_list_from_result(loki_jobs_result)
+            except Exception as e:
+                logger.warning(
+                    "Failed to get Loki info: %s: %s",
+                    type(e).__name__,
+                    e,
+                )
+
+        # 4. 既存ダッシュボードからクエリパターンを学習
+        try:
+            dashboards_result = await self.grafana_tool.list_dashboards()
+            dashboards = self._extract_content_text(dashboards_result)
+            dashboard_list = self._parse_dashboards(dashboards)
+
+            # 最初のダッシュボードからクエリパターンを取得
+            if dashboard_list:
+                first_uid = dashboard_list[0].get("uid", "")
+                if first_uid:
+                    try:
+                        queries_result = await self.grafana_tool.get_dashboard_panel_queries(first_uid)
+                        queries_text = self._extract_content_text(queries_result)
+                        promql, logql = self._extract_queries_from_panels(queries_text)
+                        env.example_promql_queries = promql[:5]
+                        env.example_logql_queries = logql[:5]
+                        logger.info(
+                            "Extracted %d PromQL, %d LogQL example queries",
+                            len(env.example_promql_queries),
+                            len(env.example_logql_queries),
+                        )
+                    except Exception as panel_err:
+                        logger.warning(
+                            "Failed to get panel queries for dashboard %s: %s: %s",
+                            first_uid,
+                            type(panel_err).__name__,
+                            panel_err,
+                        )
         except Exception as e:
-            logger.error("Environment discovery failed: %s", e)
+            logger.warning(
+                "Failed to list dashboards: %s: %s",
+                type(e).__name__,
+                e,
+            )
 
         return {"environment": env}
 
@@ -754,8 +765,13 @@ class OrchestratorAgent:
             json_str = self._extract_json(content)
             data = json.loads(json_str)
             return InvestigationPlan(**data)
-        except (json.JSONDecodeError, ValueError):
-            logger.warning("調査計画のパースに失敗。デフォルト計画を使用。")
+        except (json.JSONDecodeError, ValueError) as e:
+            # エラーの詳細をログ出力
+            logger.warning(
+                "調査計画のパースに失敗。デフォルト計画を使用。error=%s, content_preview=%s",
+                e,
+                content[:500] if content else "(empty)",
+            )
             return InvestigationPlan()
 
     @staticmethod
@@ -768,10 +784,34 @@ class OrchestratorAgent:
     @staticmethod
     def _extract_json(text: str) -> str:
         """テキストからJSON部分を抽出."""
+        # ```json ... ``` 形式を優先
         if "```json" in text:
-            start = text.index("```json") + 7
-            end = text.index("```", start)
-            return text[start:end].strip()
-        start = text.index("{")
-        end = text.rindex("}") + 1
-        return text[start:end]
+            try:
+                start = text.index("```json") + 7
+                end = text.index("```", start)
+                return text[start:end].strip()
+            except ValueError:
+                pass  # フォールバックへ
+
+        # ``` ... ``` 形式（言語指定なし）
+        if "```" in text:
+            try:
+                start = text.index("```") + 3
+                # 改行をスキップ
+                while start < len(text) and text[start] in "\n\r":
+                    start += 1
+                end = text.index("```", start)
+                candidate = text[start:end].strip()
+                if candidate.startswith("{"):
+                    return candidate
+            except ValueError:
+                pass
+
+        # 生の{...}を探す
+        if "{" in text and "}" in text:
+            start = text.index("{")
+            end = text.rindex("}") + 1
+            return text[start:end]
+
+        # JSONが見つからない
+        raise ValueError(f"No JSON found in text: {text[:200]}...")
