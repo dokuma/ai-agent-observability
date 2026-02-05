@@ -122,6 +122,7 @@ async def get_investigation_status(investigation_id: str) -> InvestigationStatus
         trigger_type=record.trigger_type,
         iteration_count=record.iteration_count,
         current_stage=record.current_stage,
+        error=record.error,
         created_at=record.created_at,
         completed_at=record.completed_at,
     )
@@ -179,7 +180,7 @@ async def _run_alert_investigation(inv_id: str, alert: Alert) -> None:
         )
 
         # タイムアウト付きで実行
-        result = await asyncio.wait_for(
+        task = asyncio.create_task(
             compiled.ainvoke(
                 {
                     "investigation_id": inv_id,
@@ -188,15 +189,24 @@ async def _run_alert_investigation(inv_id: str, alert: Alert) -> None:
                     "messages": [],
                 },
                 config=config,
-            ),
-            timeout=timeout,
+            )
         )
-        rca_report = result.get("rca_report")
-        app_state.complete_investigation(inv_id, rca_report=rca_report)
-        logger.info("Investigation completed: %s", inv_id)
-    except asyncio.TimeoutError:
-        logger.warning("Investigation timed out after %ds: %s", timeout, inv_id)
-        app_state.fail_investigation(inv_id, f"調査がタイムアウトしました ({timeout}秒)")
+        try:
+            result = await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+            rca_report = result.get("rca_report")
+            app_state.complete_investigation(inv_id, rca_report=rca_report)
+            logger.info("Investigation completed: %s", inv_id)
+        except asyncio.TimeoutError:
+            logger.warning("Investigation timed out after %ds: %s", timeout, inv_id)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                logger.info("Investigation task cancelled: %s", inv_id)
+            app_state.fail_investigation(inv_id, f"調査がタイムアウトしました ({timeout}秒)")
+    except asyncio.CancelledError:
+        logger.info("Investigation cancelled: %s", inv_id)
+        app_state.fail_investigation(inv_id, "調査がキャンセルされました")
     except Exception as e:
         logger.exception("Investigation failed: %s", inv_id)
         app_state.fail_investigation(inv_id, str(e))
@@ -220,7 +230,7 @@ async def _run_user_query_investigation(inv_id: str, user_query: UserQuery) -> N
         )
 
         # タイムアウト付きで実行
-        result = await asyncio.wait_for(
+        task = asyncio.create_task(
             compiled.ainvoke(
                 {
                     "investigation_id": inv_id,
@@ -229,15 +239,24 @@ async def _run_user_query_investigation(inv_id: str, user_query: UserQuery) -> N
                     "messages": [],
                 },
                 config=config,
-            ),
-            timeout=timeout,
+            )
         )
-        rca_report = result.get("rca_report")
-        app_state.complete_investigation(inv_id, rca_report=rca_report)
-        logger.info("Investigation completed: %s", inv_id)
-    except asyncio.TimeoutError:
-        logger.warning("Investigation timed out after %ds: %s", timeout, inv_id)
-        app_state.fail_investigation(inv_id, f"調査がタイムアウトしました ({timeout}秒)")
+        try:
+            result = await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+            rca_report = result.get("rca_report")
+            app_state.complete_investigation(inv_id, rca_report=rca_report)
+            logger.info("Investigation completed: %s", inv_id)
+        except asyncio.TimeoutError:
+            logger.warning("Investigation timed out after %ds: %s", timeout, inv_id)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                logger.info("Investigation task cancelled: %s", inv_id)
+            app_state.fail_investigation(inv_id, f"調査がタイムアウトしました ({timeout}秒)")
+    except asyncio.CancelledError:
+        logger.info("Investigation cancelled: %s", inv_id)
+        app_state.fail_investigation(inv_id, "調査がキャンセルされました")
     except Exception as e:
         logger.exception("Investigation failed: %s", inv_id)
         app_state.fail_investigation(inv_id, str(e))

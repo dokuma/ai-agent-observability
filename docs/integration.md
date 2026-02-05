@@ -118,10 +118,11 @@ class Pipe:
                 yield "\n✅ 調査が完了しました。レポートを取得中...\n\n"
                 break
             if status["status"] == "failed":
-                yield f"\n❌ 調査が失敗しました (ID: {inv_id})"
+                error_msg = status.get("error", "不明なエラー")
+                yield f"\n❌ 調査が失敗しました: {error_msg}\n(ID: {inv_id})"
                 return
         else:
-            yield f"\n⏰ 調査がタイムアウトしました (ID: {inv_id})"
+            yield f"\n⏰ ポーリングがタイムアウトしました (ID: {inv_id})\n調査はバックグラウンドで継続中の可能性があります。"
             return
 
         # 3. レポート取得
