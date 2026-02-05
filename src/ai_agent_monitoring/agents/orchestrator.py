@@ -28,6 +28,7 @@ from ai_agent_monitoring.core.state import (
 from ai_agent_monitoring.tools.grafana import GrafanaMCPTool
 from ai_agent_monitoring.tools.query_rag import get_query_rag
 from ai_agent_monitoring.tools.query_validator import (
+    QueryType,
     QueryValidator,
     get_all_fewshot_examples,
 )
@@ -859,6 +860,12 @@ class OrchestratorAgent:
 
         LLMが生成したPromQL/LogQLクエリの文法を検証し、
         エラーがある場合は修正を試みるか、LLMに再生成を依頼する。
+
+        検証項目:
+        - datasource_uid の有効性
+        - クエリ構文（PromQL/LogQL）
+        - Grafana変数の検出（警告）
+        - 二重ブレースの修正
         """
         self._update_stage(state, "クエリを検証中")
 
@@ -866,15 +873,57 @@ class OrchestratorAgent:
         if not plan:
             return {}
 
+        env = state.get("environment")
         validation_errors: list[str] = []
         corrected_promql: list[str] = []
         corrected_logql: list[str] = []
 
+        # datasource_uid の検証と自動修正
+        if not self.query_validator.is_valid_datasource_uid(plan.prometheus_datasource_uid):
+            if env and env.prometheus_datasource_uid:
+                logger.info(
+                    "Invalid prometheus_datasource_uid '%s', using env value: %s",
+                    plan.prometheus_datasource_uid,
+                    env.prometheus_datasource_uid,
+                )
+                plan.prometheus_datasource_uid = env.prometheus_datasource_uid
+            else:
+                logger.warning(
+                    "Invalid prometheus_datasource_uid and no env fallback: %s",
+                    plan.prometheus_datasource_uid,
+                )
+
+        if not self.query_validator.is_valid_datasource_uid(plan.loki_datasource_uid):
+            if env and env.loki_datasource_uid:
+                logger.info(
+                    "Invalid loki_datasource_uid '%s', using env value: %s",
+                    plan.loki_datasource_uid,
+                    env.loki_datasource_uid,
+                )
+                plan.loki_datasource_uid = env.loki_datasource_uid
+            else:
+                logger.warning(
+                    "Invalid loki_datasource_uid and no env fallback: %s",
+                    plan.loki_datasource_uid,
+                )
+
         # PromQLの検証
         for query in plan.promql_queries:
-            result = self.query_validator.validate_promql(query)
+            # サニタイズ（二重ブレース、Grafana変数）
+            sanitized, warnings = self.query_validator.sanitize_query(
+                query, QueryType.PROMQL
+            )
+            for w in warnings:
+                logger.warning("PromQL sanitize warning: %s - %s", query, w)
+
+            # Grafana変数を含む場合はスキップ
+            if self.query_validator.contains_grafana_variables(sanitized):
+                logger.info("Skipping query with Grafana variables: %s", sanitized)
+                continue
+
+            result = self.query_validator.validate_promql(sanitized)
             if result.is_valid:
-                corrected_promql.append(query)
+                corrected_promql.append(sanitized)
             elif result.corrected_query:
                 # 修正されたクエリを再検証
                 revalidated = self.query_validator.validate_promql(
@@ -897,9 +946,21 @@ class OrchestratorAgent:
 
         # LogQLの検証
         for query in plan.logql_queries:
-            result = self.query_validator.validate_logql(query)
+            # サニタイズ（二重ブレース、Grafana変数）
+            sanitized, warnings = self.query_validator.sanitize_query(
+                query, QueryType.LOGQL
+            )
+            for w in warnings:
+                logger.warning("LogQL sanitize warning: %s - %s", query, w)
+
+            # Grafana変数を含む場合はスキップ
+            if self.query_validator.contains_grafana_variables(sanitized):
+                logger.info("Skipping query with Grafana variables: %s", sanitized)
+                continue
+
+            result = self.query_validator.validate_logql(sanitized)
             if result.is_valid:
-                corrected_logql.append(query)
+                corrected_logql.append(sanitized)
             elif result.corrected_query:
                 # 修正されたクエリを再検証
                 revalidated = self.query_validator.validate_logql(

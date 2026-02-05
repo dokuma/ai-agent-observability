@@ -46,6 +46,21 @@ class QueryValidator:
         (r"<=\s*['\"]", "<= with quotes (time comparison)"),
     ]
 
+    # 無効なdatasource_uid パターン
+    INVALID_DATASOURCE_PATTERNS = [
+        r"^\s*$",  # 空
+        r"^\(.*\)$",  # (未設定), (none) など
+        r"^none$",
+        r"^null$",
+        r"^undefined$",
+        r"^未設定$",
+        r"^N/A$",
+    ]
+
+    # Grafana テンプレート変数パターン
+    # $variable または ${variable} 形式にマッチ
+    GRAFANA_VARIABLE_PATTERN = re.compile(r"\$(?:\{[a-zA-Z_][a-zA-Z0-9_]*\}|[a-zA-Z_][a-zA-Z0-9_]*)")
+
     # PromQLの有効なメトリクス名パターン
     PROMQL_METRIC_PATTERN = re.compile(r"^[a-zA-Z_:][a-zA-Z0-9_:]*")
 
@@ -344,6 +359,82 @@ class QueryValidator:
                 return result.corrected_query, corrected_result
 
         return query, result
+
+    def is_valid_datasource_uid(self, uid: str | None) -> bool:
+        """datasource_uid が有効かどうかを検証.
+
+        Args:
+            uid: 検証するdatasource_uid
+
+        Returns:
+            bool: 有効な場合True
+        """
+        if uid is None:
+            return False
+
+        for pattern in self.INVALID_DATASOURCE_PATTERNS:
+            if re.match(pattern, uid.strip(), re.IGNORECASE):
+                return False
+
+        return True
+
+    def contains_grafana_variables(self, query: str) -> list[str]:
+        """クエリ内のGrafana変数を検出.
+
+        Args:
+            query: 検証するクエリ
+
+        Returns:
+            list[str]: 検出された変数のリスト
+        """
+        return self.GRAFANA_VARIABLE_PATTERN.findall(query)
+
+    def fix_double_braces(self, query: str) -> str:
+        """LogQLの二重ブレース {{...}} を修正.
+
+        LLMがJinja/テンプレート記法と混同して出力する場合の修正。
+        例: {{job="xxx"}} -> {job="xxx"}
+
+        Args:
+            query: 修正するクエリ
+
+        Returns:
+            str: 修正されたクエリ
+        """
+        # {{...}} を {...} に変換
+        corrected = re.sub(r"\{\{([^}]*)\}\}", r"{\1}", query)
+        return corrected
+
+    def sanitize_query(self, query: str, query_type: QueryType) -> tuple[str, list[str]]:
+        """クエリをサニタイズ（前処理）.
+
+        - 二重ブレースの修正
+        - Grafana変数を含む場合は警告
+
+        Args:
+            query: サニタイズするクエリ
+            query_type: クエリの種類
+
+        Returns:
+            tuple[str, list[str]]: サニタイズされたクエリと警告リスト
+        """
+        warnings: list[str] = []
+        sanitized = query.strip()
+
+        # 二重ブレースの修正
+        if "{{" in sanitized:
+            sanitized = self.fix_double_braces(sanitized)
+            warnings.append("二重ブレース {{...}} を {...} に修正しました")
+
+        # Grafana変数の検出
+        variables = self.contains_grafana_variables(sanitized)
+        if variables:
+            warnings.append(
+                f"Grafana変数 {variables} が含まれています。"
+                "実際の値に置き換えるか、クエリから除外してください。"
+            )
+
+        return sanitized, warnings
 
 
 # Few-shot例（LLMへのプロンプト用）

@@ -224,3 +224,127 @@ class TestValidationEdgeCases:
     def test_logql_regex_negative_filter(self, validator):
         result = validator.validate_logql('{job="app"} !~ "health.*"')
         assert result.is_valid
+
+
+class TestDatasourceUidValidation:
+    """datasource_uid バリデーションのテスト."""
+
+    @pytest.fixture
+    def validator(self):
+        return QueryValidator()
+
+    def test_valid_uid(self, validator):
+        """有効なUIDはTrueを返す."""
+        assert validator.is_valid_datasource_uid("prometheus-1")
+        assert validator.is_valid_datasource_uid("P1234ABCD")
+        assert validator.is_valid_datasource_uid("my_datasource")
+
+    def test_invalid_uid_none(self, validator):
+        """NoneはFalseを返す."""
+        assert not validator.is_valid_datasource_uid(None)
+
+    def test_invalid_uid_empty(self, validator):
+        """空文字はFalseを返す."""
+        assert not validator.is_valid_datasource_uid("")
+        assert not validator.is_valid_datasource_uid("  ")
+
+    def test_invalid_uid_placeholder(self, validator):
+        """プレースホルダーはFalseを返す."""
+        assert not validator.is_valid_datasource_uid("(未設定)")
+        assert not validator.is_valid_datasource_uid("(none)")
+        assert not validator.is_valid_datasource_uid("(None)")
+        assert not validator.is_valid_datasource_uid("未設定")
+
+    def test_invalid_uid_null_values(self, validator):
+        """null/none/undefinedはFalseを返す."""
+        assert not validator.is_valid_datasource_uid("none")
+        assert not validator.is_valid_datasource_uid("null")
+        assert not validator.is_valid_datasource_uid("undefined")
+        assert not validator.is_valid_datasource_uid("N/A")
+
+
+class TestGrafanaVariableDetection:
+    """Grafana変数検出のテスト."""
+
+    @pytest.fixture
+    def validator(self):
+        return QueryValidator()
+
+    def test_detect_dollar_variable(self, validator):
+        """$variable形式の検出."""
+        vars = validator.contains_grafana_variables("rate(cpu{cluster=$cluster}[5m])")
+        assert "$cluster" in vars
+
+    def test_detect_braced_variable(self, validator):
+        """${variable}形式の検出."""
+        vars = validator.contains_grafana_variables("rate(cpu{cluster=${cluster}}[5m])")
+        assert "${cluster}" in vars
+
+    def test_detect_multiple_variables(self, validator):
+        """複数変数の検出."""
+        vars = validator.contains_grafana_variables(
+            "rate(cpu{cluster=$cluster, namespace=$namespace}[5m])"
+        )
+        assert len(vars) == 2
+        assert "$cluster" in vars
+        assert "$namespace" in vars
+
+    def test_no_variables(self, validator):
+        """変数なしの場合は空リスト."""
+        vars = validator.contains_grafana_variables("rate(cpu{job=\"test\"}[5m])")
+        assert vars == []
+
+
+class TestDoubleBracesFix:
+    """二重ブレース修正のテスト."""
+
+    @pytest.fixture
+    def validator(self):
+        return QueryValidator()
+
+    def test_fix_double_braces(self, validator):
+        """{{...}}を{...}に修正."""
+        fixed = validator.fix_double_braces('{{job="app"}} |= "error"')
+        assert fixed == '{job="app"} |= "error"'
+
+    def test_no_double_braces(self, validator):
+        """二重ブレースなしの場合は変更なし."""
+        original = '{job="app"} |= "error"'
+        fixed = validator.fix_double_braces(original)
+        assert fixed == original
+
+    def test_fix_multiple_double_braces(self, validator):
+        """複数の二重ブレースを修正."""
+        fixed = validator.fix_double_braces('{{job="app"}} {{namespace="test"}}')
+        assert fixed == '{job="app"} {namespace="test"}'
+
+
+class TestSanitizeQuery:
+    """クエリサニタイズのテスト."""
+
+    @pytest.fixture
+    def validator(self):
+        return QueryValidator()
+
+    def test_sanitize_double_braces(self, validator):
+        """二重ブレースをサニタイズ."""
+        sanitized, warnings = validator.sanitize_query(
+            '{{job="app"}}', QueryType.LOGQL
+        )
+        assert sanitized == '{job="app"}'
+        assert any("二重ブレース" in w for w in warnings)
+
+    def test_sanitize_grafana_variable_warning(self, validator):
+        """Grafana変数は警告を出す."""
+        sanitized, warnings = validator.sanitize_query(
+            "rate(cpu{cluster=$cluster}[5m])", QueryType.PROMQL
+        )
+        assert any("Grafana変数" in w for w in warnings)
+
+    def test_sanitize_clean_query(self, validator):
+        """問題なしのクエリは警告なし."""
+        sanitized, warnings = validator.sanitize_query(
+            '{job="app"}', QueryType.LOGQL
+        )
+        assert sanitized == '{job="app"}'
+        assert warnings == []
