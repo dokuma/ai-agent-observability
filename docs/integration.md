@@ -29,13 +29,16 @@ Open WebUI のサイドバーにカスタムモデルとして表示され、チ
 """
 title: AI Agent Monitoring
 description: システム監視 AI Agent にクエリを送信し RCA レポートを取得する
-version: 0.3.0
+version: 0.4.0
 
 Note:
-    Open WebUI v0.6.43+ では AsyncGenerator を返すとUIがスタックする
-    既知の問題があるため、__event_emitter__ で進捗を通知し、
-    最終結果は文字列で返す方式を採用。
-    https://github.com/open-webui/open-webui/issues/20196
+    - Open WebUI v0.6.43+ では AsyncGenerator を返すとUIがスタックする
+      既知の問題があるため、__event_emitter__ で進捗を通知し、
+      最終結果は文字列で返す方式を採用。
+      https://github.com/open-webui/open-webui/issues/20196
+    - __task__ パラメータでタイトル生成等のバックグラウンドタスクを
+      スキップし、不要な重複実行を防止。
+      https://github.com/open-webui/open-webui/discussions/11309
 """
 
 import asyncio
@@ -87,16 +90,23 @@ class Pipe:
         self,
         body: dict,
         __event_emitter__: Optional[Callable[[dict], Awaitable[None]]] = None,
+        __task__: Optional[str] = None,
     ) -> str:
         """調査を実行しレポートを返す.
 
         Args:
             body: リクエストボディ（messages を含む）
             __event_emitter__: Open WebUI のイベントエミッター（進捗通知用）
+            __task__: Open WebUI のタスク種別（title_generation等）
 
         Returns:
             RCA レポート（Markdown形式）または エラーメッセージ
         """
+        # タイトル生成等のバックグラウンドタスクはスキップ
+        # これにより不要な重複実行を防止
+        if __task__ is not None:
+            return ""
+
         messages = body.get("messages", [])
         if not messages:
             return "クエリを入力してください。"
@@ -223,9 +233,10 @@ class Pipe:
         return "\n".join(lines)
 ```
 
-> **Note**: v0.3.0 では `AsyncGenerator` (yield) の代わりに `__event_emitter__` を使用。
-> これは [Open WebUI の AsyncGenerator スタック問題](https://github.com/open-webui/open-webui/issues/20196) を回避するためです。
-> 進捗はステータスバーに表示され、最終結果はチャットに表示されます。
+> **Note (v0.4.0)**:
+> - `AsyncGenerator` (yield) の代わりに `__event_emitter__` を使用し、[UIスタック問題](https://github.com/open-webui/open-webui/issues/20196) を回避
+> - `__task__` パラメータでタイトル生成等のバックグラウンドタスクをスキップし、[重複実行問題](https://github.com/open-webui/open-webui/discussions/11309) を回避
+> - 進捗はステータスバーに表示され、最終結果はチャットに表示されます
 
 ### 使い方
 
