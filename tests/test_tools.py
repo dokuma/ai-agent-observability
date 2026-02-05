@@ -167,7 +167,7 @@ class TestGrafanaMCPTool:
         grafana = GrafanaMCPTool(mock_mcp_client)
         await grafana.list_dashboards()
 
-        mock_mcp_client.call_tool.assert_called_once_with("list_dashboards", {})
+        mock_mcp_client.call_tool.assert_called_once_with("search_dashboards", {"query": ""})
 
     @pytest.mark.asyncio
     async def test_get_dashboard_by_uid(self, mock_mcp_client):
@@ -184,7 +184,7 @@ class TestGrafanaMCPTool:
         await grafana.get_dashboard_panels("test-uid")
 
         mock_mcp_client.call_tool.assert_called_once_with(
-            "get_dashboard_panels", {"uid": "test-uid"},
+            "get_dashboard_by_uid", {"uid": "test-uid"},
         )
 
     @pytest.mark.asyncio
@@ -243,7 +243,7 @@ class TestGrafanaMCPTool:
         grafana = GrafanaMCPTool(mock_mcp_client)
         await grafana.get_alert_rule("rule-uid")
         mock_mcp_client.call_tool.assert_called_once_with(
-            "get_alert_rule", {"uid": "rule-uid"},
+            "get_alert_rule_by_uid", {"uid": "rule-uid"},
         )
 
     @pytest.mark.asyncio
@@ -251,7 +251,7 @@ class TestGrafanaMCPTool:
         grafana = GrafanaMCPTool(mock_mcp_client)
         await grafana.get_firing_alerts()
 
-        mock_mcp_client.call_tool.assert_called_once_with("get_firing_alerts", {})
+        mock_mcp_client.call_tool.assert_called_once_with("list_alert_groups", {})
 
     @pytest.mark.asyncio
     async def test_search_dashboards(self, mock_mcp_client):

@@ -29,10 +29,14 @@ class GrafanaMCPTool(BaseMCPTool):
                 alerts = await ctx.get_firing_alerts()
     """
 
-    async def list_dashboards(self) -> dict[str, Any]:
-        """ダッシュボード一覧を取得."""
-        logger.info("Grafana: list dashboards")
-        return await self._call_tool("list_dashboards", {})
+    async def list_dashboards(self, query: str = "") -> dict[str, Any]:
+        """ダッシュボード一覧を取得.
+
+        Args:
+            query: 検索クエリ（空文字の場合は全件取得）
+        """
+        logger.info("Grafana: list dashboards query=%s", query or "(all)")
+        return await self._call_tool("search_dashboards", {"query": query})
 
     async def get_dashboard_by_uid(self, uid: str) -> dict[str, Any]:
         """UIDを指定してダッシュボードの詳細を取得."""
@@ -40,9 +44,14 @@ class GrafanaMCPTool(BaseMCPTool):
         return await self._call_tool("get_dashboard_by_uid", {"uid": uid})
 
     async def get_dashboard_panels(self, uid: str) -> dict[str, Any]:
-        """ダッシュボードのパネル一覧を取得."""
+        """ダッシュボードのパネル一覧を取得.
+
+        Note: Grafana MCP にはパネル専用のツールがないため、
+        get_dashboard_by_uid を使用してダッシュボード全体を取得し、
+        その中からパネル情報を抽出する。
+        """
         logger.info("Grafana: get panels for dashboard uid=%s", uid)
-        return await self._call_tool("get_dashboard_panels", {"uid": uid})
+        return await self._call_tool("get_dashboard_by_uid", {"uid": uid})
 
     async def query_prometheus(
         self,
@@ -122,12 +131,16 @@ class GrafanaMCPTool(BaseMCPTool):
     async def get_alert_rule(self, uid: str) -> dict[str, Any]:
         """特定のアラートルールを取得."""
         logger.info("Grafana: get alert rule uid=%s", uid)
-        return await self._call_tool("get_alert_rule", {"uid": uid})
+        return await self._call_tool("get_alert_rule_by_uid", {"uid": uid})
 
     async def get_firing_alerts(self) -> dict[str, Any]:
-        """現在発火中のアラートを取得."""
+        """現在発火中のアラートを取得.
+
+        Note: list_alert_groups を使用してアラートグループを取得し、
+        発火中のアラートを抽出する。
+        """
         logger.info("Grafana: get firing alerts")
-        return await self._call_tool("get_firing_alerts", {})
+        return await self._call_tool("list_alert_groups", {})
 
     async def render_panel_image(
         self,
