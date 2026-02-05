@@ -230,6 +230,7 @@ class TestInvestigationTimeout:
     async def test_investigation_timeout(self):
         """調査がタイムアウトした場合、failedステータスになる."""
         import asyncio
+
         from ai_agent_monitoring.api.routes import _run_user_query_investigation
         from ai_agent_monitoring.core.models import UserQuery
 

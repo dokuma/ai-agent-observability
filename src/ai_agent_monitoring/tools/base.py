@@ -12,7 +12,7 @@ from mcp.client.session import ClientSession
 from mcp.client.sse import sse_client
 
 if TYPE_CHECKING:
-    from typing import Self
+    pass
 
 logger = logging.getLogger(__name__)
 

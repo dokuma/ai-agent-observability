@@ -24,7 +24,6 @@ from ai_agent_monitoring.core.state import (
     DashboardInfo,
     EnvironmentContext,
     InvestigationPlan,
-    PanelQuery,
 )
 from ai_agent_monitoring.tools.registry import MCPConnection, ToolRegistry
 
@@ -800,7 +799,7 @@ class TestOrchestratorValidateQueries:
         )
         state = AgentState(messages=[], plan=plan)
 
-        result = await agent._validate_queries(state)
+        await agent._validate_queries(state)
 
         # LLMが呼ばれた
         assert llm.ainvoke.called
