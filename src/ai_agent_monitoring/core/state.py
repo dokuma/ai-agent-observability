@@ -28,6 +28,25 @@ class TimeRange(BaseModel):
     end: datetime
 
 
+class DashboardInfo(BaseModel):
+    """ダッシュボード情報."""
+
+    uid: str
+    title: str = ""
+    tags: list[str] = Field(default_factory=list)
+    relevance_score: float = 0.0  # キーワードマッチングによる関連度スコア
+
+
+class PanelQuery(BaseModel):
+    """パネルから抽出されたクエリ情報."""
+
+    panel_title: str = ""
+    query: str
+    query_type: str = "promql"  # "promql" | "logql"
+    dashboard_uid: str = ""
+    dashboard_title: str = ""
+
+
 class EnvironmentContext(BaseModel):
     """監視環境のコンテキスト情報.
 
@@ -53,6 +72,12 @@ class EnvironmentContext(BaseModel):
     # 既存ダッシュボードから学習したクエリパターン
     example_promql_queries: list[str] = Field(default_factory=list)
     example_logql_queries: list[str] = Field(default_factory=list)
+
+    # ダッシュボード探索用
+    investigation_keywords: list[str] = Field(default_factory=list)
+    available_dashboards: list[DashboardInfo] = Field(default_factory=list)
+    explored_dashboard_uids: list[str] = Field(default_factory=list)
+    discovered_panel_queries: list[PanelQuery] = Field(default_factory=list)
 
 
 class InvestigationPlan(BaseModel):

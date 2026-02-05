@@ -17,7 +17,14 @@ from ai_agent_monitoring.agents.prompts import ORCHESTRATOR_SYSTEM_PROMPT
 from ai_agent_monitoring.agents.rca_agent import RCAAgent
 from ai_agent_monitoring.core.config import Settings
 from ai_agent_monitoring.core.models import TriggerType
-from ai_agent_monitoring.core.state import AgentState, EnvironmentContext, InvestigationPlan, TimeRange
+from ai_agent_monitoring.core.state import (
+    AgentState,
+    DashboardInfo,
+    EnvironmentContext,
+    InvestigationPlan,
+    PanelQuery,
+    TimeRange,
+)
 from ai_agent_monitoring.tools.grafana import GrafanaMCPTool
 from ai_agent_monitoring.tools.query_rag import get_query_rag
 from ai_agent_monitoring.tools.query_validator import (
@@ -180,11 +187,85 @@ class OrchestratorAgent:
 
     # ---- ノード関数 ----
 
+    def _extract_investigation_keywords(self, state: AgentState) -> list[str]:
+        """調査対象からキーワードを抽出.
+
+        ユーザクエリやアラートから、ダッシュボード検索に使用する
+        キーワードを抽出する。
+        """
+        keywords: set[str] = set()
+
+        # 一般的な監視キーワードのマッピング
+        keyword_map = {
+            # CPU関連
+            "cpu": ["cpu", "processor", "compute"],
+            "プロセッサ": ["cpu", "processor"],
+            "使用率": ["usage", "utilization"],
+            # メモリ関連
+            "memory": ["memory", "ram", "mem"],
+            "メモリ": ["memory", "ram", "mem"],
+            # ディスク関連
+            "disk": ["disk", "storage", "filesystem"],
+            "ディスク": ["disk", "storage", "filesystem"],
+            "ストレージ": ["disk", "storage"],
+            # ネットワーク関連
+            "network": ["network", "net", "traffic"],
+            "ネットワーク": ["network", "net", "traffic"],
+            "通信": ["network", "traffic"],
+            # コンテナ/Kubernetes関連
+            "container": ["container", "docker", "pod"],
+            "コンテナ": ["container", "docker", "pod"],
+            "kubernetes": ["kubernetes", "k8s", "kube"],
+            "pod": ["pod", "kubernetes"],
+            # ノード関連
+            "node": ["node", "host", "server"],
+            "ノード": ["node", "host"],
+            "サーバ": ["server", "host", "node"],
+            "サーバー": ["server", "host", "node"],
+            # エラー/障害関連
+            "error": ["error", "alert", "failure"],
+            "エラー": ["error", "alert", "failure"],
+            "障害": ["error", "failure", "down"],
+            # ログ関連
+            "log": ["log", "logs", "logging"],
+            "ログ": ["log", "logs"],
+        }
+
+        # 入力テキストを取得
+        input_text = ""
+        if state["trigger_type"] == TriggerType.USER_QUERY:
+            user_query = state.get("user_query")
+            if user_query:
+                input_text = user_query.raw_input.lower()
+        else:
+            alert = state.get("alert")
+            if alert:
+                input_text = " ".join([
+                    alert.alert_name or "",
+                    alert.summary or "",
+                    alert.description or "",
+                ]).lower()
+
+        # キーワードマッチング
+        for key, values in keyword_map.items():
+            if key.lower() in input_text:
+                keywords.update(values)
+
+        # 入力テキストから直接抽出（英数字の単語）
+        import re
+        words = re.findall(r"[a-zA-Z]{3,}", input_text)
+        for word in words:
+            if len(word) >= 3:
+                keywords.add(word.lower())
+
+        return list(keywords)
+
     async def _discover_environment(self, state: AgentState) -> dict[str, Any]:
         """環境情報を収集.
 
-        Grafana MCP経由で利用可能なメトリクス・ラベル・ターゲットを取得し、
-        調査計画の生成に必要なコンテキストを構築する。
+        1. 入力からキーワードを抽出
+        2. Grafana MCP経由でデータソース・メトリクス情報を取得
+        3. キーワードに関連するダッシュボードを優先的に探索
 
         セッションを再利用して効率的にMCP呼び出しを行う。
         """
@@ -196,12 +277,18 @@ class OrchestratorAgent:
 
         env = EnvironmentContext()
 
+        # 入力からキーワードを抽出
+        env.investigation_keywords = self._extract_investigation_keywords(state)
+        if env.investigation_keywords:
+            logger.info("Investigation keywords: %s", env.investigation_keywords)
+
         try:
             # セッションを再利用して複数のMCP呼び出しを効率化
             async with self.grafana_tool.session_context() as grafana:
                 await self._discover_datasources(grafana, env)
                 await self._discover_prometheus_info(grafana, env)
                 await self._discover_loki_info(grafana, env)
+                # キーワードを使ってダッシュボードを探索
                 await self._discover_dashboard_queries(grafana, env)
         except Exception as e:
             logger.warning(
@@ -299,66 +386,238 @@ class OrchestratorAgent:
         except Exception as e:
             logger.warning("Failed to get Loki info: %s: %s", type(e).__name__, e)
 
-    async def _discover_dashboard_queries(
+    async def _discover_dashboards(
         self,
         grafana: "GrafanaMCPTool",
         env: EnvironmentContext,
     ) -> None:
-        """既存ダッシュボードからクエリパターンを学習.
+        """ダッシュボード一覧を取得してEnvironmentContextに格納.
 
-        複数のダッシュボードを試行し、有効なクエリが見つかるまで続ける。
+        キーワードマッチングによる関連度スコアは後続の処理で計算する。
         """
         try:
             dashboards_result = await grafana.list_dashboards()
             dashboards = self._extract_content_text(dashboards_result)
             dashboard_list = self._parse_dashboards(dashboards)
 
-            # 最大3つのダッシュボードを試行
-            for dashboard in dashboard_list[:3]:
-                uid = dashboard.get("uid", "")
+            for db in dashboard_list:
+                uid = db.get("uid", "")
                 if not uid:
                     continue
-
-                try:
-                    queries_result = await grafana.get_dashboard_panel_queries(uid)
-
-                    # エラーレスポンスをチェック（パネルが無いダッシュボードなど）
-                    if "error" in queries_result:
-                        logger.debug(
-                            "Skipping dashboard %s: %s",
-                            uid,
-                            queries_result.get("error"),
-                        )
-                        continue
-
-                    queries_text = self._extract_content_text(queries_result)
-                    promql, logql = self._extract_queries_from_panels(queries_text)
-
-                    if promql or logql:
-                        env.example_promql_queries = promql[:5]
-                        env.example_logql_queries = logql[:5]
-                        logger.info(
-                            "Extracted %d PromQL, %d LogQL example queries from dashboard %s",
-                            len(env.example_promql_queries),
-                            len(env.example_logql_queries),
-                            uid,
-                        )
-                        return  # 成功したら終了
-
-                except Exception as panel_err:
-                    logger.debug(
-                        "Failed to get panel queries for dashboard %s: %s: %s",
-                        uid,
-                        type(panel_err).__name__,
-                        panel_err,
+                env.available_dashboards.append(
+                    DashboardInfo(
+                        uid=uid,
+                        title=db.get("title", ""),
+                        tags=db.get("tags", []),
                     )
-                    continue
+                )
 
-            # 全て失敗した場合
-            logger.debug("No example queries found from any dashboard")
-
+            logger.info("Found %d dashboards", len(env.available_dashboards))
         except Exception as e:
             logger.warning("Failed to list dashboards: %s: %s", type(e).__name__, e)
+
+    def _score_dashboard_relevance(
+        self,
+        dashboard: DashboardInfo,
+        keywords: list[str],
+    ) -> float:
+        """ダッシュボードとキーワードの関連度スコアを計算.
+
+        タイトルとタグにキーワードが含まれているかをチェック。
+        """
+        if not keywords:
+            return 0.0
+
+        score = 0.0
+        title_lower = dashboard.title.lower()
+        tags_lower = [t.lower() for t in dashboard.tags]
+
+        for keyword in keywords:
+            kw_lower = keyword.lower()
+            # タイトルに含まれる場合は高スコア
+            if kw_lower in title_lower:
+                score += 2.0
+            # タグに含まれる場合も加点
+            for tag in tags_lower:
+                if kw_lower in tag:
+                    score += 1.0
+
+        # キーワード数で正規化
+        return score / len(keywords) if keywords else 0.0
+
+    def _rank_dashboards_by_keywords(
+        self,
+        dashboards: list[DashboardInfo],
+        keywords: list[str],
+    ) -> list[DashboardInfo]:
+        """キーワードマッチングでダッシュボードをランキング.
+
+        関連度スコアの高い順にソート。スコア0のダッシュボードも
+        末尾に含める（フォールバック用）。
+        """
+        for db in dashboards:
+            db.relevance_score = self._score_dashboard_relevance(db, keywords)
+
+        # スコア降順でソート
+        return sorted(dashboards, key=lambda d: d.relevance_score, reverse=True)
+
+    async def _discover_panel_queries_from_dashboard(
+        self,
+        grafana: "GrafanaMCPTool",
+        dashboard: DashboardInfo,
+        env: EnvironmentContext,
+    ) -> bool:
+        """指定ダッシュボードからパネルクエリを取得.
+
+        Returns:
+            クエリが見つかった場合はTrue
+        """
+        if dashboard.uid in env.explored_dashboard_uids:
+            return False
+
+        env.explored_dashboard_uids.append(dashboard.uid)
+
+        try:
+            queries_result = await grafana.get_dashboard_panel_queries(dashboard.uid)
+
+            if "error" in queries_result:
+                logger.debug(
+                    "Skipping dashboard %s (%s): %s",
+                    dashboard.uid,
+                    dashboard.title,
+                    queries_result.get("error"),
+                )
+                return False
+
+            queries_text = self._extract_content_text(queries_result)
+            panels = self._parse_panel_queries(queries_text, dashboard)
+
+            if panels:
+                env.discovered_panel_queries.extend(panels)
+                logger.info(
+                    "Extracted %d queries from dashboard '%s' (%s)",
+                    len(panels),
+                    dashboard.title,
+                    dashboard.uid,
+                )
+                return True
+
+        except Exception as e:
+            logger.debug(
+                "Failed to get panel queries for dashboard %s (%s): %s: %s",
+                dashboard.uid,
+                dashboard.title,
+                type(e).__name__,
+                e,
+            )
+
+        return False
+
+    def _parse_panel_queries(
+        self,
+        text: str,
+        dashboard: DashboardInfo,
+    ) -> list[PanelQuery]:
+        """パネルクエリテキストをPanelQueryリストに変換."""
+        queries: list[PanelQuery] = []
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                for panel in parsed:
+                    expr = panel.get("expr", "") or panel.get("query", "")
+                    if not expr:
+                        continue
+
+                    # LogQLは{で始まることが多い
+                    query_type = "logql" if expr.strip().startswith("{") else "promql"
+                    queries.append(
+                        PanelQuery(
+                            panel_title=panel.get("title", ""),
+                            query=expr,
+                            query_type=query_type,
+                            dashboard_uid=dashboard.uid,
+                            dashboard_title=dashboard.title,
+                        )
+                    )
+        except json.JSONDecodeError:
+            pass
+        return queries
+
+    async def _discover_dashboard_queries(
+        self,
+        grafana: "GrafanaMCPTool",
+        env: EnvironmentContext,
+        keywords: list[str] | None = None,
+        max_dashboards: int = 5,
+    ) -> None:
+        """キーワードに関連するダッシュボードからクエリを探索.
+
+        1. キーワードでダッシュボードをランキング
+        2. 関連度の高いダッシュボードから順にパネルを探索
+        3. クエリが見つかるまで、または最大数に達するまで継続
+
+        Args:
+            grafana: Grafana MCPツール
+            env: 環境コンテキスト
+            keywords: 調査キーワード（省略時はenv.investigation_keywordsを使用）
+            max_dashboards: 探索する最大ダッシュボード数
+        """
+        # ダッシュボード一覧がなければ取得
+        if not env.available_dashboards:
+            await self._discover_dashboards(grafana, env)
+
+        if not env.available_dashboards:
+            logger.debug("No dashboards available")
+            return
+
+        # キーワードでランキング
+        search_keywords = keywords or env.investigation_keywords
+        ranked = self._rank_dashboards_by_keywords(
+            env.available_dashboards,
+            search_keywords,
+        )
+
+        if search_keywords:
+            logger.info(
+                "Searching dashboards with keywords: %s",
+                search_keywords,
+            )
+
+        # 上位ダッシュボードを探索
+        explored_count = 0
+        for dashboard in ranked:
+            if explored_count >= max_dashboards:
+                break
+
+            # 既に探索済みならスキップ
+            if dashboard.uid in env.explored_dashboard_uids:
+                continue
+
+            found = await self._discover_panel_queries_from_dashboard(
+                grafana,
+                dashboard,
+                env,
+            )
+            explored_count += 1
+
+            # クエリが見つかったら、例としてEnvironmentContextに設定
+            if found and not env.example_promql_queries:
+                promql = [
+                    q.query for q in env.discovered_panel_queries
+                    if q.query_type == "promql"
+                ]
+                logql = [
+                    q.query for q in env.discovered_panel_queries
+                    if q.query_type == "logql"
+                ]
+                env.example_promql_queries = promql[:5]
+                env.example_logql_queries = logql[:5]
+
+        if not env.discovered_panel_queries:
+            logger.debug(
+                "No panel queries found after exploring %d dashboards",
+                explored_count,
+            )
 
     def _extract_content_text(self, result: dict[str, Any]) -> str:
         """MCPツール結果からテキストコンテンツを抽出."""

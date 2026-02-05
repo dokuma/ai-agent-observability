@@ -19,7 +19,13 @@ from ai_agent_monitoring.core.models import (
     TriggerType,
     UserQuery,
 )
-from ai_agent_monitoring.core.state import AgentState, InvestigationPlan
+from ai_agent_monitoring.core.state import (
+    AgentState,
+    DashboardInfo,
+    EnvironmentContext,
+    InvestigationPlan,
+    PanelQuery,
+)
 from ai_agent_monitoring.tools.registry import MCPConnection, ToolRegistry
 
 # ---- ヘルパー ----
@@ -1288,3 +1294,282 @@ class TestRCAAgentRenderMarkdown:
         # ファイルが実際に保存されたか確認
         md_files = list(tmp_path.glob("rca_report_*.md"))
         assert len(md_files) == 1
+
+
+# ---- ダッシュボード選択戦略テスト ----
+
+
+class TestOrchestratorExtractInvestigationKeywords:
+    """キーワード抽出のテスト."""
+
+    def setup_method(self):
+        self.agent, _ = _make_orchestrator()
+
+    def test_extract_cpu_keywords(self):
+        """CPUキーワードの抽出."""
+        state = AgentState(
+            messages=[],
+            trigger_type=TriggerType.USER_QUERY,
+            user_query=UserQuery(raw_input="CPUの使用率を調べてください"),
+        )
+        keywords = self.agent._extract_investigation_keywords(state)
+        assert "cpu" in keywords
+        assert "usage" in keywords or "utilization" in keywords
+
+    def test_extract_memory_keywords(self):
+        """メモリキーワードの抽出."""
+        state = AgentState(
+            messages=[],
+            trigger_type=TriggerType.USER_QUERY,
+            user_query=UserQuery(raw_input="メモリ不足の原因を調査"),
+        )
+        keywords = self.agent._extract_investigation_keywords(state)
+        assert "memory" in keywords or "mem" in keywords or "ram" in keywords
+
+    def test_extract_network_keywords(self):
+        """ネットワークキーワードの抽出."""
+        state = AgentState(
+            messages=[],
+            trigger_type=TriggerType.USER_QUERY,
+            user_query=UserQuery(raw_input="ネットワーク遅延の調査"),
+        )
+        keywords = self.agent._extract_investigation_keywords(state)
+        assert "network" in keywords or "net" in keywords
+
+    def test_extract_kubernetes_keywords(self):
+        """Kubernetesキーワードの抽出."""
+        state = AgentState(
+            messages=[],
+            trigger_type=TriggerType.USER_QUERY,
+            user_query=UserQuery(raw_input="Kubernetes podのエラーを調査"),
+        )
+        keywords = self.agent._extract_investigation_keywords(state)
+        assert "kubernetes" in keywords or "pod" in keywords
+
+    def test_extract_from_alert(self):
+        """アラートからのキーワード抽出."""
+        from ai_agent_monitoring.core.models import Alert
+
+        state = AgentState(
+            messages=[],
+            trigger_type=TriggerType.ALERT,
+            alert=Alert(
+                alert_name="HighCPUUsage",
+                severity="critical",
+                instance="server1",
+                summary="CPU usage above 90%",
+                description="High CPU detected on production server",
+                starts_at=datetime.now(timezone.utc),
+            ),
+        )
+        keywords = self.agent._extract_investigation_keywords(state)
+        assert "cpu" in keywords
+        assert "server" in keywords or "production" in keywords
+
+    def test_empty_query(self):
+        """空のクエリ."""
+        state = AgentState(
+            messages=[],
+            trigger_type=TriggerType.USER_QUERY,
+            user_query=None,
+        )
+        keywords = self.agent._extract_investigation_keywords(state)
+        assert keywords == []
+
+
+class TestOrchestratorDashboardScoring:
+    """ダッシュボードスコアリングのテスト."""
+
+    def setup_method(self):
+        self.agent, _ = _make_orchestrator()
+
+    def test_score_title_match(self):
+        """タイトルマッチでスコア加算."""
+        dashboard = DashboardInfo(uid="1", title="Node CPU Usage", tags=[])
+        score = self.agent._score_dashboard_relevance(dashboard, ["cpu"])
+        assert score > 0
+
+    def test_score_tag_match(self):
+        """タグマッチでスコア加算."""
+        dashboard = DashboardInfo(uid="1", title="Overview", tags=["cpu", "memory"])
+        score = self.agent._score_dashboard_relevance(dashboard, ["cpu"])
+        assert score > 0
+
+    def test_score_no_match(self):
+        """マッチなしでスコア0."""
+        dashboard = DashboardInfo(uid="1", title="Network Traffic", tags=["network"])
+        score = self.agent._score_dashboard_relevance(dashboard, ["cpu"])
+        assert score == 0
+
+    def test_score_empty_keywords(self):
+        """キーワード空でスコア0."""
+        dashboard = DashboardInfo(uid="1", title="CPU Usage", tags=[])
+        score = self.agent._score_dashboard_relevance(dashboard, [])
+        assert score == 0
+
+    def test_title_scores_higher_than_tag(self):
+        """タイトルマッチはタグマッチより高スコア."""
+        db_title_match = DashboardInfo(uid="1", title="CPU Usage", tags=[])
+        db_tag_match = DashboardInfo(uid="2", title="Overview", tags=["cpu"])
+
+        title_score = self.agent._score_dashboard_relevance(db_title_match, ["cpu"])
+        tag_score = self.agent._score_dashboard_relevance(db_tag_match, ["cpu"])
+
+        assert title_score > tag_score
+
+
+class TestOrchestratorDashboardRanking:
+    """ダッシュボードランキングのテスト."""
+
+    def setup_method(self):
+        self.agent, _ = _make_orchestrator()
+
+    def test_rank_by_relevance(self):
+        """関連度順にソート."""
+        dashboards = [
+            DashboardInfo(uid="1", title="Overview", tags=[]),
+            DashboardInfo(uid="2", title="CPU Usage Dashboard", tags=["cpu"]),
+            DashboardInfo(uid="3", title="Network", tags=["cpu"]),
+        ]
+        ranked = self.agent._rank_dashboards_by_keywords(dashboards, ["cpu"])
+
+        # CPUがタイトルに含まれるものが最上位
+        assert ranked[0].uid == "2"
+        # スコア降順
+        assert ranked[0].relevance_score >= ranked[1].relevance_score
+
+    def test_rank_empty_keywords(self):
+        """キーワード空でも全ダッシュボード含む."""
+        dashboards = [
+            DashboardInfo(uid="1", title="A"),
+            DashboardInfo(uid="2", title="B"),
+        ]
+        ranked = self.agent._rank_dashboards_by_keywords(dashboards, [])
+        assert len(ranked) == 2
+        # 全てスコア0
+        assert all(d.relevance_score == 0 for d in ranked)
+
+
+class TestOrchestratorParsePanelQueries:
+    """パネルクエリパースのテスト."""
+
+    def setup_method(self):
+        self.agent, _ = _make_orchestrator()
+
+    def test_parse_promql(self):
+        """PromQLクエリのパース."""
+        dashboard = DashboardInfo(uid="dash1", title="Test Dashboard")
+        text = json.dumps([
+            {"title": "CPU Panel", "expr": "rate(node_cpu_seconds_total[5m])"},
+        ])
+        queries = self.agent._parse_panel_queries(text, dashboard)
+
+        assert len(queries) == 1
+        assert queries[0].query_type == "promql"
+        assert queries[0].panel_title == "CPU Panel"
+        assert queries[0].dashboard_uid == "dash1"
+
+    def test_parse_logql(self):
+        """LogQLクエリのパース."""
+        dashboard = DashboardInfo(uid="dash1", title="Logs Dashboard")
+        text = json.dumps([
+            {"title": "Error Logs", "expr": '{job="nginx"} |= "error"'},
+        ])
+        queries = self.agent._parse_panel_queries(text, dashboard)
+
+        assert len(queries) == 1
+        assert queries[0].query_type == "logql"
+
+    def test_parse_mixed(self):
+        """混合クエリのパース."""
+        dashboard = DashboardInfo(uid="dash1", title="Mixed")
+        text = json.dumps([
+            {"title": "CPU", "expr": "rate(cpu[5m])"},
+            {"title": "Logs", "query": '{app="test"}'},
+            {"title": "Empty"},  # クエリなし
+        ])
+        queries = self.agent._parse_panel_queries(text, dashboard)
+
+        assert len(queries) == 2
+        promql = [q for q in queries if q.query_type == "promql"]
+        logql = [q for q in queries if q.query_type == "logql"]
+        assert len(promql) == 1
+        assert len(logql) == 1
+
+    def test_parse_invalid_json(self):
+        """不正JSONはパースエラーにならず空リスト."""
+        dashboard = DashboardInfo(uid="dash1", title="Test")
+        queries = self.agent._parse_panel_queries("invalid json", dashboard)
+        assert queries == []
+
+
+class TestOrchestratorDiscoverDashboardQueries:
+    """ダッシュボードクエリ探索のテスト."""
+
+    def setup_method(self):
+        self.agent, _ = _make_orchestrator()
+
+    @pytest.mark.asyncio
+    async def test_discover_with_keywords(self):
+        """キーワードでダッシュボード探索."""
+        env = EnvironmentContext(
+            investigation_keywords=["cpu"],
+            available_dashboards=[
+                DashboardInfo(uid="1", title="Memory Dashboard"),
+                DashboardInfo(uid="2", title="CPU Monitoring"),
+                DashboardInfo(uid="3", title="Network"),
+            ],
+        )
+
+        mock_grafana = AsyncMock()
+        mock_grafana.get_dashboard_panel_queries = AsyncMock(return_value={
+            "content": [{"type": "text", "text": json.dumps([
+                {"title": "CPU Usage", "expr": "rate(cpu[5m])"},
+            ])}],
+        })
+
+        await self.agent._discover_dashboard_queries(mock_grafana, env)
+
+        # CPUダッシュボードが優先される
+        assert "2" in env.explored_dashboard_uids
+        assert len(env.discovered_panel_queries) > 0
+
+    @pytest.mark.asyncio
+    async def test_skip_already_explored(self):
+        """探索済みダッシュボードはスキップ."""
+        env = EnvironmentContext(
+            available_dashboards=[
+                DashboardInfo(uid="1", title="Test"),
+            ],
+            explored_dashboard_uids=["1"],
+        )
+
+        mock_grafana = AsyncMock()
+        mock_grafana.get_dashboard_panel_queries = AsyncMock()
+
+        await self.agent._discover_dashboard_queries(mock_grafana, env)
+
+        # 既に探索済みなのでcall_toolは呼ばれない
+        mock_grafana.get_dashboard_panel_queries.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_max_dashboards_limit(self):
+        """最大ダッシュボード数の制限."""
+        env = EnvironmentContext(
+            available_dashboards=[
+                DashboardInfo(uid=str(i), title=f"Dashboard {i}")
+                for i in range(10)
+            ],
+        )
+
+        mock_grafana = AsyncMock()
+        mock_grafana.get_dashboard_panel_queries = AsyncMock(return_value={
+            "content": [{"type": "text", "text": "[]"}],
+        })
+
+        await self.agent._discover_dashboard_queries(
+            mock_grafana, env, max_dashboards=3
+        )
+
+        # 最大3つまで探索
+        assert len(env.explored_dashboard_uids) == 3

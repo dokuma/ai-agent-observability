@@ -29,11 +29,17 @@ Open WebUI のサイドバーにカスタムモデルとして表示され、チ
 """
 title: AI Agent Monitoring
 description: システム監視 AI Agent にクエリを送信し RCA レポートを取得する
-version: 0.2.0
+version: 0.3.0
+
+Note:
+    Open WebUI v0.6.43+ では AsyncGenerator を返すとUIがスタックする
+    既知の問題があるため、__event_emitter__ で進捗を通知し、
+    最終結果は文字列で返す方式を採用。
+    https://github.com/open-webui/open-webui/issues/20196
 """
 
 import asyncio
-from typing import AsyncGenerator
+from typing import Awaitable, Callable, Optional
 
 import requests
 from pydantic import BaseModel, Field
@@ -42,7 +48,8 @@ from pydantic import BaseModel, Field
 class Pipe:
     """Open WebUI Pipe Function for AI Agent Monitoring.
 
-    ストリーミングを使用して調査の進捗をリアルタイムで表示する。
+    __event_emitter__ を使用して進捗をステータスバーに表示し、
+    最終結果は文字列として返す。これによりUIがスタックする問題を回避。
     """
 
     class Valves(BaseModel):
@@ -63,17 +70,43 @@ class Pipe:
     def pipes(self):
         return [{"id": "agent-monitoring", "name": "System Monitoring Agent"}]
 
-    async def pipe(self, body: dict) -> AsyncGenerator[str, None]:
-        """ストリーミングで進捗を返しながら調査を実行."""
+    async def _emit_status(
+        self,
+        emitter: Optional[Callable[[dict], Awaitable[None]]],
+        description: str,
+        done: bool = False,
+    ) -> None:
+        """ステータスイベントを送信."""
+        if emitter:
+            await emitter({
+                "type": "status",
+                "data": {"description": description, "done": done},
+            })
+
+    async def pipe(
+        self,
+        body: dict,
+        __event_emitter__: Optional[Callable[[dict], Awaitable[None]]] = None,
+    ) -> str:
+        """調査を実行しレポートを返す.
+
+        Args:
+            body: リクエストボディ（messages を含む）
+            __event_emitter__: Open WebUI のイベントエミッター（進捗通知用）
+
+        Returns:
+            RCA レポート（Markdown形式）または エラーメッセージ
+        """
         messages = body.get("messages", [])
         if not messages:
-            yield "クエリを入力してください。"
-            return
+            return "クエリを入力してください。"
 
         query = messages[-1].get("content", "")
         base = self.valves.API_BASE_URL.rstrip("/")
 
         # 1. 調査開始
+        await self._emit_status(__event_emitter__, "🔍 調査を開始中...")
+
         try:
             res = requests.post(
                 f"{base}/query",
@@ -82,16 +115,19 @@ class Pipe:
             )
             res.raise_for_status()
         except Exception as e:
-            yield f"❌ 調査の開始に失敗しました: {e}"
-            return
+            await self._emit_status(__event_emitter__, f"❌ エラー: {e}", done=True)
+            return f"❌ 調査の開始に失敗しました: {e}"
 
         data = res.json()
         inv_id = data["investigation_id"]
-        yield f"🔍 調査を開始しました (ID: `{inv_id}`)\n\n"
 
-        # 2. 完了までポーリング（進捗を表示）
+        await self._emit_status(__event_emitter__, f"🔍 調査中... (ID: {inv_id})")
+
+        # 2. 完了までポーリング（進捗をステータスバーに表示）
         elapsed = 0
         last_stage = ""
+        status = {}
+
         while elapsed < self.valves.POLL_TIMEOUT:
             await asyncio.sleep(self.valves.POLL_INTERVAL)
             elapsed += self.valves.POLL_INTERVAL
@@ -104,26 +140,38 @@ class Pipe:
             except Exception:
                 continue  # 一時的な通信エラーは無視
 
-            # ステージが変わったら表示を更新
+            # ステージが変わったらステータスバーを更新
             current_stage = status.get("current_stage", "")
             if current_stage and current_stage != last_stage:
                 iteration = status.get("iteration_count", 0)
                 if iteration > 0:
-                    yield f"⏳ {current_stage} (イテレーション {iteration})\n"
+                    status_msg = f"⏳ {current_stage} (イテレーション {iteration})"
                 else:
-                    yield f"⏳ {current_stage}\n"
+                    status_msg = f"⏳ {current_stage}"
+                await self._emit_status(__event_emitter__, status_msg)
                 last_stage = current_stage
 
-            if status["status"] == "completed":
-                yield "\n✅ 調査が完了しました。レポートを取得中...\n\n"
+            if status.get("status") == "completed":
+                await self._emit_status(
+                    __event_emitter__, "✅ 調査完了。レポート取得中..."
+                )
                 break
-            if status["status"] == "failed":
+
+            if status.get("status") == "failed":
                 error_msg = status.get("error", "不明なエラー")
-                yield f"\n❌ 調査が失敗しました: {error_msg}\n(ID: {inv_id})"
-                return
+                await self._emit_status(
+                    __event_emitter__, f"❌ 調査失敗: {error_msg}", done=True
+                )
+                return f"❌ 調査が失敗しました: {error_msg}\n\n(ID: {inv_id})"
         else:
-            yield f"\n⏰ ポーリングがタイムアウトしました (ID: {inv_id})\n調査はバックグラウンドで継続中の可能性があります。"
-            return
+            # タイムアウト
+            await self._emit_status(
+                __event_emitter__, "⏰ タイムアウト", done=True
+            )
+            return (
+                f"⏰ ポーリングがタイムアウトしました (ID: {inv_id})\n\n"
+                "調査はバックグラウンドで継続中の可能性があります。"
+            )
 
         # 3. レポート取得
         try:
@@ -131,26 +179,29 @@ class Pipe:
                 f"{base}/investigations/{inv_id}/report", timeout=10
             )
         except Exception as e:
-            yield f"❌ レポートの取得に失敗しました: {e}"
-            return
+            await self._emit_status(
+                __event_emitter__, f"❌ レポート取得失敗", done=True
+            )
+            return f"❌ レポートの取得に失敗しました: {e}"
 
-        # レポートが未生成 (404) の場合はステータス情報を返す
+        # 完了通知
+        await self._emit_status(__event_emitter__, "✅ 完了", done=True)
+
+        # レポートが未生成 (404) の場合
         if report_res.status_code != 200:
-            yield (
+            return (
                 f"## 調査完了 ({inv_id})\n\n"
                 f"調査は完了しましたが、詳細レポートを生成できませんでした。\n"
                 f"イテレーション: {status.get('iteration_count', '不明')}\n\n"
-                f"*モデルの応答精度が十分でない可能性があります。"
-                f"より大きなモデル (llama3, qwen2.5:7b 等) の使用を推奨します。*"
+                "*モデルの応答精度が十分でない可能性があります。"
+                "より大きなモデル (llama3, qwen2.5:7b 等) の使用を推奨します。*"
             )
-            return
 
         report = report_res.json()
 
         # Markdown レポートがあればそのまま返す
         if report.get("markdown"):
-            yield report["markdown"]
-            return
+            return report["markdown"]
 
         # フォールバック: 構造化データを整形
         lines = [f"## RCA レポート ({inv_id})\n"]
@@ -169,8 +220,12 @@ class Pipe:
                 "\n*レポートの内容が空です。"
                 "より大きなモデルの使用を推奨します。*"
             )
-        yield "\n".join(lines)
+        return "\n".join(lines)
 ```
+
+> **Note**: v0.3.0 では `AsyncGenerator` (yield) の代わりに `__event_emitter__` を使用。
+> これは [Open WebUI の AsyncGenerator スタック問題](https://github.com/open-webui/open-webui/issues/20196) を回避するためです。
+> 進捗はステータスバーに表示され、最終結果はチャットに表示されます。
 
 ### 使い方
 
