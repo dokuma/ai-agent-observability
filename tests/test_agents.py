@@ -134,6 +134,28 @@ class TestOrchestratorParsePlan:
         with pytest.raises(ValueError, match="調査計画のパースに失敗しました"):
             self.agent._parse_plan(content)
 
+    def test_parse_plan_time_range_as_string(self):
+        """time_rangeが文字列の場合はNoneに正規化."""
+        content = (
+            '{"promql_queries": ["up"], "logql_queries": [],'
+            ' "time_range": "2026-02-05T07:11:18+00:00"}'
+        )
+        plan = self.agent._parse_plan(content)
+
+        assert plan.promql_queries == ["up"]
+        # 文字列のtime_rangeはNoneに変換される
+        assert plan.time_range is None
+
+    def test_parse_plan_time_range_invalid_dict(self):
+        """time_rangeがstart/endを持たないdictの場合はNoneに正規化."""
+        content = (
+            '{"promql_queries": ["up"], "logql_queries": [],'
+            ' "time_range": {"invalid": "value"}}'
+        )
+        plan = self.agent._parse_plan(content)
+
+        assert plan.time_range is None
+
 
 class TestOrchestratorExtractJson:
     def test_extract_json_code_block(self):

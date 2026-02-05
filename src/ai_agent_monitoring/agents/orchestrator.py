@@ -1128,8 +1128,33 @@ class OrchestratorAgent:
         try:
             json_str = self._extract_json(content)
             data = json.loads(json_str)
+
+            # time_rangeの正規化: LLMが様々な形式で出力する可能性に対応
+            if "time_range" in data and data["time_range"] is not None:
+                tr = data["time_range"]
+                if isinstance(tr, str):
+                    # 単一の文字列の場合はNoneに（後続の処理で解決）
+                    logger.debug("time_range is string, setting to None: %s", tr)
+                    data["time_range"] = None
+                elif isinstance(tr, dict):
+                    # start/endを持つdictの場合はTimeRangeに変換
+                    if "start" in tr and "end" in tr:
+                        try:
+                            data["time_range"] = TimeRange(
+                                start=datetime.fromisoformat(str(tr["start"])),
+                                end=datetime.fromisoformat(str(tr["end"])),
+                            )
+                        except (ValueError, TypeError) as parse_err:
+                            logger.debug(
+                                "Failed to parse time_range dict, setting to None: %s",
+                                parse_err,
+                            )
+                            data["time_range"] = None
+                    else:
+                        data["time_range"] = None
+
             return InvestigationPlan(**data)
-        except (json.JSONDecodeError, ValueError) as e:
+        except (json.JSONDecodeError, ValueError, TypeError) as e:
             # エラーの詳細をログ出力
             logger.error(
                 "調査計画のパースに失敗。error=%s, content_preview=%s",
