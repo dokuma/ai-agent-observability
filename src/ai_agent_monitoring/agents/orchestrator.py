@@ -140,7 +140,7 @@ class OrchestratorAgent:
         LangGraphの config（LangfuseCallbackHandler含む）を
         サブグラフに伝播させる。
         """
-        async def wrapped(state: AgentState, config: RunnableConfig | None = None) -> dict[str, Any]:
+        async def wrapped(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
             self._update_stage(state, stage_name)
             result: dict[str, Any] = await subgraph.ainvoke(state, config=config)
             return result

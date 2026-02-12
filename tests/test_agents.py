@@ -2,6 +2,7 @@
 
 import json
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -540,12 +541,13 @@ class TestOrchestratorStageUpdate:
             iteration_count=0,
         )
 
-        result = await wrapped(state)
+        config: dict[str, Any] = {"callbacks": []}
+        result = await wrapped(state, config)
 
         # コールバックが呼ばれた
         callback.assert_called_once_with("test-inv-456", "ラップテスト", 0)
         # サブグラフが実行された（config伝播あり）
-        mock_subgraph.ainvoke.assert_called_once_with(state, config=None)
+        mock_subgraph.ainvoke.assert_called_once_with(state, config=config)
         # 結果が返された
         assert result == {"test_result": "ok"}
 
