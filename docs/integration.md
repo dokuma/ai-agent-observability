@@ -29,7 +29,7 @@ Open WebUI のサイドバーにカスタムモデルとして表示され、チ
 """
 title: AI Agent Monitoring
 description: システム監視 AI Agent にクエリを送信し RCA レポートを取得する
-version: 0.4.0
+version: 0.5.0
 
 Note:
     - Open WebUI v0.6.43+ では AsyncGenerator を返すとUIがスタックする
@@ -114,6 +114,21 @@ class Pipe:
         query = messages[-1].get("content", "")
         base = self.valves.API_BASE_URL.rstrip("/")
 
+        # 0. MCP ヘルスチェック — 調査開始前にバックエンドの状態を確認
+        await self._emit_status(__event_emitter__, "🩺 MCP ヘルスチェック中...")
+        try:
+            health_res = requests.get(f"{base}/health", timeout=10)
+            if health_res.status_code == 200:
+                health = health_res.json()
+                mcp_parts = []
+                for name, ok in health.get("mcp_servers", {}).items():
+                    mcp_parts.append(f"{'✅' if ok else '❌'} {name}")
+                if mcp_parts:
+                    mcp_line = "MCP: " + " / ".join(mcp_parts)
+                    await self._emit_status(__event_emitter__, mcp_line)
+        except Exception:
+            pass  # ヘルスチェック失敗は調査を妨げない
+
         # 1. 調査開始
         await self._emit_status(__event_emitter__, "🔍 調査を開始中...")
 
@@ -158,6 +173,11 @@ class Pipe:
                     status_msg = f"⏳ {current_stage} (イテレーション {iteration})"
                 else:
                     status_msg = f"⏳ {current_stage}"
+                # MCP 状態も表示（ポーリングレスポンスに含まれる場合）
+                mcp_st = status.get("mcp_status", {})
+                if mcp_st:
+                    parts = [f"{'✅' if v else '❌'} {k}" for k, v in mcp_st.items()]
+                    status_msg += f" | MCP: {' / '.join(parts)}"
                 await self._emit_status(__event_emitter__, status_msg)
                 last_stage = current_stage
 
@@ -233,7 +253,9 @@ class Pipe:
         return "\n".join(lines)
 ```
 
-> **Note (v0.4.0)**:
+> **Note (v0.5.0)**:
+> - 調査開始前に `GET /health` でMCPヘルスチェックを実行し、ステータスバーに表示（例: `MCP: ✅ prometheus / ❌ loki / ✅ grafana`）
+> - ポーリング中も `InvestigationStatus.mcp_status` からMCP状態を参照可能
 > - `AsyncGenerator` (yield) の代わりに `__event_emitter__` を使用し、[UIスタック問題](https://github.com/open-webui/open-webui/issues/20196) を回避
 > - `__task__` パラメータでタイトル生成等のバックグラウンドタスクをスキップし、[重複実行問題](https://github.com/open-webui/open-webui/discussions/11309) を回避
 > - 進捗はステータスバーに表示され、最終結果はチャットに表示されます

@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# ヘルスチェック再実行の並行呼び出し保護
+_health_refresh_lock = asyncio.Lock()
+
 
 # ---- ヘルスチェック ----
 
@@ -125,6 +128,7 @@ async def get_investigation_status(investigation_id: str) -> InvestigationStatus
         error=record.error,
         created_at=record.created_at,
         completed_at=record.completed_at,
+        mcp_status=record.mcp_status,
     )
 
 
@@ -161,11 +165,36 @@ async def get_investigation_report(investigation_id: str) -> RCAReportResponse:
 # ---- バックグラウンドタスク ----
 
 
+async def _refresh_orchestrator_health(inv_id: str) -> dict[str, bool]:
+    """調査開始前にMCPヘルスチェックを再実行しグラフを再構築.
+
+    並行呼び出しをロックで保護し、結果をInvestigationRecordに保存する。
+    """
+    async with _health_refresh_lock:
+        registry = app_state.registry
+        orchestrator = app_state.orchestrator
+        if not registry or not orchestrator:
+            return {}
+
+        mcp_status = await registry.health_check()
+        orchestrator.refresh_health(registry)
+        logger.info("MCP health refreshed before investigation %s: %s", inv_id, mcp_status)
+
+        record = app_state.get_investigation(inv_id)
+        if record:
+            record.mcp_status = mcp_status
+
+        return mcp_status
+
+
 async def _run_alert_investigation(inv_id: str, alert: Alert) -> None:
     """アラート起動の調査をバックグラウンドで実行."""
     if not app_state.orchestrator:
         app_state.fail_investigation(inv_id, "Orchestrator not initialized")
         return
+
+    # 調査開始前にMCPヘルスチェックを再実行
+    await _refresh_orchestrator_health(inv_id)
 
     timeout = app_state.settings.investigation_timeout_seconds
 
@@ -217,6 +246,9 @@ async def _run_user_query_investigation(inv_id: str, user_query: UserQuery) -> N
     if not app_state.orchestrator:
         app_state.fail_investigation(inv_id, "Orchestrator not initialized")
         return
+
+    # 調査開始前にMCPヘルスチェックを再実行
+    await _refresh_orchestrator_health(inv_id)
 
     timeout = app_state.settings.investigation_timeout_seconds
 

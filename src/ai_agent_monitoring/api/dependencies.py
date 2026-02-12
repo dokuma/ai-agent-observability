@@ -29,6 +29,7 @@ class InvestigationRecord:
     completed_at: datetime | None = None
     error: str = ""
     rca_report: RCAReport | None = None
+    mcp_status: dict[str, bool] = field(default_factory=dict)
 
 
 class AppState:
@@ -100,9 +101,7 @@ class AppState:
             record.completed_at = datetime.now()
             record.error = error
 
-    def update_investigation_stage(
-        self, inv_id: str, stage: str, iteration_count: int | None = None
-    ) -> None:
+    def update_investigation_stage(self, inv_id: str, stage: str, iteration_count: int | None = None) -> None:
         """調査の現在ステージを更新."""
         record = self.investigations.get(inv_id)
         if record:

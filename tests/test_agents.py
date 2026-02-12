@@ -137,10 +137,7 @@ class TestOrchestratorParsePlan:
 
     def test_parse_plan_time_range_as_string(self):
         """time_rangeが文字列の場合はNoneに正規化."""
-        content = (
-            '{"promql_queries": ["up"], "logql_queries": [],'
-            ' "time_range": "2026-02-05T07:11:18+00:00"}'
-        )
+        content = '{"promql_queries": ["up"], "logql_queries": [], "time_range": "2026-02-05T07:11:18+00:00"}'
         plan = self.agent._parse_plan(content)
 
         assert plan.promql_queries == ["up"]
@@ -149,10 +146,7 @@ class TestOrchestratorParsePlan:
 
     def test_parse_plan_time_range_invalid_dict(self):
         """time_rangeがstart/endを持たないdictの場合はNoneに正規化."""
-        content = (
-            '{"promql_queries": ["up"], "logql_queries": [],'
-            ' "time_range": {"invalid": "value"}}'
-        )
+        content = '{"promql_queries": ["up"], "logql_queries": [], "time_range": {"invalid": "value"}}'
         plan = self.agent._parse_plan(content)
 
         assert plan.time_range is None
@@ -271,11 +265,13 @@ class TestOrchestratorPlanInvestigation:
     @pytest.mark.asyncio
     async def test_plan_investigation(self):
         response = MagicMock()
-        response.content = json.dumps({
-            "promql_queries": ["up"],
-            "logql_queries": ['{job="app"}'],
-            "target_instances": ["web-01"],
-        })
+        response.content = json.dumps(
+            {
+                "promql_queries": ["up"],
+                "logql_queries": ['{job="app"}'],
+                "target_instances": ["web-01"],
+            }
+        )
         self.llm.ainvoke = AsyncMock(return_value=response)
 
         state = AgentState(messages=[AIMessage(content="分析結果")], iteration_count=0)
@@ -622,9 +618,7 @@ class TestOrchestratorEnvironmentDiscovery:
         """JSONリストを抽出."""
         agent, _ = _make_orchestrator()
 
-        result = {
-            "content": [{"type": "text", "text": '["metric1", "metric2", "metric3"]'}]
-        }
+        result = {"content": [{"type": "text", "text": '["metric1", "metric2", "metric3"]'}]}
         items = agent._extract_list_from_result(result)
         assert items == ["metric1", "metric2", "metric3"]
 
@@ -632,9 +626,7 @@ class TestOrchestratorEnvironmentDiscovery:
         """改行区切りリストを抽出."""
         agent, _ = _make_orchestrator()
 
-        result = {
-            "content": [{"type": "text", "text": "item1\nitem2\nitem3"}]
-        }
+        result = {"content": [{"type": "text", "text": "item1\nitem2\nitem3"}]}
         items = agent._extract_list_from_result(result)
         assert items == ["item1", "item2", "item3"]
 
@@ -726,9 +718,7 @@ class TestOrchestratorFormatEnvironmentContext:
         from ai_agent_monitoring.core.state import EnvironmentContext
 
         agent, _ = _make_orchestrator()
-        env = EnvironmentContext(
-            available_metrics=["cpu_usage", "memory_usage", "disk_io"]
-        )
+        env = EnvironmentContext(available_metrics=["cpu_usage", "memory_usage", "disk_io"])
         result = agent._format_environment_context(env)
         assert "cpu_usage" in result
         assert "利用可能なPrometheusメトリクス" in result
@@ -1029,14 +1019,14 @@ class TestRCAAgentParseReport:
         self.agent, self.llm = _make_rca_agent()
 
     def test_parse_valid_report(self, sample_alert):
-        content = json.dumps({
-            "root_causes": [
-                {"description": "OOM", "confidence": 0.9, "evidence": ["heap full"]}
-            ],
-            "metrics_summary": "CPU high",
-            "logs_summary": "OOM errors",
-            "recommendations": ["increase memory"],
-        })
+        content = json.dumps(
+            {
+                "root_causes": [{"description": "OOM", "confidence": 0.9, "evidence": ["heap full"]}],
+                "metrics_summary": "CPU high",
+                "logs_summary": "OOM errors",
+                "recommendations": ["increase memory"],
+            }
+        )
         state = AgentState(
             messages=[],
             trigger_type=TriggerType.ALERT,
@@ -1164,12 +1154,14 @@ class TestRCAAgentGenerateReport:
     @pytest.mark.asyncio
     async def test_generate_report(self, sample_alert):
         response = MagicMock()
-        response.content = json.dumps({
-            "root_causes": [{"description": "OOM", "confidence": 0.85, "evidence": ["heap"]}],
-            "metrics_summary": "CPU高",
-            "logs_summary": "OOMエラー",
-            "recommendations": ["メモリ増設"],
-        })
+        response.content = json.dumps(
+            {
+                "root_causes": [{"description": "OOM", "confidence": 0.85, "evidence": ["heap"]}],
+                "metrics_summary": "CPU高",
+                "logs_summary": "OOMエラー",
+                "recommendations": ["メモリ増設"],
+            }
+        )
         self.llm.ainvoke = AsyncMock(return_value=response)
 
         state = AgentState(
@@ -1260,12 +1252,16 @@ class TestRCAAgentCaptureSnapshots:
         agent.output_dir = tmp_path
 
         # Grafanaメソッドをモック
-        agent.grafana.search_dashboards = AsyncMock(return_value={
-            "dashboards": [{"uid": "dash1"}],
-        })
-        agent.grafana.get_dashboard_panels = AsyncMock(return_value={
-            "panels": [{"id": 1}],
-        })
+        agent.grafana.search_dashboards = AsyncMock(
+            return_value={
+                "dashboards": [{"uid": "dash1"}],
+            }
+        )
+        agent.grafana.get_dashboard_panels = AsyncMock(
+            return_value={
+                "panels": [{"id": 1}],
+            }
+        )
         agent.grafana.render_panel_image = AsyncMock(return_value=b"\x89PNG fake")
 
         state = AgentState(
@@ -1482,9 +1478,11 @@ class TestOrchestratorParsePanelQueries:
     def test_parse_promql(self):
         """PromQLクエリのパース."""
         dashboard = DashboardInfo(uid="dash1", title="Test Dashboard")
-        text = json.dumps([
-            {"title": "CPU Panel", "expr": "rate(node_cpu_seconds_total[5m])"},
-        ])
+        text = json.dumps(
+            [
+                {"title": "CPU Panel", "expr": "rate(node_cpu_seconds_total[5m])"},
+            ]
+        )
         queries = self.agent._parse_panel_queries(text, dashboard)
 
         assert len(queries) == 1
@@ -1495,9 +1493,11 @@ class TestOrchestratorParsePanelQueries:
     def test_parse_logql(self):
         """LogQLクエリのパース."""
         dashboard = DashboardInfo(uid="dash1", title="Logs Dashboard")
-        text = json.dumps([
-            {"title": "Error Logs", "expr": '{job="nginx"} |= "error"'},
-        ])
+        text = json.dumps(
+            [
+                {"title": "Error Logs", "expr": '{job="nginx"} |= "error"'},
+            ]
+        )
         queries = self.agent._parse_panel_queries(text, dashboard)
 
         assert len(queries) == 1
@@ -1506,11 +1506,13 @@ class TestOrchestratorParsePanelQueries:
     def test_parse_mixed(self):
         """混合クエリのパース."""
         dashboard = DashboardInfo(uid="dash1", title="Mixed")
-        text = json.dumps([
-            {"title": "CPU", "expr": "rate(cpu[5m])"},
-            {"title": "Logs", "query": '{app="test"}'},
-            {"title": "Empty"},  # クエリなし
-        ])
+        text = json.dumps(
+            [
+                {"title": "CPU", "expr": "rate(cpu[5m])"},
+                {"title": "Logs", "query": '{app="test"}'},
+                {"title": "Empty"},  # クエリなし
+            ]
+        )
         queries = self.agent._parse_panel_queries(text, dashboard)
 
         assert len(queries) == 2
@@ -1545,11 +1547,20 @@ class TestOrchestratorDiscoverDashboardQueries:
         )
 
         mock_grafana = AsyncMock()
-        mock_grafana.get_dashboard_panel_queries = AsyncMock(return_value={
-            "content": [{"type": "text", "text": json.dumps([
-                {"title": "CPU Usage", "expr": "rate(cpu[5m])"},
-            ])}],
-        })
+        mock_grafana.get_dashboard_panel_queries = AsyncMock(
+            return_value={
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps(
+                            [
+                                {"title": "CPU Usage", "expr": "rate(cpu[5m])"},
+                            ]
+                        ),
+                    }
+                ],
+            }
+        )
 
         await self.agent._discover_dashboard_queries(mock_grafana, env)
 
@@ -1579,20 +1590,112 @@ class TestOrchestratorDiscoverDashboardQueries:
     async def test_max_dashboards_limit(self):
         """最大ダッシュボード数の制限."""
         env = EnvironmentContext(
-            available_dashboards=[
-                DashboardInfo(uid=str(i), title=f"Dashboard {i}")
-                for i in range(10)
-            ],
+            available_dashboards=[DashboardInfo(uid=str(i), title=f"Dashboard {i}") for i in range(10)],
         )
 
         mock_grafana = AsyncMock()
-        mock_grafana.get_dashboard_panel_queries = AsyncMock(return_value={
-            "content": [{"type": "text", "text": "[]"}],
-        })
-
-        await self.agent._discover_dashboard_queries(
-            mock_grafana, env, max_dashboards=3
+        mock_grafana.get_dashboard_panel_queries = AsyncMock(
+            return_value={
+                "content": [{"type": "text", "text": "[]"}],
+            }
         )
+
+        await self.agent._discover_dashboard_queries(mock_grafana, env, max_dashboards=3)
 
         # 最大3つまで探索
         assert len(env.explored_dashboard_uids) == 3
+
+
+# ================================================================
+# Orchestrator refresh_health テスト
+# ================================================================
+
+
+class TestOrchestratorRefreshHealth:
+    """OrchestratorAgent.refresh_health のテスト."""
+
+    def _make_registry(
+        self,
+        *,
+        prometheus_healthy: bool = True,
+        loki_healthy: bool = True,
+        grafana_healthy: bool = True,
+    ) -> MagicMock:
+        """指定した健全性でモックToolRegistryを生成."""
+        mock_mcp = _make_mock_mcp()
+        registry = MagicMock(spec=ToolRegistry)
+        registry.prometheus = MCPConnection(name="prometheus", client=mock_mcp, healthy=prometheus_healthy)
+        registry.loki = MCPConnection(name="loki", client=mock_mcp, healthy=loki_healthy)
+        registry.grafana = MCPConnection(name="grafana", client=mock_mcp, healthy=grafana_healthy)
+        return registry
+
+    def test_all_healthy(self):
+        """全MCPが健全な場合、全サブエージェントが生成される."""
+        llm = MagicMock()
+        llm.bind_tools = MagicMock(return_value=llm)
+        registry = self._make_registry()
+        agent = OrchestratorAgent(llm=llm, registry=registry)
+
+        new_registry = self._make_registry()
+        result = agent.refresh_health(new_registry)
+
+        assert result == {"prometheus": True, "loki": True, "grafana": True}
+        assert agent.metrics_agent is not None
+        assert agent.logs_agent is not None
+        assert agent.grafana_mcp is not None
+
+    def test_loki_down_logs_agent_none(self):
+        """LokiダウンでGrafanaも無い場合、LogsAgentがNoneになる."""
+        llm = MagicMock()
+        llm.bind_tools = MagicMock(return_value=llm)
+        registry = self._make_registry()
+        agent = OrchestratorAgent(llm=llm, registry=registry)
+
+        # Lokiダウン + Grafanaもダウン（LogsAgentはどちらかが必要）
+        down_registry = self._make_registry(loki_healthy=False, grafana_healthy=False)
+        result = agent.refresh_health(down_registry)
+
+        assert result["loki"] is False
+        assert result["grafana"] is False
+        assert agent.logs_agent is None
+
+    def test_all_mcp_down_no_crash(self):
+        """全MCPダウンでもクラッシュしない."""
+        llm = MagicMock()
+        llm.bind_tools = MagicMock(return_value=llm)
+        registry = self._make_registry()
+        agent = OrchestratorAgent(llm=llm, registry=registry)
+
+        down_registry = self._make_registry(
+            prometheus_healthy=False,
+            loki_healthy=False,
+            grafana_healthy=False,
+        )
+        result = agent.refresh_health(down_registry)
+
+        assert result == {"prometheus": False, "loki": False, "grafana": False}
+        assert agent.metrics_agent is None
+        assert agent.logs_agent is None
+        assert agent.grafana_mcp is None
+        # グラフはcompileできる（直接evaluate_resultsに遷移）
+        compiled = agent.compile()
+        assert compiled is not None
+
+    def test_refresh_rebuilds_graph(self):
+        """refresh_healthがグラフを実際に再構築する."""
+        llm = MagicMock()
+        llm.bind_tools = MagicMock(return_value=llm)
+        registry = self._make_registry()
+        agent = OrchestratorAgent(llm=llm, registry=registry)
+
+        # 初期状態: MetricsAgent有り
+        assert agent.metrics_agent is not None
+        graph_before = agent.graph
+
+        # Prometheusダウン + Grafanaもダウン → MetricsAgent消滅
+        down_registry = self._make_registry(prometheus_healthy=False, grafana_healthy=False)
+        agent.refresh_health(down_registry)
+
+        assert agent.metrics_agent is None
+        # グラフが再構築された（異なるオブジェクト）
+        assert agent.graph is not graph_before

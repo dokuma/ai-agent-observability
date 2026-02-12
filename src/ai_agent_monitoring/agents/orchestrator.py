@@ -47,17 +47,17 @@ if TYPE_CHECKING:
 # Langfuse observe デコレータ（未インストール時はno-op）
 try:
     from langfuse import observe as _observe
+
     _LANGFUSE_OBSERVE_AVAILABLE = True
 except ImportError:
     _LANGFUSE_OBSERVE_AVAILABLE = False
 
-    def _observe(
-        func: Any = None, **kwargs: Any
-    ) -> Any:
+    def _observe(func: Any = None, **kwargs: Any) -> Any:
         """No-op fallback when langfuse is not installed."""
         if func is not None:
             return func
         return lambda f: f
+
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +87,16 @@ class OrchestratorAgent:
         # 時刻ツールは常に利用可能
         self.time_tools = create_time_tools()
 
+        # クエリバリデータ
+        self.query_validator = QueryValidator()
+
+        # サブエージェント生成+グラフ構築
+        self._rebuild_agents_and_graph()
+
+    def _rebuild_agents_and_graph(self) -> None:
+        """registryの健全性に基づきサブエージェントとグラフを再構築."""
+        registry = self.registry
+
         # 各Agentはregistryから健全なMCPクライアントを使用
         # Grafana優先で、unhealthyなMCPはスキップ
         self.grafana_mcp = registry.grafana.client if registry.grafana.healthy else None
@@ -96,34 +106,45 @@ class OrchestratorAgent:
         # Grafana MCP Toolクラス（環境発見用）
         self.grafana_tool = GrafanaMCPTool(self.grafana_mcp) if self.grafana_mcp else None
 
-        self.metrics_agent = MetricsAgent(
-            llm,
-            prometheus_mcp=prometheus_mcp,
-            grafana_mcp=self.grafana_mcp,
-        ) if prometheus_mcp or self.grafana_mcp else None
+        self.metrics_agent = (
+            MetricsAgent(
+                self.llm,
+                prometheus_mcp=prometheus_mcp,
+                grafana_mcp=self.grafana_mcp,
+            )
+            if prometheus_mcp or self.grafana_mcp
+            else None
+        )
 
-        self.logs_agent = LogsAgent(
-            llm,
-            loki_mcp=loki_mcp,
-            grafana_mcp=self.grafana_mcp,
-        ) if loki_mcp or self.grafana_mcp else None
+        self.logs_agent = (
+            LogsAgent(
+                self.llm,
+                loki_mcp=loki_mcp,
+                grafana_mcp=self.grafana_mcp,
+            )
+            if loki_mcp or self.grafana_mcp
+            else None
+        )
 
-        self.rca_agent = RCAAgent(llm, grafana_mcp=self.grafana_mcp)
+        self.rca_agent = RCAAgent(self.llm, grafana_mcp=self.grafana_mcp)
 
         # サブエージェントの compile() 結果をキャッシュ
-        # StateGraph.compile() は比較的重い処理のため、初回のみ実行して再利用する
         self._compiled_metrics: Pregel[Any] | None = (
             self.metrics_agent.compile() if self.metrics_agent is not None else None
         )
-        self._compiled_logs: Pregel[Any] | None = (
-            self.logs_agent.compile() if self.logs_agent is not None else None
-        )
+        self._compiled_logs: Pregel[Any] | None = self.logs_agent.compile() if self.logs_agent is not None else None
         self._compiled_rca: Pregel[Any] = self.rca_agent.compile()
 
-        # クエリバリデータ
-        self.query_validator = QueryValidator()
-
         self.graph = self._build_graph()
+
+    def refresh_health(self, registry: ToolRegistry) -> dict[str, bool]:
+        """registryを更新しグラフを再構築、各MCPの健全性を返す.
+
+        調査実行前に呼び出し、MCPの状態変化をグラフ構造に反映する。
+        """
+        self.registry = registry
+        self._rebuild_agents_and_graph()
+        return {conn.name: conn.healthy for conn in [registry.prometheus, registry.loki, registry.grafana]}
 
     def _update_stage(self, state: AgentState, stage: str) -> None:
         """調査ステージを更新."""
@@ -140,10 +161,12 @@ class OrchestratorAgent:
         LangGraphの config（LangfuseCallbackHandler含む）を
         サブグラフに伝播させる。
         """
+
         async def wrapped(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
             self._update_stage(state, stage_name)
             result: dict[str, Any] = await subgraph.ainvoke(state, config=config)
             return result
+
         return wrapped
 
     def _build_graph(self) -> StateGraph[AgentState]:
@@ -186,20 +209,26 @@ class OrchestratorAgent:
         compiled_logs = self._compiled_logs
 
         if compiled_metrics is not None:
-            graph.add_node("investigate_metrics", self._wrap_with_stage(
-                compiled_metrics,
-                "メトリクスを調査中",
-            ))
+            graph.add_node(
+                "investigate_metrics",
+                self._wrap_with_stage(
+                    compiled_metrics,
+                    "メトリクスを調査中",
+                ),
+            )
             graph.add_edge("resolve_time_range", "investigate_metrics")
             graph.add_edge("investigate_metrics", "evaluate_results")
         else:
             logger.warning("MetricsAgent unavailable, skipping metrics investigation")
 
         if compiled_logs is not None:
-            graph.add_node("investigate_logs", self._wrap_with_stage(
-                compiled_logs,
-                "ログを調査中",
-            ))
+            graph.add_node(
+                "investigate_logs",
+                self._wrap_with_stage(
+                    compiled_logs,
+                    "ログを調査中",
+                ),
+            )
             graph.add_edge("resolve_time_range", "investigate_logs")
             graph.add_edge("investigate_logs", "evaluate_results")
         else:
@@ -218,10 +247,13 @@ class OrchestratorAgent:
         )
 
         # RCA Agentをステージ更新でラップ（キャッシュ済みコンパイル結果を使用）
-        graph.add_node("generate_rca", self._wrap_with_stage(
-            self._compiled_rca,
-            "RCAレポートを生成中",
-        ))
+        graph.add_node(
+            "generate_rca",
+            self._wrap_with_stage(
+                self._compiled_rca,
+                "RCAレポートを生成中",
+            ),
+        )
         graph.add_edge("generate_rca", END)
 
         return graph
@@ -285,11 +317,13 @@ class OrchestratorAgent:
         else:
             alert = state.get("alert")
             if alert:
-                input_text = " ".join([
-                    alert.alert_name or "",
-                    alert.summary or "",
-                    alert.description or "",
-                ]).lower()
+                input_text = " ".join(
+                    [
+                        alert.alert_name or "",
+                        alert.summary or "",
+                        alert.description or "",
+                    ]
+                ).lower()
 
         # キーワードマッチング
         for key, values in keyword_map.items():
@@ -298,6 +332,7 @@ class OrchestratorAgent:
 
         # 入力テキストから直接抽出（英数字の単語）
         import re
+
         words = re.findall(r"[a-zA-Z]{3,}", input_text)
         for word in words:
             if len(word) >= 3:
@@ -649,14 +684,8 @@ class OrchestratorAgent:
 
             # クエリが見つかったら、例としてEnvironmentContextに設定
             if found and not env.example_promql_queries:
-                promql = [
-                    q.query for q in env.discovered_panel_queries
-                    if q.query_type == "promql"
-                ]
-                logql = [
-                    q.query for q in env.discovered_panel_queries
-                    if q.query_type == "logql"
-                ]
+                promql = [q.query for q in env.discovered_panel_queries if q.query_type == "promql"]
+                logql = [q.query for q in env.discovered_panel_queries if q.query_type == "logql"]
                 env.example_promql_queries = promql[:5]
                 env.example_logql_queries = logql[:5]
 
@@ -810,15 +839,11 @@ class OrchestratorAgent:
         if env.prometheus_datasource_uid:
             lines.append(f"  - Prometheus: `{env.prometheus_datasource_uid}`")
         else:
-            lines.append(
-                "  - Prometheus: (grafana_list_datasources で取得してください)"
-            )
+            lines.append("  - Prometheus: (grafana_list_datasources で取得してください)")
         if env.loki_datasource_uid:
             lines.append(f"  - Loki: `{env.loki_datasource_uid}`")
         else:
-            lines.append(
-                "  - Loki: (grafana_list_datasources で取得してください)"
-            )
+            lines.append("  - Loki: (grafana_list_datasources で取得してください)")
 
         # Prometheusメトリクス情報
         if env.available_metrics:
@@ -905,28 +930,21 @@ class OrchestratorAgent:
             if feedback.additional_investigation_points:
                 feedback_sections.append(
                     "## 追加で調査すべき観点\n"
-                    + "\n".join(
-                        f"- {point}" for point in feedback.additional_investigation_points
-                    )
+                    + "\n".join(f"- {point}" for point in feedback.additional_investigation_points)
                 )
 
             if feedback.previous_queries_attempted:
                 feedback_sections.append(
                     "## 前回試行済みのクエリ（同じクエリは避けてください）\n"
-                    + "\n".join(
-                        f"- `{q}`" for q in feedback.previous_queries_attempted
-                    )
+                    + "\n".join(f"- `{q}`" for q in feedback.previous_queries_attempted)
                 )
 
             if feedback.reasoning:
-                feedback_sections.append(
-                    f"## 前回の評価理由\n{feedback.reasoning}"
-                )
+                feedback_sections.append(f"## 前回の評価理由\n{feedback.reasoning}")
 
             if feedback_sections:
                 plan_prompt = (
-                    "\n\n".join(feedback_sections)
-                    + "\n\n上記のフィードバックを踏まえ、前回とは異なるアプローチで"
+                    "\n\n".join(feedback_sections) + "\n\n上記のフィードバックを踏まえ、前回とは異なるアプローチで"
                     "調査計画をJSON形式で出力してください。\n"
                     "promql_queries, logql_queries, target_instances, time_range を含めてください。\n"
                     "time_rangeは必ずISO 8601絶対時刻のstart/endで指定してください。"
@@ -1010,9 +1028,7 @@ class OrchestratorAgent:
         # PromQLの検証
         for query in plan.promql_queries:
             # サニタイズ（二重ブレース、Grafana変数）
-            sanitized, warnings = self.query_validator.sanitize_query(
-                query, QueryType.PROMQL
-            )
+            sanitized, warnings = self.query_validator.sanitize_query(query, QueryType.PROMQL)
             for w in warnings:
                 logger.warning("PromQL sanitize warning: %s - %s", query, w)
 
@@ -1026,30 +1042,19 @@ class OrchestratorAgent:
                 corrected_promql.append(sanitized)
             elif result.corrected_query:
                 # 修正されたクエリを再検証
-                revalidated = self.query_validator.validate_promql(
-                    result.corrected_query
-                )
+                revalidated = self.query_validator.validate_promql(result.corrected_query)
                 if revalidated.is_valid:
                     corrected_promql.append(result.corrected_query)
-                    logger.info(
-                        "PromQL auto-corrected: %s -> %s",
-                        query, result.corrected_query
-                    )
+                    logger.info("PromQL auto-corrected: %s -> %s", query, result.corrected_query)
                 else:
-                    validation_errors.append(
-                        f"PromQL: {query} - {', '.join(result.errors or [])}"
-                    )
+                    validation_errors.append(f"PromQL: {query} - {', '.join(result.errors or [])}")
             else:
-                validation_errors.append(
-                    f"PromQL: {query} - {', '.join(result.errors or [])}"
-                )
+                validation_errors.append(f"PromQL: {query} - {', '.join(result.errors or [])}")
 
         # LogQLの検証
         for query in plan.logql_queries:
             # サニタイズ（二重ブレース、Grafana変数）
-            sanitized, warnings = self.query_validator.sanitize_query(
-                query, QueryType.LOGQL
-            )
+            sanitized, warnings = self.query_validator.sanitize_query(query, QueryType.LOGQL)
             for w in warnings:
                 logger.warning("LogQL sanitize warning: %s - %s", query, w)
 
@@ -1063,41 +1068,28 @@ class OrchestratorAgent:
                 corrected_logql.append(sanitized)
             elif result.corrected_query:
                 # 修正されたクエリを再検証
-                revalidated = self.query_validator.validate_logql(
-                    result.corrected_query
-                )
+                revalidated = self.query_validator.validate_logql(result.corrected_query)
                 if revalidated.is_valid:
                     corrected_logql.append(result.corrected_query)
-                    logger.info(
-                        "LogQL auto-corrected: %s -> %s",
-                        query, result.corrected_query
-                    )
+                    logger.info("LogQL auto-corrected: %s -> %s", query, result.corrected_query)
                 else:
-                    validation_errors.append(
-                        f"LogQL: {query} - {', '.join(result.errors or [])}"
-                    )
+                    validation_errors.append(f"LogQL: {query} - {', '.join(result.errors or [])}")
             else:
-                validation_errors.append(
-                    f"LogQL: {query} - {', '.join(result.errors or [])}"
-                )
+                validation_errors.append(f"LogQL: {query} - {', '.join(result.errors or [])}")
 
         # エラーがあればLLMに再生成を依頼
         if validation_errors:
             logger.warning("Query validation errors: %s", validation_errors)
 
             # RAGから関連ドキュメントを取得
-            error_keywords = " ".join(
-                q.split(":")[0] for q in validation_errors
-            )
+            error_keywords = " ".join(q.split(":")[0] for q in validation_errors)
             rag_context = self._get_rag_context(error_keywords, max_tokens=1000)
 
             # Few-shot例を含めて再生成を依頼
             fewshot = get_all_fewshot_examples()
             error_msg = "\n".join(validation_errors)
 
-            retry_content = (
-                f"生成されたクエリに文法エラーがありました:\n{error_msg}\n\n"
-            )
+            retry_content = f"生成されたクエリに文法エラーがありました:\n{error_msg}\n\n"
             if rag_context:
                 retry_content += f"参考ドキュメント:\n{rag_context}\n\n"
             retry_content += (
@@ -1286,9 +1278,7 @@ class OrchestratorAgent:
 
         # INSUFFICIENTの場合、構造化されたフィードバックを抽出してstateに保存
         if not is_complete:
-            feedback = self._parse_evaluation_feedback(
-                response.content, previous_queries
-            )
+            feedback = self._parse_evaluation_feedback(response.content, previous_queries)
             result["evaluation_feedback"] = feedback
             logger.info(
                 "Evaluation: INSUFFICIENT - missing=%s, additional_points=%s",
@@ -1312,9 +1302,7 @@ class OrchestratorAgent:
             json_str = self._extract_json(content)
             data = json.loads(json_str)
             feedback.missing_information = data.get("missing_information", [])
-            feedback.additional_investigation_points = data.get(
-                "additional_investigation_points", []
-            )
+            feedback.additional_investigation_points = data.get("additional_investigation_points", [])
             feedback.reasoning = data.get("reasoning", "")
         except (ValueError, json.JSONDecodeError):
             # JSONパースに失敗した場合、テキスト全体をreasoningとして保持

@@ -8,6 +8,7 @@ from ai_agent_monitoring.core.models import RootCause
 
 # ---- AlertManager Webhook ----
 
+
 class AlertManagerAlert(BaseModel):
     """AlertManager Webhook のアラート形式."""
 
@@ -31,6 +32,7 @@ class AlertManagerWebhookPayload(BaseModel):
 
 # ---- ユーザクエリ ----
 
+
 class UserQueryRequest(BaseModel):
     """ユーザ自然言語クエリのリクエスト."""
 
@@ -51,6 +53,7 @@ class UserQueryResponse(BaseModel):
 
 # ---- 調査ステータス ----
 
+
 class InvestigationStatus(BaseModel):
     """調査の進捗状態."""
 
@@ -62,9 +65,11 @@ class InvestigationStatus(BaseModel):
     error: str = ""  # 失敗時のエラーメッセージ
     created_at: datetime
     completed_at: datetime | None = None
+    mcp_status: dict[str, bool] = Field(default_factory=dict)
 
 
 # ---- RCAレポート ----
+
 
 class RCAReportResponse(BaseModel):
     """RCAレポートのAPIレスポンス."""
@@ -80,6 +85,7 @@ class RCAReportResponse(BaseModel):
 
 
 # ---- ヘルスチェック ----
+
 
 class HealthResponse(BaseModel):
     """ヘルスチェックレスポンス."""
