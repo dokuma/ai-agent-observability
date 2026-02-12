@@ -6,7 +6,7 @@ import json
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
@@ -164,7 +164,7 @@ class OrchestratorAgent:
 
         async def wrapped(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
             self._update_stage(state, stage_name)
-            result: dict[str, Any] = await subgraph.ainvoke(dict(state), config=config)
+            result: dict[str, Any] = await subgraph.ainvoke(cast(Any, state), config=config)
             return result
 
         return wrapped
