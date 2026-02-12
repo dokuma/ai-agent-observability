@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import ssl
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, AsyncGenerator, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import httpx
 from mcp import types
@@ -21,6 +22,21 @@ from tenacity import (
 
 if TYPE_CHECKING:
     pass
+
+# Langfuse observe デコレータ（未インストール時はno-op）
+try:
+    from langfuse import observe as _observe
+    _LANGFUSE_OBSERVE_AVAILABLE = True
+except ImportError:
+    _LANGFUSE_OBSERVE_AVAILABLE = False
+
+    def _observe(
+        func: Any = None, **kwargs: Any
+    ) -> Any:
+        """No-op fallback when langfuse is not installed."""
+        if func is not None:
+            return func
+        return lambda f: f
 
 logger = logging.getLogger(__name__)
 
@@ -142,7 +158,7 @@ class MCPClient:
                         init_result.serverInfo.version,
                     )
                     yield session
-        except (TimeoutError, asyncio.TimeoutError) as e:
+        except TimeoutError as e:
             logger.error("MCP connection timed out: %s (url=%s)", e, self.sse_url)
             raise MCPTimeoutError(
                 f"MCP server connection timed out: {self.sse_url}"
@@ -171,8 +187,9 @@ class MCPClient:
         async with self.session() as session:
             yield session
 
+    @_observe(name="mcp_call_tool", as_type="tool")
     @retry(
-        retry=retry_if_exception_type(_RETRYABLE_EXCEPTIONS + (MCPConnectionError,)),
+        retry=retry_if_exception_type((*_RETRYABLE_EXCEPTIONS, MCPConnectionError)),
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=1, max=10),
         reraise=True,
@@ -212,6 +229,7 @@ class MCPClient:
             result = await session.call_tool(tool_name, arguments or {})
             return self._extract_result(result)
 
+    @_observe(name="mcp_call_tool_with_session", as_type="tool")
     async def call_tool_with_session(
         self,
         session: ClientSession,
@@ -318,6 +336,7 @@ class BaseMCPTool:
             finally:
                 self._current_session = None
 
+    @_observe(name="mcp_base_call_tool", as_type="tool")
     async def _call_tool(self, tool_name: str, params: dict[str, Any]) -> dict[str, Any]:
         """ツールを呼び出す（セッション再利用対応）.
 
@@ -378,7 +397,7 @@ class MCPSessionManager:
             yield session
 
     @asynccontextmanager
-    async def connect_all(self) -> AsyncGenerator["MCPSessionManager", None]:
+    async def connect_all(self) -> AsyncGenerator[MCPSessionManager, None]:
         """全クライアントに接続してセッションを確立.
 
         注意: 現在の実装では各呼び出しで個別にセッションを作成する。

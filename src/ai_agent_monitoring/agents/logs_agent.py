@@ -14,6 +14,18 @@ from ai_agent_monitoring.tools.base import MCPClient
 from ai_agent_monitoring.tools.grafana import create_grafana_tools
 from ai_agent_monitoring.tools.loki import create_loki_tools
 
+# Langfuse observe デコレータ（未インストール時はno-op）
+try:
+    from langfuse import observe as _observe
+except ImportError:
+    def _observe(
+        func: Any = None, **kwargs: Any
+    ) -> Any:
+        """No-op fallback when langfuse is not installed."""
+        if func is not None:
+            return func
+        return lambda f: f
+
 logger = logging.getLogger(__name__)
 
 
@@ -73,6 +85,7 @@ class LogsAgent:
         """グラフをコンパイル."""
         return self.graph.compile()
 
+    @_observe(name="logs_agent_reason", as_type="span")
     async def _reason(self, state: AgentState) -> dict[str, Any]:
         """ReActループ: 思考し、必要ならToolを呼び出す."""
         plan = state.get("plan")
@@ -129,6 +142,7 @@ class LogsAgent:
         response = await self.llm.ainvoke(messages)
         return {"messages": [response]}
 
+    @_observe(name="logs_agent_summarize", as_type="span")
     async def _summarize(self, state: AgentState) -> dict[str, Any]:
         """Tool実行結果をサマリとしてLogsResultに変換."""
         messages = [

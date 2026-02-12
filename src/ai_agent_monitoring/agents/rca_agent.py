@@ -20,6 +20,18 @@ from ai_agent_monitoring.core.state import AgentState
 from ai_agent_monitoring.tools.base import MCPClient
 from ai_agent_monitoring.tools.grafana import GrafanaMCPTool
 
+# Langfuse observe デコレータ（未インストール時はno-op）
+try:
+    from langfuse import observe as _observe
+except ImportError:
+    def _observe(
+        func: Any = None, **kwargs: Any
+    ) -> Any:
+        """No-op fallback when langfuse is not installed."""
+        if func is not None:
+            return func
+        return lambda f: f
+
 logger = logging.getLogger(__name__)
 
 
@@ -35,7 +47,7 @@ class RCAAgent:
         self,
         llm: Any,
         grafana_mcp: MCPClient | None = None,
-        output_dir: str = "/tmp/rca_reports",
+        output_dir: str = "/tmp/rca_reports",  # noqa: S108
     ) -> None:
         self.llm = llm
         self.grafana = GrafanaMCPTool(grafana_mcp) if grafana_mcp else None
@@ -64,6 +76,7 @@ class RCAAgent:
         """グラフをコンパイル."""
         return self.graph.compile()
 
+    @_observe(name="rca_correlate", as_type="span")
     async def _correlate(self, state: AgentState) -> dict[str, Any]:
         """メトリクスとログの相関分析."""
         evidence_parts = []
@@ -105,6 +118,7 @@ class RCAAgent:
 
         return {"messages": [response]}
 
+    @_observe(name="rca_reason", as_type="span")
     async def _reason(self, state: AgentState) -> dict[str, Any]:
         """根本原因の推論."""
         messages = [
@@ -123,6 +137,7 @@ class RCAAgent:
 
         return {"messages": [response]}
 
+    @_observe(name="rca_generate_report", as_type="span")
     async def _generate_report(self, state: AgentState) -> dict[str, Any]:
         """RCAレポートのJSON構造を生成."""
         messages = [
@@ -148,6 +163,7 @@ class RCAAgent:
             "rca_report": report,
         }
 
+    @_observe(name="rca_collect_evidence", as_type="span")
     async def _collect_evidence(self, state: AgentState) -> dict[str, Any]:
         """レポート用のグラフ画像とログ抜粋を収集."""
         report = state.get("rca_report")

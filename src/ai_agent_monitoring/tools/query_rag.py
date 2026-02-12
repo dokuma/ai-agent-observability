@@ -10,7 +10,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ class Document:
 
     def __post_init__(self) -> None:
         if not self.doc_id:
-            self.doc_id = hashlib.md5(self.content.encode()).hexdigest()[:12]
+            self.doc_id = hashlib.md5(self.content.encode(), usedforsecurity=False).hexdigest()[:12]
 
 
 @dataclass
@@ -41,7 +41,7 @@ class SimpleTokenizer:
     """シンプルなトークナイザー."""
 
     # 日本語と英語の両方に対応
-    STOP_WORDS = {
+    STOP_WORDS: ClassVar[set[str]] = {
         "the", "a", "an", "is", "are", "was", "were", "be", "been",
         "being", "have", "has", "had", "do", "does", "did", "will",
         "would", "could", "should", "may", "might", "must", "shall",

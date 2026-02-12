@@ -196,7 +196,7 @@ async def _run_alert_investigation(inv_id: str, alert: Alert) -> None:
             rca_report = result.get("rca_report")
             app_state.complete_investigation(inv_id, rca_report=rca_report)
             logger.info("Investigation completed: %s", inv_id)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("Investigation timed out after %ds: %s", timeout, inv_id)
             task.cancel()
             try:
@@ -246,7 +246,7 @@ async def _run_user_query_investigation(inv_id: str, user_query: UserQuery) -> N
             rca_report = result.get("rca_report")
             app_state.complete_investigation(inv_id, rca_report=rca_report)
             logger.info("Investigation completed: %s", inv_id)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("Investigation timed out after %ds: %s", timeout, inv_id)
             task.cancel()
             try:

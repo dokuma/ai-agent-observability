@@ -1,7 +1,7 @@
 """agents のテスト."""
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -322,8 +322,8 @@ class TestOrchestratorResolveTimeRangeNode:
 
     @pytest.mark.asyncio
     async def test_user_query_with_time_range(self):
-        start = datetime(2026, 2, 1, 16, 0, 0, tzinfo=timezone.utc)
-        end = datetime(2026, 2, 1, 17, 0, 0, tzinfo=timezone.utc)
+        start = datetime(2026, 2, 1, 16, 0, 0, tzinfo=UTC)
+        end = datetime(2026, 2, 1, 17, 0, 0, tzinfo=UTC)
         uq = UserQuery(raw_input="テスト", time_range_start=start, time_range_end=end)
         plan = InvestigationPlan(promql_queries=["up"], time_range=None)
         state = AgentState(
@@ -338,7 +338,7 @@ class TestOrchestratorResolveTimeRangeNode:
 
     @pytest.mark.asyncio
     async def test_user_query_start_only(self):
-        start = datetime(2026, 2, 1, 16, 0, 0, tzinfo=timezone.utc)
+        start = datetime(2026, 2, 1, 16, 0, 0, tzinfo=UTC)
         uq = UserQuery(raw_input="テスト", time_range_start=start)
         plan = InvestigationPlan(promql_queries=["up"], time_range=None)
         state = AgentState(
@@ -544,8 +544,8 @@ class TestOrchestratorStageUpdate:
 
         # コールバックが呼ばれた
         callback.assert_called_once_with("test-inv-456", "ラップテスト", 0)
-        # サブグラフが実行された
-        mock_subgraph.ainvoke.assert_called_once_with(state)
+        # サブグラフが実行された（config伝播あり）
+        mock_subgraph.ainvoke.assert_called_once_with(state, config=None)
         # 結果が返された
         assert result == {"test_result": "ok"}
 
@@ -981,7 +981,7 @@ class TestLogsAgentReason:
         await self.agent._reason(state)
 
         call_messages = self.agent.llm.ainvoke.call_args[0][0]
-        human_msg = [m for m in call_messages if isinstance(m, HumanMessage)][0]
+        human_msg = next(m for m in call_messages if isinstance(m, HumanMessage))
         assert "2026-02-01" in human_msg.content
 
 
@@ -1100,7 +1100,7 @@ class TestRCAAgentCorrelate:
 
         assert "messages" in result
         call_messages = self.llm.ainvoke.call_args[0][0]
-        human = [m for m in call_messages if isinstance(m, HumanMessage)][0]
+        human = next(m for m in call_messages if isinstance(m, HumanMessage))
         assert "HighCPUUsage" in human.content
         assert "メトリクス分析結果" in human.content
         assert "ログ分析結果" in human.content
@@ -1119,7 +1119,7 @@ class TestRCAAgentCorrelate:
         await self.agent._correlate(state)
 
         call_messages = self.llm.ainvoke.call_args[0][0]
-        human = [m for m in call_messages if isinstance(m, HumanMessage)][0]
+        human = next(m for m in call_messages if isinstance(m, HumanMessage))
         assert "ユーザ問い合わせ" in human.content
 
     @pytest.mark.asyncio
@@ -1132,7 +1132,7 @@ class TestRCAAgentCorrelate:
         await self.agent._correlate(state)
 
         call_messages = self.llm.ainvoke.call_args[0][0]
-        human = [m for m in call_messages if isinstance(m, HumanMessage)][0]
+        human = next(m for m in call_messages if isinstance(m, HumanMessage))
         assert "調査結果なし" in human.content
 
 
@@ -1151,7 +1151,7 @@ class TestRCAAgentReason:
 
         assert "messages" in result
         call_messages = self.llm.ainvoke.call_args[0][0]
-        human = [m for m in call_messages if isinstance(m, HumanMessage)][0]
+        human = next(m for m in call_messages if isinstance(m, HumanMessage))
         assert "根本原因の候補" in human.content
 
 
@@ -1231,7 +1231,7 @@ class TestRCAAgentCollectLogExcerpts:
         """20件を超えるエントリは切り捨て."""
         entries = [
             LogEntry(
-                timestamp=datetime(2026, 2, 1, 16, 0, i, tzinfo=timezone.utc),
+                timestamp=datetime(2026, 2, 1, 16, 0, i, tzinfo=UTC),
                 level="error",
                 message=f"error {i}",
             )
@@ -1380,7 +1380,7 @@ class TestOrchestratorExtractInvestigationKeywords:
                 instance="server1",
                 summary="CPU usage above 90%",
                 description="High CPU detected on production server",
-                starts_at=datetime.now(timezone.utc),
+                starts_at=datetime.now(UTC),
             ),
         )
         keywords = self.agent._extract_investigation_keywords(state)

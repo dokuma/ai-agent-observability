@@ -1,6 +1,6 @@
 """tools のテスト."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -80,8 +80,8 @@ class TestPrometheusMCPTool:
     @pytest.mark.asyncio
     async def test_range_query(self, mock_mcp_client):
         prom = PrometheusMCPTool(mock_mcp_client)
-        start = datetime(2026, 2, 1, 15, 0, tzinfo=timezone.utc)
-        end = datetime(2026, 2, 1, 16, 0, tzinfo=timezone.utc)
+        start = datetime(2026, 2, 1, 15, 0, tzinfo=UTC)
+        end = datetime(2026, 2, 1, 16, 0, tzinfo=UTC)
 
         await prom.range_query("rate(cpu[5m])", start, end, "1m")
 
@@ -112,8 +112,8 @@ class TestLokiMCPTool:
     @pytest.mark.asyncio
     async def test_query_logs_with_time_range(self, mock_mcp_client):
         loki = LokiMCPTool(mock_mcp_client)
-        start = datetime(2026, 2, 1, 15, 0, tzinfo=timezone.utc)
-        end = datetime(2026, 2, 1, 16, 0, tzinfo=timezone.utc)
+        start = datetime(2026, 2, 1, 15, 0, tzinfo=UTC)
+        end = datetime(2026, 2, 1, 16, 0, tzinfo=UTC)
 
         await loki.query_logs('{job="myapp"}', start=start, end=end)
 
@@ -126,8 +126,8 @@ class TestLokiMCPTool:
     @pytest.mark.asyncio
     async def test_query_metrics(self, mock_mcp_client):
         loki = LokiMCPTool(mock_mcp_client)
-        start = datetime(2026, 2, 1, 15, 0, tzinfo=timezone.utc)
-        end = datetime(2026, 2, 1, 16, 0, tzinfo=timezone.utc)
+        start = datetime(2026, 2, 1, 15, 0, tzinfo=UTC)
+        end = datetime(2026, 2, 1, 16, 0, tzinfo=UTC)
 
         await loki.query_metrics('rate({job="myapp"}[5m])', start=start, end=end, step="1m")
 
@@ -140,8 +140,8 @@ class TestLokiMCPTool:
     @pytest.mark.asyncio
     async def test_find_error_patterns_with_time(self, mock_mcp_client):
         loki = LokiMCPTool(mock_mcp_client)
-        start = datetime(2026, 2, 1, 15, 0, tzinfo=timezone.utc)
-        end = datetime(2026, 2, 1, 16, 0, tzinfo=timezone.utc)
+        start = datetime(2026, 2, 1, 15, 0, tzinfo=UTC)
+        end = datetime(2026, 2, 1, 16, 0, tzinfo=UTC)
 
         await loki.find_error_patterns("myapp", start=start, end=end)
 
@@ -294,8 +294,8 @@ class TestGrafanaMCPTool:
     @pytest.mark.asyncio
     async def test_query_prometheus(self, mock_mcp_client):
         grafana = GrafanaMCPTool(mock_mcp_client)
-        start = datetime(2026, 2, 1, 15, 0, tzinfo=timezone.utc)
-        end = datetime(2026, 2, 1, 16, 0, tzinfo=timezone.utc)
+        start = datetime(2026, 2, 1, 15, 0, tzinfo=UTC)
+        end = datetime(2026, 2, 1, 16, 0, tzinfo=UTC)
 
         await grafana.query_prometheus(
             datasource_uid="prom-uid",
@@ -317,8 +317,8 @@ class TestGrafanaMCPTool:
     @pytest.mark.asyncio
     async def test_query_loki(self, mock_mcp_client):
         grafana = GrafanaMCPTool(mock_mcp_client)
-        start = datetime(2026, 2, 1, 15, 0, tzinfo=timezone.utc)
-        end = datetime(2026, 2, 1, 16, 0, tzinfo=timezone.utc)
+        start = datetime(2026, 2, 1, 15, 0, tzinfo=UTC)
+        end = datetime(2026, 2, 1, 16, 0, tzinfo=UTC)
 
         await grafana.query_loki(
             datasource_uid="loki-uid",
@@ -379,8 +379,8 @@ class TestGrafanaMCPTool:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=None)
 
-        start = datetime(2026, 2, 1, 15, 0, tzinfo=timezone.utc)
-        end = datetime(2026, 2, 1, 16, 0, tzinfo=timezone.utc)
+        start = datetime(2026, 2, 1, 15, 0, tzinfo=UTC)
+        end = datetime(2026, 2, 1, 16, 0, tzinfo=UTC)
 
         with patch("httpx.AsyncClient", return_value=mock_client):
             result = await grafana.render_panel_image(

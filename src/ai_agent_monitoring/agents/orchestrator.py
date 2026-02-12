@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, StateGraph
 from langgraph.types import interrupt
 
@@ -17,6 +19,7 @@ from ai_agent_monitoring.agents.prompts import ORCHESTRATOR_SYSTEM_PROMPT
 from ai_agent_monitoring.agents.rca_agent import RCAAgent
 from ai_agent_monitoring.core.config import Settings
 from ai_agent_monitoring.core.models import TriggerType
+from ai_agent_monitoring.core.sanitizer import sanitize_user_input
 from ai_agent_monitoring.core.state import (
     AgentState,
     DashboardInfo,
@@ -37,7 +40,24 @@ from ai_agent_monitoring.tools.registry import ToolRegistry
 from ai_agent_monitoring.tools.time import create_time_tools
 
 if TYPE_CHECKING:
+    from langgraph.pregel import Pregel
+
     from ai_agent_monitoring.tools.grafana import GrafanaMCPTool
+
+# Langfuse observe デコレータ（未インストール時はno-op）
+try:
+    from langfuse import observe as _observe
+    _LANGFUSE_OBSERVE_AVAILABLE = True
+except ImportError:
+    _LANGFUSE_OBSERVE_AVAILABLE = False
+
+    def _observe(
+        func: Any = None, **kwargs: Any
+    ) -> Any:
+        """No-op fallback when langfuse is not installed."""
+        if func is not None:
+            return func
+        return lambda f: f
 
 logger = logging.getLogger(__name__)
 
@@ -102,15 +122,17 @@ class OrchestratorAgent:
         if inv_id and self._stage_callback:
             self._stage_callback(inv_id, stage, iteration)
 
-    def _wrap_with_stage(self, subgraph: Any, stage_name: str) -> Any:
+    def _wrap_with_stage(self, subgraph: Pregel[Any], stage_name: str) -> Any:
         """サブグラフをステージ更新でラップ.
 
         サブグラフ（MetricsAgent, LogsAgent, RCAAgent）の実行前に
         ステージを更新するラッパー関数を返す。
+        LangGraphの config（LangfuseCallbackHandler含む）を
+        サブグラフに伝播させる。
         """
-        async def wrapped(state: AgentState) -> dict[str, Any]:
+        async def wrapped(state: AgentState, config: RunnableConfig | None = None) -> dict[str, Any]:
             self._update_stage(state, stage_name)
-            result: dict[str, Any] = await subgraph.ainvoke(state)
+            result: dict[str, Any] = await subgraph.ainvoke(state, config=config)
             return result
         return wrapped
 
@@ -121,6 +143,12 @@ class OrchestratorAgent:
         - Grafana MCP優先
         - unhealthyなMCPはスキップ
         - 最初に環境発見を行い、利用可能なメトリクス・ラベルを取得
+
+        並列実行:
+        resolve_time_range からの fan-out で investigate_metrics と
+        investigate_logs を並列実行し、evaluate_results で fan-in する。
+        LangGraphは1つのノードから複数のadd_edgeがある場合、
+        自動的に並列実行し、合流先ノードは全入力の到着を待つ。
         """
         graph = StateGraph(AgentState)
 
@@ -132,14 +160,18 @@ class OrchestratorAgent:
         graph.add_node("resolve_time_range", self._resolve_time_range_node)
         graph.add_node("evaluate_results", self._evaluate_results)
 
-        # エッジ定義
+        # エッジ定義（直列部分）
         graph.set_entry_point("discover_environment")
         graph.add_edge("discover_environment", "analyze_input")
         graph.add_edge("analyze_input", "plan_investigation")
         graph.add_edge("plan_investigation", "validate_queries")
         graph.add_edge("validate_queries", "resolve_time_range")
 
-        # Metrics/Logs Agentは利用可能な場合のみ追加
+        # 並列実行: resolve_time_range -> [investigate_metrics, investigate_logs] -> evaluate_results
+        # LangGraphのfan-out/fan-inパターンを活用:
+        # - fan-out: resolve_time_range から両方のサブエージェントに分岐
+        # - fan-in: 両方が完了後に evaluate_results に合流
+        # - 片方のみ利用可能な場合は、利用可能なAgentのみ実行される
         metrics_agent = self.metrics_agent
         logs_agent = self.logs_agent
 
@@ -263,6 +295,7 @@ class OrchestratorAgent:
 
         return list(keywords)
 
+    @_observe(name="discover_environment", as_type="span")
     async def _discover_environment(self, state: AgentState) -> dict[str, Any]:
         """環境情報を収集.
 
@@ -304,7 +337,7 @@ class OrchestratorAgent:
 
     async def _discover_datasources(
         self,
-        grafana: "GrafanaMCPTool",
+        grafana: GrafanaMCPTool,
         env: EnvironmentContext,
     ) -> None:
         """データソース一覧を取得."""
@@ -324,7 +357,7 @@ class OrchestratorAgent:
 
     async def _discover_prometheus_info(
         self,
-        grafana: "GrafanaMCPTool",
+        grafana: GrafanaMCPTool,
         env: EnvironmentContext,
     ) -> None:
         """Prometheusメトリクス・ラベル情報を取得."""
@@ -368,7 +401,7 @@ class OrchestratorAgent:
 
     async def _discover_loki_info(
         self,
-        grafana: "GrafanaMCPTool",
+        grafana: GrafanaMCPTool,
         env: EnvironmentContext,
     ) -> None:
         """Lokiラベル情報を取得."""
@@ -391,7 +424,7 @@ class OrchestratorAgent:
 
     async def _discover_dashboards(
         self,
-        grafana: "GrafanaMCPTool",
+        grafana: GrafanaMCPTool,
         env: EnvironmentContext,
     ) -> None:
         """ダッシュボード一覧を取得してEnvironmentContextに格納.
@@ -448,6 +481,7 @@ class OrchestratorAgent:
         # キーワード数で正規化
         return score / len(keywords) if keywords else 0.0
 
+    @_observe(name="rank_dashboards_by_keywords", as_type="span")
     def _rank_dashboards_by_keywords(
         self,
         dashboards: list[DashboardInfo],
@@ -466,7 +500,7 @@ class OrchestratorAgent:
 
     async def _discover_panel_queries_from_dashboard(
         self,
-        grafana: "GrafanaMCPTool",
+        grafana: GrafanaMCPTool,
         dashboard: DashboardInfo,
         env: EnvironmentContext,
     ) -> bool:
@@ -548,7 +582,7 @@ class OrchestratorAgent:
 
     async def _discover_dashboard_queries(
         self,
-        grafana: "GrafanaMCPTool",
+        grafana: GrafanaMCPTool,
         env: EnvironmentContext,
         keywords: list[str] | None = None,
         max_dashboards: int = 5,
@@ -683,6 +717,7 @@ class OrchestratorAgent:
             pass
         return promql_queries, logql_queries
 
+    @_observe(name="analyze_input", as_type="span")
     async def _analyze_input(self, state: AgentState) -> dict[str, Any]:
         """入力（アラートまたはユーザクエリ）を分析."""
         self._update_stage(state, "入力を分析中")
@@ -692,8 +727,9 @@ class OrchestratorAgent:
 
         if state["trigger_type"] == TriggerType.USER_QUERY and user_query is not None:
             query_text = user_query.raw_input
+            sanitized_input = sanitize_user_input(user_query.raw_input)
             content = (
-                f"ユーザからの問い合わせ:\n{user_query.raw_input}\n\n"
+                f"ユーザからの問い合わせ:\n{sanitized_input}\n\n"
                 "この問い合わせ内容を分析し、何を調査すべきか整理してください。"
             )
         else:
@@ -713,7 +749,7 @@ class OrchestratorAgent:
                 content = "入力が不正です。アラートまたはユーザクエリが必要です。"
 
         # 現在時刻を取得してプロンプトに注入
-        current_time = datetime.now(timezone.utc).isoformat()
+        current_time = datetime.now(UTC).isoformat()
 
         # 環境コンテキストをフォーマット
         env = state.get("environment")
@@ -827,6 +863,7 @@ class OrchestratorAgent:
 
         return "\n".join(lines)
 
+    @_observe(name="plan_investigation", as_type="span")
     async def _plan_investigation(self, state: AgentState) -> dict[str, Any]:
         """調査計画を策定.
 
@@ -907,6 +944,7 @@ class OrchestratorAgent:
             "iteration_count": state.get("iteration_count", 0) + 1,
         }
 
+    @_observe(name="validate_queries", as_type="span")
     async def _validate_queries(self, state: AgentState) -> dict[str, Any]:
         """生成されたクエリを検証し、必要に応じて修正.
 
@@ -1174,7 +1212,7 @@ class OrchestratorAgent:
             )
         except (json.JSONDecodeError, ValueError, KeyError):
             # パース失敗時は最終フォールバック
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             logger.warning("ユーザ回答のパースに失敗。直近1時間をフォールバックとして使用。")
             plan.time_range = TimeRange(start=now - timedelta(hours=1), end=now)
 
@@ -1183,6 +1221,7 @@ class OrchestratorAgent:
             "plan": plan,
         }
 
+    @_observe(name="evaluate_results", as_type="span")
     async def _evaluate_results(self, state: AgentState) -> dict[str, Any]:
         """調査結果を評価し、追加調査が必要か判断.
 

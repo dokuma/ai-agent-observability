@@ -6,6 +6,7 @@ LLMが生成したクエリの文法チェックと修正提案を行う。
 import re
 from dataclasses import dataclass
 from enum import Enum
+from typing import ClassVar
 
 
 class QueryType(Enum):
@@ -36,7 +37,7 @@ class QueryValidator:
     """PromQL/LogQLクエリのバリデータ."""
 
     # SQLパターン（LogQL/PromQLでは使わない）
-    SQL_PATTERNS = [
+    SQL_PATTERNS: ClassVar[list[tuple[str, str]]] = [
         (r"\bAND\b", "AND"),
         (r"\bOR\b", "OR"),
         (r"\bSELECT\b", "SELECT"),
@@ -47,7 +48,7 @@ class QueryValidator:
     ]
 
     # 無効なdatasource_uid パターン
-    INVALID_DATASOURCE_PATTERNS = [
+    INVALID_DATASOURCE_PATTERNS: ClassVar[list[str]] = [
         r"^\s*$",  # 空
         r"^\(.*\)$",  # (未設定), (none) など
         r"^none$",
@@ -68,13 +69,13 @@ class QueryValidator:
     LOGQL_LABEL_SELECTOR = re.compile(r"^\s*\{[^}]*\}")
 
     # PromQLの集約関数
-    PROMQL_AGGREGATIONS = {
+    PROMQL_AGGREGATIONS: ClassVar[set[str]] = {
         "sum", "min", "max", "avg", "count", "stddev", "stdvar",
         "topk", "bottomk", "count_values", "quantile",
     }
 
     # PromQLのレンジ関数
-    PROMQL_RANGE_FUNCTIONS = {
+    PROMQL_RANGE_FUNCTIONS: ClassVar[set[str]] = {
         "rate", "irate", "increase", "delta", "idelta",
         "deriv", "predict_linear", "changes", "resets",
         "avg_over_time", "min_over_time", "max_over_time",
@@ -84,7 +85,7 @@ class QueryValidator:
     }
 
     # LogQLのフィルタ演算子
-    LOGQL_FILTER_OPS = {"|=", "!=", "|~", "!~"}
+    LOGQL_FILTER_OPS: ClassVar[set[str]] = {"|=", "!=", "|~", "!~"}
 
     def validate_promql(self, query: str) -> ValidationResult:
         """PromQLクエリを検証.

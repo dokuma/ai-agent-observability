@@ -1,0 +1,97 @@
+name: Integration Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_ollama:
+        description: "Ollamaのセットアップをスキップする"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: ">=0.5"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Create .env from example
+        run: cp .env.example .env || touch .env
+
+      - name: Start infrastructure services
+        run: |
+          docker compose up -d \
+            prometheus loki promtail \
+            grafana grafana-renderer dummy-app \
+            prometheus-mcp loki-mcp grafana-mcp \
+            langfuse-web langfuse-worker \
+            langfuse-postgres langfuse-clickhouse langfuse-redis \
+            langfuse-minio langfuse-minio-init
+
+      - name: Start Ollama and pull model
+        if: inputs.skip_ollama != 'true'
+        run: |
+          docker compose up -d ollama ollama-pull
+
+      - name: Wait for services to be ready
+        run: |
+          echo "Waiting for services to be healthy..."
+          for i in $(seq 1 60); do
+            READY=true
+            curl -sf http://localhost:9090/-/healthy > /dev/null 2>&1 || READY=false
+            curl -sf http://localhost:3100/ready > /dev/null 2>&1 || READY=false
+            curl -sf http://localhost:3000/api/health > /dev/null 2>&1 || READY=false
+            if [ "$READY" = true ]; then
+              echo "Core services are ready."
+              break
+            fi
+            echo "  Waiting... ($i/60)"
+            sleep 5
+          done
+
+      - name: Wait for Ollama model
+        if: inputs.skip_ollama != 'true'
+        run: |
+          echo "Waiting for Ollama model download..."
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:11434/api/tags 2>/dev/null | grep -q 'qwen2.5:0.5b'; then
+              echo "Model qwen2.5:0.5b is ready."
+              break
+            fi
+            echo "  Waiting for model... ($i/60)"
+            sleep 5
+          done
+
+      - name: Show service status
+        if: always()
+        run: docker compose ps
+
+      - name: Run integration tests
+        run: make integration-test
+
+      - name: Show service logs on failure
+        if: failure()
+        run: docker compose logs --tail=100
+
+      - name: Cleanup
+        if: always()
+        run: docker compose down -v

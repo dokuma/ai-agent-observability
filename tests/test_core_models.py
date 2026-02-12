@@ -1,6 +1,6 @@
 """core/models のテスト."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
@@ -30,7 +30,7 @@ class TestAlert:
             severity=Severity.INFO,
             instance="test-01",
             summary="test",
-            starts_at=datetime.now(timezone.utc),
+            starts_at=datetime.now(UTC),
         )
         assert alert.ends_at is None
 
@@ -107,7 +107,7 @@ class TestLogExcerpt:
             query='{job="app"}',
             entries=[
                 LogEntry(
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=datetime.now(UTC),
                     level="error",
                     message="test error",
                 )

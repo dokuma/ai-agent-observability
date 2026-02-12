@@ -1,6 +1,6 @@
 """テスト用の共通フィクスチャ."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -42,7 +42,7 @@ def sample_alert() -> Alert:
         description="CPU has been above 90% for 5 minutes",
         labels={"alertname": "HighCPUUsage", "instance": "web-server-01"},
         annotations={"summary": "CPU usage exceeds 90%"},
-        starts_at=datetime(2026, 2, 1, 16, 0, 0, tzinfo=timezone.utc),
+        starts_at=datetime(2026, 2, 1, 16, 0, 0, tzinfo=UTC),
     )
 
 
@@ -67,8 +67,8 @@ def sample_user_query_no_time() -> UserQuery:
 def sample_time_range() -> TimeRange:
     """テスト用時間範囲."""
     return TimeRange(
-        start=datetime(2026, 2, 1, 15, 30, 0, tzinfo=timezone.utc),
-        end=datetime(2026, 2, 1, 16, 30, 0, tzinfo=timezone.utc),
+        start=datetime(2026, 2, 1, 15, 30, 0, tzinfo=UTC),
+        end=datetime(2026, 2, 1, 16, 30, 0, tzinfo=UTC),
     )
 
 
@@ -105,12 +105,12 @@ def sample_logs_result() -> LogsResult:
         query='{job="myapp"} |= "error"',
         entries=[
             LogEntry(
-                timestamp=datetime(2026, 2, 1, 16, 5, 0, tzinfo=timezone.utc),
+                timestamp=datetime(2026, 2, 1, 16, 5, 0, tzinfo=UTC),
                 level="error",
                 message="OutOfMemoryError: Java heap space",
             ),
             LogEntry(
-                timestamp=datetime(2026, 2, 1, 16, 5, 1, tzinfo=timezone.utc),
+                timestamp=datetime(2026, 2, 1, 16, 5, 1, tzinfo=UTC),
                 level="error",
                 message="GC overhead limit exceeded",
             ),

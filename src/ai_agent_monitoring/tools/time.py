@@ -5,7 +5,7 @@ MCPサーバーは不要で、サーバーのシステム時刻を返す。
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -23,7 +23,7 @@ def get_current_time(tz_name: str = DEFAULT_TIMEZONE) -> datetime:
         tz: ZoneInfo | timezone = ZoneInfo(tz_name)
     except KeyError:
         logger.warning("Unknown timezone '%s', falling back to UTC", tz_name)
-        tz = timezone.utc
+        tz = UTC
     return datetime.now(tz)
 
 

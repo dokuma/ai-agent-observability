@@ -7,11 +7,11 @@ from ai_agent_monitoring.tools.prometheus import PrometheusMCPTool, create_prome
 from ai_agent_monitoring.tools.registry import ToolRegistry
 
 __all__ = [
+    "GrafanaMCPTool",
+    "LokiMCPTool",
     "MCPClient",
     "MCPConnectionError",
     "MCPTimeoutError",
-    "GrafanaMCPTool",
-    "LokiMCPTool",
     "PrometheusMCPTool",
     "ToolRegistry",
     "create_grafana_tools",

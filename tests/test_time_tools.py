@@ -1,6 +1,6 @@
 """time tools のテスト."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from ai_agent_monitoring.tools.time import (
     create_time_tools,
@@ -27,7 +27,7 @@ class TestGetCurrentTime:
     def test_invalid_timezone_fallback(self):
         """無効なタイムゾーンの場合UTCにフォールバック."""
         result = get_current_time("Invalid/Timezone")
-        assert result.tzinfo == timezone.utc
+        assert result.tzinfo == UTC
 
 
 class TestCreateTimeTools:

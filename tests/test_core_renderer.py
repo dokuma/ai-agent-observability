@@ -1,6 +1,6 @@
 """core/renderer のテスト."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from ai_agent_monitoring.core.models import (
     LogEntry,
@@ -79,7 +79,7 @@ class TestRenderRCAMarkdown:
                     query='{job="myapp"}',
                     entries=[
                         LogEntry(
-                            timestamp=datetime(2026, 2, 1, 16, 5, 0, tzinfo=timezone.utc),
+                            timestamp=datetime(2026, 2, 1, 16, 5, 0, tzinfo=UTC),
                             level="error",
                             message="OutOfMemoryError",
                         ),

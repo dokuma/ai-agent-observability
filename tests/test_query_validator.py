@@ -147,7 +147,7 @@ class TestQueryValidator:
     def test_validate_and_fix_attempts_correction(self, validator):
         """修正を試みてから結果を返す."""
         original = "label = 'value'"
-        query, result = validator.validate_and_fix(original, QueryType.LOGQL)
+        query, _result = validator.validate_and_fix(original, QueryType.LOGQL)
         # 修正が成功したか、または元のクエリとエラーが返る
         assert query is not None
 
@@ -336,7 +336,7 @@ class TestSanitizeQuery:
 
     def test_sanitize_grafana_variable_warning(self, validator):
         """Grafana変数は警告を出す."""
-        sanitized, warnings = validator.sanitize_query(
+        _sanitized, warnings = validator.sanitize_query(
             "rate(cpu{cluster=$cluster}[5m])", QueryType.PROMQL
         )
         assert any("Grafana変数" in w for w in warnings)

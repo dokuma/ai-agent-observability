@@ -39,7 +39,21 @@ target-version = "py312"
 line-length = 120
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "N", "W"]
+select = ["E", "F", "I", "N", "W", "B", "UP", "S", "RUF"]
+ignore = [
+    "RUF001",  # 日本語文字列の全角文字を許可
+    "RUF002",  # 日本語docstringの全角文字を許可
+    "RUF003",  # 日本語コメントの全角文字を許可
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "S101",  # assert の使用を許可
+    "S105",  # テスト用ハードコードパスワードを許可
+    "S106",  # テスト用ハードコードパスワードを許可
+    "S107",  # テスト用ハードコードパスワードを許可
+    "S108",  # テスト用の /tmp パスを許可
+]
 
 [tool.mypy]
 python_version = "3.12"
