@@ -1,0 +1,167 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ai-agent-monitoring.fullname" . }}-agent
+  labels:
+    {{- include "ai-agent-monitoring.labels" . | nindent 4 }}
+    {{- include "ai-agent-monitoring.selectorLabels" (dict "context" . "component" "agent") | nindent 4 }}
+spec:
+  replicas: {{ .Values.agent.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ai-agent-monitoring.selectorLabels" (dict "context" . "component" "agent") | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      labels:
+        {{- include "ai-agent-monitoring.labels" . | nindent 8 }}
+        {{- include "ai-agent-monitoring.selectorLabels" (dict "context" . "component" "agent") | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.securityContext | nindent 8 }}
+      containers:
+        - name: agent
+          image: {{ include "ai-agent-monitoring.image" (dict "global" .Values.global "image" .Values.agent.image) }}
+          imagePullPolicy: {{ .Values.agent.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            # --- ConfigMap ---
+            - name: LLM_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "ai-agent-monitoring.configmapName" . }}
+                  key: LLM_ENDPOINT
+            - name: LLM_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "ai-agent-monitoring.configmapName" . }}
+                  key: LLM_MODEL
+            - name: PROMETHEUS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "ai-agent-monitoring.configmapName" . }}
+                  key: PROMETHEUS_URL
+            - name: LOKI_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "ai-agent-monitoring.configmapName" . }}
+                  key: LOKI_URL
+            - name: GRAFANA_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "ai-agent-monitoring.configmapName" . }}
+                  key: GRAFANA_URL
+            - name: MCP_PROMETHEUS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "ai-agent-monitoring.configmapName" . }}
+                  key: MCP_PROMETHEUS_URL
+            - name: MCP_LOKI_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "ai-agent-monitoring.configmapName" . }}
+                  key: MCP_LOKI_URL
+            - name: MCP_GRAFANA_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "ai-agent-monitoring.configmapName" . }}
+                  key: MCP_GRAFANA_URL
+            - name: MAX_ITERATIONS
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "ai-agent-monitoring.configmapName" . }}
+                  key: MAX_ITERATIONS
+            - name: INVESTIGATION_TIMEOUT_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "ai-agent-monitoring.configmapName" . }}
+                  key: INVESTIGATION_TIMEOUT_SECONDS
+            - name: CORS_ALLOWED_ORIGINS
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "ai-agent-monitoring.configmapName" . }}
+                  key: CORS_ALLOWED_ORIGINS
+            - name: MCP_USE_TLS
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "ai-agent-monitoring.configmapName" . }}
+                  key: MCP_USE_TLS
+            - name: MCP_VERIFY_SSL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "ai-agent-monitoring.configmapName" . }}
+                  key: MCP_VERIFY_SSL
+            - name: MCP_CA_BUNDLE
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "ai-agent-monitoring.configmapName" . }}
+                  key: MCP_CA_BUNDLE
+            - name: LANGFUSE_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "ai-agent-monitoring.configmapName" . }}
+                  key: LANGFUSE_ENABLED
+            - name: LANGFUSE_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "ai-agent-monitoring.configmapName" . }}
+                  key: LANGFUSE_BASE_URL
+            # --- Secret ---
+            - name: LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-agent-monitoring.secretName" . }}
+                  key: LLM_API_KEY
+            - name: GRAFANA_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-agent-monitoring.secretName" . }}
+                  key: GRAFANA_API_KEY
+            - name: SLACK_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-agent-monitoring.secretName" . }}
+                  key: SLACK_WEBHOOK_URL
+            - name: LANGFUSE_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-agent-monitoring.secretName" . }}
+                  key: LANGFUSE_PUBLIC_KEY
+            - name: LANGFUSE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-agent-monitoring.secretName" . }}
+                  key: LANGFUSE_SECRET_KEY
+          {{- with .Values.agent.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.agent.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.agent.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

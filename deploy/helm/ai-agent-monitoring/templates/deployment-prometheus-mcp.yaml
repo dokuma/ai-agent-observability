@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ai-agent-monitoring.fullname" . }}-prometheus-mcp
+  labels:
+    {{- include "ai-agent-monitoring.labels" . | nindent 4 }}
+    {{- include "ai-agent-monitoring.selectorLabels" (dict "context" . "component" "prometheus-mcp") | nindent 4 }}
+spec:
+  replicas: {{ .Values.prometheusMcp.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ai-agent-monitoring.selectorLabels" (dict "context" . "component" "prometheus-mcp") | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      labels:
+        {{- include "ai-agent-monitoring.labels" . | nindent 8 }}
+        {{- include "ai-agent-monitoring.selectorLabels" (dict "context" . "component" "prometheus-mcp") | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.securityContext | nindent 8 }}
+      containers:
+        - name: prometheus-mcp
+          image: {{ include "ai-agent-monitoring.image" (dict "global" .Values.global "image" .Values.prometheusMcp.image) }}
+          imagePullPolicy: {{ .Values.prometheusMcp.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.prometheusMcp.service.port }}
+              protocol: TCP
+          env:
+            - name: PROMETHEUS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "ai-agent-monitoring.configmapName" . }}
+                  key: PROMETHEUS_URL
+            - name: PROMETHEUS_MCP_SERVER_TRANSPORT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "ai-agent-monitoring.configmapName" . }}
+                  key: PROMETHEUS_MCP_SERVER_TRANSPORT
+            - name: PROMETHEUS_MCP_BIND_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "ai-agent-monitoring.configmapName" . }}
+                  key: PROMETHEUS_MCP_BIND_HOST
+            - name: PROMETHEUS_MCP_BIND_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "ai-agent-monitoring.configmapName" . }}
+                  key: PROMETHEUS_MCP_BIND_PORT
+          {{- with .Values.prometheusMcp.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.prometheusMcp.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.prometheusMcp.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

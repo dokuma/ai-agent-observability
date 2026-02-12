@@ -1,0 +1,203 @@
+# ===========================================================
+# Global
+# ===========================================================
+global:
+  # OpenShift 内部レジストリ（例: image-registry.openshift-image-registry.svc:5000）
+  imageRegistry: "image-registry.openshift-image-registry.svc:5000"
+  imageNamespace: "ai-monitoring"
+
+# ===========================================================
+# AI Agent (FastAPI + LangGraph)
+# ===========================================================
+agent:
+  replicaCount: 1
+  image:
+    name: ai-agent-monitoring
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8000
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+  livenessProbe:
+    httpGet:
+      path: /api/v1/health
+      port: http
+    initialDelaySeconds: 10
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readinessProbe:
+    httpGet:
+      path: /api/v1/health
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+# ===========================================================
+# Prometheus MCP Server
+# ===========================================================
+prometheusMcp:
+  replicaCount: 1
+  image:
+    name: prometheus-mcp-server
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8080
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  livenessProbe:
+    tcpSocket:
+      port: http
+    initialDelaySeconds: 10
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readinessProbe:
+    tcpSocket:
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+# ===========================================================
+# Loki MCP Server
+# ===========================================================
+lokiMcp:
+  replicaCount: 1
+  image:
+    name: loki-mcp-server
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8080
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  livenessProbe:
+    tcpSocket:
+      port: http
+    initialDelaySeconds: 10
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readinessProbe:
+    tcpSocket:
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+# ===========================================================
+# grafana-mcp 依存チャート上書き
+# ===========================================================
+grafana-mcp:
+  grafana:
+    url: "http://grafana.monitoring.svc.cluster.local:3000"
+    apiKeySecret:
+      name: ""  # テンプレートで自動設定
+      key: GRAFANA_SERVICE_ACCOUNT_TOKEN
+  service:
+    type: ClusterIP
+    port: 8000
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: [ALL]
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 1000
+  securityContext:
+    seccompProfile:
+      type: RuntimeDefault
+
+# ===========================================================
+# 外部サービス接続先
+# ===========================================================
+externalServices:
+  llm:
+    endpoint: "http://ollama.ai-monitoring.svc.cluster.local:11434/v1"
+    model: "qwen2.5:0.5b"
+  prometheus:
+    url: "http://prometheus.monitoring.svc.cluster.local:9090"
+  loki:
+    url: "http://loki.monitoring.svc.cluster.local:3100"
+  grafana:
+    url: "http://grafana.monitoring.svc.cluster.local:3000"
+  langfuse:
+    enabled: true
+    baseUrl: "http://langfuse-web.ai-monitoring.svc.cluster.local:3000"
+
+# ===========================================================
+# ConfigMap 設定値（非機密）
+# ===========================================================
+config:
+  maxIterations: "5"
+  investigationTimeoutSeconds: "120"
+  corsAllowedOrigins: "http://localhost:3000"
+  mcpUseTls: "false"
+  mcpVerifySsl: "true"
+  mcpCaBundle: ""
+  prometheusMcpTransport: "http"
+  prometheusMcpBindHost: "0.0.0.0"
+  prometheusMcpBindPort: "8080"
+  ssePort: "8080"
+
+# ===========================================================
+# Secret 設定値（機密）
+# ===========================================================
+secrets:
+  # 既存 Secret を参照する場合はここに名前を設定
+  existingSecret: ""
+  # existingSecret が空の場合、以下の値で Secret を自動生成
+  llmApiKey: "not-needed"
+  grafanaApiKey: ""
+  grafanaServiceAccountToken: ""
+  slackWebhookUrl: ""
+  langfusePublicKey: ""
+  langfuseSecretKey: ""
+
+# ===========================================================
+# Security Context（OpenShift restricted SCC 準拠）
+# ===========================================================
+securityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+
+# ===========================================================
+# 共通設定
+# ===========================================================
+imagePullSecrets: []
+nodeSelector: {}
+tolerations: []
+affinity: {}
