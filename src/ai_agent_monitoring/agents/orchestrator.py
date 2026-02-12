@@ -21,6 +21,7 @@ from ai_agent_monitoring.core.state import (
     AgentState,
     DashboardInfo,
     EnvironmentContext,
+    EvaluationFeedback,
     InvestigationPlan,
     PanelQuery,
     TimeRange,
@@ -827,19 +828,66 @@ class OrchestratorAgent:
         return "\n".join(lines)
 
     async def _plan_investigation(self, state: AgentState) -> dict[str, Any]:
-        """調査計画を策定."""
+        """調査計画を策定.
+
+        前回のイテレーションでINSUFFICIENTと評価された場合、
+        評価フィードバック（不足情報、追加調査観点、既試行クエリ）を
+        プロンプトに含め、同じクエリの繰り返しを防止する。
+        """
         iteration = state.get("iteration_count", 0) + 1
         self._update_stage(state, f"調査計画を策定中 (イテレーション {iteration})")
 
-        messages = [
-            *state["messages"],
-            HumanMessage(
-                content=(
-                    "上記の分析に基づき、調査計画をJSON形式で出力してください。\n"
+        # 基本プロンプト
+        plan_prompt = (
+            "上記の分析に基づき、調査計画をJSON形式で出力してください。\n"
+            "promql_queries, logql_queries, target_instances, time_range を含めてください。\n"
+            "time_rangeは必ずISO 8601絶対時刻のstart/endで指定してください。"
+        )
+
+        # 前回の評価フィードバックがある場合、プロンプトに追加
+        feedback = state.get("evaluation_feedback")
+        if feedback is not None:
+            feedback_sections = []
+
+            if feedback.missing_information:
+                feedback_sections.append(
+                    "## 前回の調査で不足していた情報\n"
+                    + "\n".join(f"- {item}" for item in feedback.missing_information)
+                )
+
+            if feedback.additional_investigation_points:
+                feedback_sections.append(
+                    "## 追加で調査すべき観点\n"
+                    + "\n".join(
+                        f"- {point}" for point in feedback.additional_investigation_points
+                    )
+                )
+
+            if feedback.previous_queries_attempted:
+                feedback_sections.append(
+                    "## 前回試行済みのクエリ（同じクエリは避けてください）\n"
+                    + "\n".join(
+                        f"- `{q}`" for q in feedback.previous_queries_attempted
+                    )
+                )
+
+            if feedback.reasoning:
+                feedback_sections.append(
+                    f"## 前回の評価理由\n{feedback.reasoning}"
+                )
+
+            if feedback_sections:
+                plan_prompt = (
+                    "\n\n".join(feedback_sections)
+                    + "\n\n上記のフィードバックを踏まえ、前回とは異なるアプローチで"
+                    "調査計画をJSON形式で出力してください。\n"
                     "promql_queries, logql_queries, target_instances, time_range を含めてください。\n"
                     "time_rangeは必ずISO 8601絶対時刻のstart/endで指定してください。"
                 )
-            ),
+
+        messages = [
+            *state["messages"],
+            HumanMessage(content=plan_prompt),
         ]
         response = await self.llm.ainvoke(messages)
 
@@ -1136,7 +1184,11 @@ class OrchestratorAgent:
         }
 
     async def _evaluate_results(self, state: AgentState) -> dict[str, Any]:
-        """調査結果を評価し、追加調査が必要か判断."""
+        """調査結果を評価し、追加調査が必要か判断.
+
+        INSUFFICIENTの場合は、不足情報と追加調査観点を構造化して
+        stateに保存し、次のイテレーションで同じクエリの繰り返しを防止する。
+        """
         self._update_stage(state, "調査結果を評価中")
 
         # Metrics/Logs Agentの結果サマリを構築
@@ -1148,13 +1200,28 @@ class OrchestratorAgent:
 
         results_text = "\n".join(results_summary) if results_summary else "結果なし"
 
+        # これまでに試行したクエリを収集
+        plan = state.get("plan")
+        previous_queries: list[str] = []
+        if plan:
+            previous_queries.extend(plan.promql_queries)
+            previous_queries.extend(plan.logql_queries)
+
         messages = [
             *state["messages"],
             HumanMessage(
                 content=(
                     f"各Agentの調査結果:\n{results_text}\n\n"
                     "根本原因を特定するのに十分な情報がありますか？\n"
-                    "回答は 'SUFFICIENT' または 'INSUFFICIENT' で始めてください。"
+                    "回答は 'SUFFICIENT' または 'INSUFFICIENT' で始めてください。\n\n"
+                    "INSUFFICIENTの場合は、以下のJSON形式で不足情報を出力してください:\n"
+                    "```json\n"
+                    "{\n"
+                    '  "missing_information": ["不足している情報1", "不足している情報2"],\n'
+                    '  "additional_investigation_points": ["追加で調査すべき観点1", "追加で調査すべき観点2"],\n'
+                    '  "reasoning": "判定理由の説明"\n'
+                    "}\n"
+                    "```"
                 )
             ),
         ]
@@ -1163,10 +1230,50 @@ class OrchestratorAgent:
         first_line = response.content.upper().split("\n")[0]
         is_complete = first_line.startswith("SUFFICIENT")
 
-        return {
+        result: dict[str, Any] = {
             "messages": [response],
             "investigation_complete": is_complete,
         }
+
+        # INSUFFICIENTの場合、構造化されたフィードバックを抽出してstateに保存
+        if not is_complete:
+            feedback = self._parse_evaluation_feedback(
+                response.content, previous_queries
+            )
+            result["evaluation_feedback"] = feedback
+            logger.info(
+                "Evaluation: INSUFFICIENT - missing=%s, additional_points=%s",
+                feedback.missing_information,
+                feedback.additional_investigation_points,
+            )
+
+        return result
+
+    def _parse_evaluation_feedback(
+        self,
+        content: str,
+        previous_queries: list[str],
+    ) -> EvaluationFeedback:
+        """LLMの評価結果からEvaluationFeedbackをパース."""
+        feedback = EvaluationFeedback(
+            previous_queries_attempted=previous_queries,
+        )
+
+        try:
+            json_str = self._extract_json(content)
+            data = json.loads(json_str)
+            feedback.missing_information = data.get("missing_information", [])
+            feedback.additional_investigation_points = data.get(
+                "additional_investigation_points", []
+            )
+            feedback.reasoning = data.get("reasoning", "")
+        except (ValueError, json.JSONDecodeError):
+            # JSONパースに失敗した場合、テキスト全体をreasoningとして保持
+            lines = content.split("\n")
+            # 最初の行（INSUFFICIENT）を除いたテキストを理由として使用
+            feedback.reasoning = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
+
+        return feedback
 
     # ---- ルーティング ----
 

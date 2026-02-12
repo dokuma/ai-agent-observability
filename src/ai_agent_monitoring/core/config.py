@@ -31,6 +31,14 @@ class Settings(BaseSettings):
     max_iterations: int = 5
     investigation_timeout_seconds: int = 120
 
+    # MCP TLS
+    mcp_use_tls: bool = False
+    mcp_verify_ssl: bool = True
+    mcp_ca_bundle: str = ""  # カスタムCA証明書パス（空の場合はシステムデフォルト）
+
+    # CORS
+    cors_allowed_origins: list[str] = ["http://localhost:3000"]
+
     # Langfuse
     langfuse_enabled: bool = True
     langfuse_public_key: str = ""

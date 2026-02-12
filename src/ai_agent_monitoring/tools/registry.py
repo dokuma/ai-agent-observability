@@ -44,18 +44,36 @@ class ToolRegistry:
     @classmethod
     def from_settings(cls, settings: Settings) -> "ToolRegistry":
         """Settingsから全MCPクライアントを生成."""
+        use_tls = settings.mcp_use_tls
+        verify_ssl = settings.mcp_verify_ssl
+        ca_bundle = settings.mcp_ca_bundle
         return cls(
             prometheus=MCPConnection(
                 name="prometheus",
-                client=MCPClient(settings.mcp_prometheus_url),
+                client=MCPClient(
+                    settings.mcp_prometheus_url,
+                    use_tls=use_tls,
+                    verify_ssl=verify_ssl,
+                    ca_bundle=ca_bundle,
+                ),
             ),
             loki=MCPConnection(
                 name="loki",
-                client=MCPClient(settings.mcp_loki_url),
+                client=MCPClient(
+                    settings.mcp_loki_url,
+                    use_tls=use_tls,
+                    verify_ssl=verify_ssl,
+                    ca_bundle=ca_bundle,
+                ),
             ),
             grafana=MCPConnection(
                 name="grafana",
-                client=MCPClient(settings.mcp_grafana_url),
+                client=MCPClient(
+                    settings.mcp_grafana_url,
+                    use_tls=use_tls,
+                    verify_ssl=verify_ssl,
+                    ca_bundle=ca_bundle,
+                ),
             ),
         )
 

@@ -34,7 +34,7 @@ class AlertManagerWebhookPayload(BaseModel):
 class UserQueryRequest(BaseModel):
     """ユーザ自然言語クエリのリクエスト."""
 
-    query: str = Field(min_length=1, description="自然言語の問い合わせ")
+    query: str = Field(min_length=1, max_length=10000, description="自然言語の問い合わせ")
     target_instances: list[str] = Field(
         default_factory=list,
         description="調査対象インスタンス（省略時は全て）",

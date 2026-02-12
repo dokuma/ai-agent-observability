@@ -80,6 +80,20 @@ class EnvironmentContext(BaseModel):
     discovered_panel_queries: list[PanelQuery] = Field(default_factory=list)
 
 
+class EvaluationFeedback(BaseModel):
+    """調査結果の評価フィードバック.
+
+    INSUFFICIENTと判定された場合に、不足している情報や
+    追加で調査すべき観点を構造化して保持する。
+    次のイテレーションの調査計画に反映される。
+    """
+
+    missing_information: list[str] = Field(default_factory=list)
+    additional_investigation_points: list[str] = Field(default_factory=list)
+    previous_queries_attempted: list[str] = Field(default_factory=list)
+    reasoning: str = ""
+
+
 class InvestigationPlan(BaseModel):
     """Orchestratorが生成する調査計画."""
 
@@ -122,6 +136,9 @@ class AgentState(MessagesState):
     investigation_complete: bool = False  # type: ignore[misc]
     iteration_count: int = 0  # type: ignore[misc]
     max_iterations: int = 5  # type: ignore[misc]
+
+    # 評価フィードバック（INSUFFICIENT判定時に次イテレーションへ引き継ぐ）
+    evaluation_feedback: EvaluationFeedback | None = None  # type: ignore[misc]
 
     # Human-in-the-loop: ユーザへの問い合わせ
     pending_question: str = ""  # type: ignore[misc]

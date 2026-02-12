@@ -5,9 +5,11 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from ai_agent_monitoring.api.dependencies import app_state
 from ai_agent_monitoring.api.routes import router
+from ai_agent_monitoring.core.config import Settings
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,6 +33,15 @@ app = FastAPI(
     description="AI Agentによる自律型システム監視 — 異常検知からRCAレポート生成まで",
     version="0.1.0",
     lifespan=lifespan,
+)
+
+_settings = Settings()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_settings.cors_allowed_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
 )
 
 app.include_router(router, prefix="/api/v1")
