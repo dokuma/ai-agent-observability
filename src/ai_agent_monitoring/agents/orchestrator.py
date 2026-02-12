@@ -164,7 +164,7 @@ class OrchestratorAgent:
 
         async def wrapped(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
             self._update_stage(state, stage_name)
-            result: dict[str, Any] = await subgraph.ainvoke(state, config=config)
+            result: dict[str, Any] = await subgraph.ainvoke(dict(state), config=config)
             return result
 
         return wrapped
