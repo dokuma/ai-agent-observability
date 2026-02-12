@@ -1,0 +1,10 @@
+apiVersion: v2
+name: ai-agent-monitoring
+description: AI Agent 自律型システム監視 — FastAPI + LangGraph + MCP サーバ群
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+dependencies:
+  - name: grafana-mcp
+    version: "0.3.1"
+    repository: "https://grafana.github.io/helm-charts"

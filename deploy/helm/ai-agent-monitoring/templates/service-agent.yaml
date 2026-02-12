@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ai-agent-monitoring.fullname" . }}-agent
+  labels:
+    {{- include "ai-agent-monitoring.labels" . | nindent 4 }}
+    {{- include "ai-agent-monitoring.selectorLabels" (dict "context" . "component" "agent") | nindent 4 }}
+spec:
+  type: {{ .Values.agent.service.type }}
+  ports:
+    - port: {{ .Values.agent.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "ai-agent-monitoring.selectorLabels" (dict "context" . "component" "agent") | nindent 4 }}

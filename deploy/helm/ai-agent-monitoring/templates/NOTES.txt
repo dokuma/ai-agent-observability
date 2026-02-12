@@ -1,0 +1,27 @@
+===============================================================
+  AI Agent Monitoring デプロイ完了
+===============================================================
+
+コンポーネント:
+  - Agent (FastAPI + LangGraph): {{ include "ai-agent-monitoring.fullname" . }}-agent:{{ .Values.agent.service.port }}
+  - Prometheus MCP Server:       {{ include "ai-agent-monitoring.fullname" . }}-prometheus-mcp:{{ .Values.prometheusMcp.service.port }}
+  - Loki MCP Server:             {{ include "ai-agent-monitoring.fullname" . }}-loki-mcp:{{ .Values.lokiMcp.service.port }}
+  - Grafana MCP Server:          {{ .Release.Name }}-grafana-mcp:{{ index .Values "grafana-mcp" "service" "port" }}
+
+外部依存サービス（本 Chart 外で別途デプロイが必要）:
+  - Ollama (LLM):   {{ .Values.externalServices.llm.endpoint }}
+  - Prometheus:      {{ .Values.externalServices.prometheus.url }}
+  - Loki:            {{ .Values.externalServices.loki.url }}
+  - Grafana:         {{ .Values.externalServices.grafana.url }}
+  - Langfuse:        {{ .Values.externalServices.langfuse.baseUrl }}
+
+外部 Helm Chart のインストール例:
+  # Ollama
+  helm repo add ollama https://otwld.github.io/ollama-helm/
+  helm install ollama ollama/ollama
+
+  # Langfuse
+  helm repo add langfuse https://langfuse.github.io/langfuse-k8s/
+  helm install langfuse langfuse/langfuse
+
+全サービスは ClusterIP（内部アクセスのみ）で公開されています。

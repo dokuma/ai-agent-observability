@@ -11,6 +11,9 @@ FROM mirror.gcr.io/library/alpine:3.20
 RUN apk add --no-cache ca-certificates
 COPY --from=builder /loki-mcp /usr/local/bin/loki-mcp
 
+RUN adduser -D -u 1000 mcp
+USER mcp
+
 EXPOSE 8080
 
 ENTRYPOINT ["loki-mcp"]
