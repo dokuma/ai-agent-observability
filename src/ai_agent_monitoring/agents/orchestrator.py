@@ -110,6 +110,16 @@ class OrchestratorAgent:
 
         self.rca_agent = RCAAgent(llm, grafana_mcp=self.grafana_mcp)
 
+        # サブエージェントの compile() 結果をキャッシュ
+        # StateGraph.compile() は比較的重い処理のため、初回のみ実行して再利用する
+        self._compiled_metrics: Pregel[Any] | None = (
+            self.metrics_agent.compile() if self.metrics_agent is not None else None
+        )
+        self._compiled_logs: Pregel[Any] | None = (
+            self.logs_agent.compile() if self.logs_agent is not None else None
+        )
+        self._compiled_rca: Pregel[Any] = self.rca_agent.compile()
+
         # クエリバリデータ
         self.query_validator = QueryValidator()
 
@@ -172,12 +182,12 @@ class OrchestratorAgent:
         # - fan-out: resolve_time_range から両方のサブエージェントに分岐
         # - fan-in: 両方が完了後に evaluate_results に合流
         # - 片方のみ利用可能な場合は、利用可能なAgentのみ実行される
-        metrics_agent = self.metrics_agent
-        logs_agent = self.logs_agent
+        compiled_metrics = self._compiled_metrics
+        compiled_logs = self._compiled_logs
 
-        if metrics_agent is not None:
+        if compiled_metrics is not None:
             graph.add_node("investigate_metrics", self._wrap_with_stage(
-                metrics_agent.compile(),
+                compiled_metrics,
                 "メトリクスを調査中",
             ))
             graph.add_edge("resolve_time_range", "investigate_metrics")
@@ -185,9 +195,9 @@ class OrchestratorAgent:
         else:
             logger.warning("MetricsAgent unavailable, skipping metrics investigation")
 
-        if logs_agent is not None:
+        if compiled_logs is not None:
             graph.add_node("investigate_logs", self._wrap_with_stage(
-                logs_agent.compile(),
+                compiled_logs,
                 "ログを調査中",
             ))
             graph.add_edge("resolve_time_range", "investigate_logs")
@@ -196,7 +206,7 @@ class OrchestratorAgent:
             logger.warning("LogsAgent unavailable, skipping logs investigation")
 
         # 両方のAgentが使えない場合は直接評価へ
-        if metrics_agent is None and logs_agent is None:
+        if compiled_metrics is None and compiled_logs is None:
             graph.add_edge("resolve_time_range", "evaluate_results")
         graph.add_conditional_edges(
             "evaluate_results",
@@ -207,9 +217,9 @@ class OrchestratorAgent:
             },
         )
 
-        # RCA Agentをステージ更新でラップ
+        # RCA Agentをステージ更新でラップ（キャッシュ済みコンパイル結果を使用）
         graph.add_node("generate_rca", self._wrap_with_stage(
-            self.rca_agent.compile(),
+            self._compiled_rca,
             "RCAレポートを生成中",
         ))
         graph.add_edge("generate_rca", END)

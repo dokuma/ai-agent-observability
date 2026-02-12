@@ -37,6 +37,9 @@ htmlcov/
 .env
 !.env.example
 
+# Docker Secrets
+secrets/
+
 # OS
 .DS_Store
 Thumbs.db

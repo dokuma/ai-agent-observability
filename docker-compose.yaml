@@ -1,3 +1,34 @@
+# ===========================================================
+# Docker Secrets（オプション）
+# secrets/ ディレクトリにファイルを配置すると Docker Secrets 経由で
+# 各サービスにシークレットが注入されます。
+# 未設定の場合は従来どおり環境変数（.env）が使用されます。
+# 詳細: docs/secrets-management.md
+# ===========================================================
+secrets:
+  gf_admin_password:
+    file: ./secrets/gf_admin_password
+  grafana_service_account_token:
+    file: ./secrets/grafana_service_account_token
+  postgres_password:
+    file: ./secrets/postgres_password
+  clickhouse_password:
+    file: ./secrets/clickhouse_password
+  redis_password:
+    file: ./secrets/redis_password
+  minio_root_password:
+    file: ./secrets/minio_root_password
+  langfuse_nextauth_secret:
+    file: ./secrets/langfuse_nextauth_secret
+  langfuse_salt:
+    file: ./secrets/langfuse_salt
+  langfuse_encryption_key:
+    file: ./secrets/langfuse_encryption_key
+  langfuse_init_user_password:
+    file: ./secrets/langfuse_init_user_password
+  webui_secret_key:
+    file: ./secrets/webui_secret_key
+
 services:
   # ===========================================================
   # AI Agent Monitoring アプリケーション
@@ -114,6 +145,9 @@ services:
       GF_LOG_FILTERS: rendering:debug
       # Service Account Token（MCP用）
       GF_SECURITY_SERVICE_ACCOUNT_TOKEN: ${GRAFANA_SERVICE_ACCOUNT_TOKEN:-}
+    secrets:
+      - gf_admin_password
+      - grafana_service_account_token
     depends_on:
       - prometheus
       - loki
@@ -189,6 +223,8 @@ services:
     environment:
       GRAFANA_URL: http://grafana:3000
       GRAFANA_SERVICE_ACCOUNT_TOKEN: ${GRAFANA_SERVICE_ACCOUNT_TOKEN:-glsa_test_token}
+    secrets:
+      - grafana_service_account_token
     # ログレベルを debug に設定（トラブルシューティング用）
     # 本番環境では --log-level info に戻すこと
     command: ["--transport", "sse", "--address", "0.0.0.0:8000", "--log-level", "debug"]
@@ -255,6 +291,15 @@ services:
       LANGFUSE_INIT_USER_EMAIL: admin@example.com
       LANGFUSE_INIT_USER_NAME: admin
       LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-adminadmin}
+    secrets:
+      - postgres_password
+      - clickhouse_password
+      - redis_password
+      - minio_root_password
+      - langfuse_nextauth_secret
+      - langfuse_salt
+      - langfuse_encryption_key
+      - langfuse_init_user_password
     networks:
       - monitoring
 
@@ -300,6 +345,12 @@ services:
       LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-langfuse-minio-secret}
       LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
       ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:-0000000000000000000000000000000000000000000000000000000000000000}
+    secrets:
+      - postgres_password
+      - clickhouse_password
+      - redis_password
+      - minio_root_password
+      - langfuse_encryption_key
     networks:
       - monitoring
 
@@ -309,6 +360,8 @@ services:
       POSTGRES_USER: langfuse
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-langfuse}
       POSTGRES_DB: langfuse
+    secrets:
+      - postgres_password
     volumes:
       - langfuse_postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -331,12 +384,16 @@ services:
       CLICKHOUSE_DB: default
       CLICKHOUSE_USER: default
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse}
+    secrets:
+      - clickhouse_password
     networks:
       - monitoring
 
   langfuse-redis:
     image: public.ecr.aws/docker/library/redis:7-alpine
     command: redis-server --requirepass ${REDIS_PASSWORD:-langfuse-redis-secret}
+    secrets:
+      - redis_password
     volumes:
       - langfuse_redis_data:/data
     networks:
@@ -348,6 +405,8 @@ services:
     environment:
       MINIO_ROOT_USER: langfuse
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-langfuse-minio-secret}
+    secrets:
+      - minio_root_password
     volumes:
       - langfuse_minio_data:/data
     networks:
@@ -360,6 +419,8 @@ services:
       - langfuse-minio
     environment:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-langfuse-minio-secret}
+    secrets:
+      - minio_root_password
     entrypoint: >
       sh -c "
         sleep 5 &&
@@ -381,6 +442,8 @@ services:
     environment:
       OLLAMA_BASE_URL: http://ollama:11434
       WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:-dev-secret-key}
+    secrets:
+      - webui_secret_key
     volumes:
       - open_webui_data:/app/backend/data
     depends_on:
