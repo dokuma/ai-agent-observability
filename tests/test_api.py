@@ -27,11 +27,13 @@ class TestHealthEndpoint:
     def test_health_all_healthy(self, client):
         """全MCPが正常な場合はhealthy."""
         mock_registry = MagicMock()
-        mock_registry.health_check = AsyncMock(return_value={
-            "prometheus": True,
-            "loki": True,
-            "grafana": True,
-        })
+        mock_registry.health_check = AsyncMock(
+            return_value={
+                "prometheus": True,
+                "loki": True,
+                "grafana": True,
+            }
+        )
         app_state.registry = mock_registry
 
         response = client.get("/api/v1/health")
@@ -43,11 +45,13 @@ class TestHealthEndpoint:
     def test_health_degraded(self, client):
         """一部のMCPがunhealthyな場合はdegraded."""
         mock_registry = MagicMock()
-        mock_registry.health_check = AsyncMock(return_value={
-            "prometheus": True,
-            "loki": False,
-            "grafana": True,
-        })
+        mock_registry.health_check = AsyncMock(
+            return_value={
+                "prometheus": True,
+                "loki": False,
+                "grafana": True,
+            }
+        )
         app_state.registry = mock_registry
 
         response = client.get("/api/v1/health")
@@ -58,11 +62,13 @@ class TestHealthEndpoint:
     def test_health_all_unhealthy(self, client):
         """全MCPがunhealthyな場合はunhealthy."""
         mock_registry = MagicMock()
-        mock_registry.health_check = AsyncMock(return_value={
-            "prometheus": False,
-            "loki": False,
-            "grafana": False,
-        })
+        mock_registry.health_check = AsyncMock(
+            return_value={
+                "prometheus": False,
+                "loki": False,
+                "grafana": False,
+            }
+        )
         app_state.registry = mock_registry
 
         response = client.get("/api/v1/health")

@@ -24,13 +24,13 @@ from ai_agent_monitoring.tools.grafana import GrafanaMCPTool
 try:
     from langfuse import observe as _observe
 except ImportError:
-    def _observe(
-        func: Any = None, **kwargs: Any
-    ) -> Any:
+
+    def _observe(func: Any = None, **kwargs: Any) -> Any:
         """No-op fallback when langfuse is not installed."""
         if func is not None:
             return func
         return lambda f: f
+
 
 logger = logging.getLogger(__name__)
 
@@ -223,13 +223,15 @@ class RCAAgent:
                 )
                 image_path.write_bytes(image_data)
 
-                snapshots.append(PanelSnapshot(
-                    dashboard_uid=uid,
-                    panel_id=panel_id,
-                    query=mr.query,
-                    image_path=str(image_path),
-                    caption=mr.summary[:80] if mr.summary else f"PromQL: {mr.query}",
-                ))
+                snapshots.append(
+                    PanelSnapshot(
+                        dashboard_uid=uid,
+                        panel_id=panel_id,
+                        query=mr.query,
+                        image_path=str(image_path),
+                        caption=mr.summary[:80] if mr.summary else f"PromQL: {mr.query}",
+                    )
+                )
                 logger.info("パネル画像を保存: %s", image_path)
 
             except Exception:
@@ -245,11 +247,13 @@ class RCAAgent:
                 continue
             # 最大20件に制限
             limited_entries = lr.entries[:20]
-            excerpts.append(LogExcerpt(
-                query=lr.query,
-                entries=limited_entries,
-                caption=f"ログ抜粋 ({len(limited_entries)}件)",
-            ))
+            excerpts.append(
+                LogExcerpt(
+                    query=lr.query,
+                    entries=limited_entries,
+                    caption=f"ログ抜粋 ({len(limited_entries)}件)",
+                )
+            )
         return excerpts
 
     async def _render_markdown(self, state: AgentState) -> dict[str, Any]:

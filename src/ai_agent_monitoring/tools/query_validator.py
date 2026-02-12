@@ -70,18 +70,41 @@ class QueryValidator:
 
     # PromQLの集約関数
     PROMQL_AGGREGATIONS: ClassVar[set[str]] = {
-        "sum", "min", "max", "avg", "count", "stddev", "stdvar",
-        "topk", "bottomk", "count_values", "quantile",
+        "sum",
+        "min",
+        "max",
+        "avg",
+        "count",
+        "stddev",
+        "stdvar",
+        "topk",
+        "bottomk",
+        "count_values",
+        "quantile",
     }
 
     # PromQLのレンジ関数
     PROMQL_RANGE_FUNCTIONS: ClassVar[set[str]] = {
-        "rate", "irate", "increase", "delta", "idelta",
-        "deriv", "predict_linear", "changes", "resets",
-        "avg_over_time", "min_over_time", "max_over_time",
-        "sum_over_time", "count_over_time", "stddev_over_time",
-        "stdvar_over_time", "last_over_time", "present_over_time",
-        "quantile_over_time", "absent_over_time",
+        "rate",
+        "irate",
+        "increase",
+        "delta",
+        "idelta",
+        "deriv",
+        "predict_linear",
+        "changes",
+        "resets",
+        "avg_over_time",
+        "min_over_time",
+        "max_over_time",
+        "sum_over_time",
+        "count_over_time",
+        "stddev_over_time",
+        "stdvar_over_time",
+        "last_over_time",
+        "present_over_time",
+        "quantile_over_time",
+        "absent_over_time",
     }
 
     # LogQLのフィルタ演算子
@@ -175,17 +198,11 @@ class QueryValidator:
         # SQLパターンの検出（LogQLで最も多い間違い）
         for pattern, name in self.SQL_PATTERNS:
             if re.search(pattern, corrected, re.IGNORECASE):
-                errors.append(
-                    f"SQLの構文 '{name}' が検出されました。"
-                    "LogQLは{{label=\"value\"}}形式を使用します。"
-                )
+                errors.append(f"SQLの構文 '{name}' が検出されました。LogQLは{{{{label=\"value\"}}}}形式を使用します。")
 
         # LogQLは必ず{...}で始まる
         if not self.LOGQL_LABEL_SELECTOR.match(corrected):
-            errors.append(
-                "LogQLはラベルセレクタ {{...}} で始まる必要があります。"
-                "例: {{job=\"varlogs\"}} |= \"error\""
-            )
+            errors.append('LogQLはラベルセレクタ {{...}} で始まる必要があります。例: {{job="varlogs"}} |= "error"')
             # 自動修正を試みる
             corrected = self._attempt_logql_correction(corrected)
             if corrected != query.strip():
@@ -209,10 +226,7 @@ class QueryValidator:
         ]
         for pattern in time_patterns:
             if re.search(pattern, corrected, re.IGNORECASE):
-                errors.append(
-                    "時間範囲はLogQLクエリ内ではなく、"
-                    "APIパラメータ(start/end)で指定してください。"
-                )
+                errors.append("時間範囲はLogQLクエリ内ではなく、APIパラメータ(start/end)で指定してください。")
                 break
 
         # 括弧のバランスチェック
@@ -243,15 +257,11 @@ class QueryValidator:
 
         for matcher in matchers:
             # 有効なマッチャー形式: label="value", label=~"regex", label!="value"
-            valid_pattern = re.compile(
-                r'^[a-zA-Z_][a-zA-Z0-9_]*\s*(!?=~?)\s*["\'][^"\']*["\']$'
-            )
+            valid_pattern = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*\s*(!?=~?)\s*["\'][^"\']*["\']$')
             if not valid_pattern.match(matcher):
                 # シングルクォートの検出
                 if "='" in matcher or "= '" in matcher:
-                    warnings.append(
-                        f"ラベル値にはダブルクォートを推奨: {matcher}"
-                    )
+                    warnings.append(f"ラベル値にはダブルクォートを推奨: {matcher}")
                 else:
                     errors.append(f"無効なラベルマッチャー: {matcher}")
 
@@ -320,9 +330,7 @@ class QueryValidator:
 
         return corrected
 
-    def validate(
-        self, query: str, query_type: QueryType
-    ) -> ValidationResult:
+    def validate(self, query: str, query_type: QueryType) -> ValidationResult:
         """クエリを検証.
 
         Args:
@@ -336,9 +344,7 @@ class QueryValidator:
             return self.validate_promql(query)
         return self.validate_logql(query)
 
-    def validate_and_fix(
-        self, query: str, query_type: QueryType
-    ) -> tuple[str, ValidationResult]:
+    def validate_and_fix(self, query: str, query_type: QueryType) -> tuple[str, ValidationResult]:
         """クエリを検証し、可能なら修正.
 
         Args:
@@ -431,8 +437,7 @@ class QueryValidator:
         variables = self.contains_grafana_variables(sanitized)
         if variables:
             warnings.append(
-                f"Grafana変数 {variables} が含まれています。"
-                "実際の値に置き換えるか、クエリから除外してください。"
+                f"Grafana変数 {variables} が含まれています。実際の値に置き換えるか、クエリから除外してください。"
             )
 
         return sanitized, warnings

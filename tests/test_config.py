@@ -141,11 +141,20 @@ class TestSettingsTypes:
         """文字列フィールドの型確認."""
         s = Settings()
         str_fields = [
-            "llm_endpoint", "llm_model", "llm_api_key",
-            "prometheus_url", "loki_url", "grafana_url", "grafana_api_key",
-            "mcp_grafana_url", "mcp_loki_url", "mcp_prometheus_url",
+            "llm_endpoint",
+            "llm_model",
+            "llm_api_key",
+            "prometheus_url",
+            "loki_url",
+            "grafana_url",
+            "grafana_api_key",
+            "mcp_grafana_url",
+            "mcp_loki_url",
+            "mcp_prometheus_url",
             "slack_webhook_url",
-            "langfuse_public_key", "langfuse_secret_key", "langfuse_base_url",
+            "langfuse_public_key",
+            "langfuse_secret_key",
+            "langfuse_base_url",
         ]
         for field in str_fields:
             assert isinstance(getattr(s, field), str), f"{field} should be str"

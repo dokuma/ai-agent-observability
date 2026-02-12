@@ -18,13 +18,13 @@ from ai_agent_monitoring.tools.prometheus import create_prometheus_tools
 try:
     from langfuse import observe as _observe
 except ImportError:
-    def _observe(
-        func: Any = None, **kwargs: Any
-    ) -> Any:
+
+    def _observe(func: Any = None, **kwargs: Any) -> Any:
         """No-op fallback when langfuse is not installed."""
         if func is not None:
             return func
         return lambda f: f
+
 
 logger = logging.getLogger(__name__)
 
@@ -93,16 +93,10 @@ class MetricsAgent:
             return {"messages": [AIMessage(content="調査計画がありません。")]}
 
         # 初回のみシステムプロンプトと調査指示を付与
-        if not any(
-            isinstance(m, SystemMessage) and "Metrics Agent" in m.content
-            for m in state.get("messages", [])
-        ):
+        if not any(isinstance(m, SystemMessage) and "Metrics Agent" in m.content for m in state.get("messages", [])):
             time_desc = "指定なし"
             if plan.time_range:
-                time_desc = (
-                    f"{plan.time_range.start.isoformat()} 〜 "
-                    f"{plan.time_range.end.isoformat()}"
-                )
+                time_desc = f"{plan.time_range.start.isoformat()} 〜 {plan.time_range.end.isoformat()}"
 
             queries_text = "\n".join(f"- {q}" for q in plan.promql_queries)
             datasource_uid = plan.prometheus_datasource_uid

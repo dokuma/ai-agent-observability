@@ -1,6 +1,5 @@
 """core/state のテスト."""
 
-
 from ai_agent_monitoring.core.state import AgentState, InvestigationPlan, TimeRange
 
 

@@ -32,23 +32,17 @@ class TestQueryValidator:
         assert not result.errors
 
     def test_valid_promql_rate(self, validator):
-        result = validator.validate_promql(
-            'rate(http_requests_total{status="500"}[5m])'
-        )
+        result = validator.validate_promql('rate(http_requests_total{status="500"}[5m])')
         assert result.is_valid
         assert not result.errors
 
     def test_valid_promql_aggregation(self, validator):
-        result = validator.validate_promql(
-            'sum by (instance) (rate(node_cpu_seconds_total[5m]))'
-        )
+        result = validator.validate_promql("sum by (instance) (rate(node_cpu_seconds_total[5m]))")
         assert result.is_valid
         assert not result.errors
 
     def test_invalid_promql_sql_and(self, validator):
-        result = validator.validate_promql(
-            "metric_name = 'value' AND other = 'value'"
-        )
+        result = validator.validate_promql("metric_name = 'value' AND other = 'value'")
         assert not result.is_valid
         assert result.errors
         assert any("AND" in e for e in result.errors)
@@ -76,9 +70,7 @@ class TestQueryValidator:
         assert not result.errors
 
     def test_valid_logql_multiple_labels(self, validator):
-        result = validator.validate_logql(
-            '{namespace="default", container="app"}'
-        )
+        result = validator.validate_logql('{namespace="default", container="app"}')
         assert result.is_valid
         assert not result.errors
 
@@ -89,9 +81,7 @@ class TestQueryValidator:
 
     def test_invalid_logql_sql_style(self, validator):
         """SQLスタイルのクエリはエラーになること."""
-        result = validator.validate_logql(
-            "kubernetes_pod_name = 'my-pod' AND log_type = 'system'"
-        )
+        result = validator.validate_logql("kubernetes_pod_name = 'my-pod' AND log_type = 'system'")
         assert not result.is_valid
         assert result.errors
         # SQLパターンの検出
@@ -99,9 +89,7 @@ class TestQueryValidator:
 
     def test_invalid_logql_with_time_range(self, validator):
         """時間範囲がクエリ内にある場合はエラー."""
-        result = validator.validate_logql(
-            "{job=\"app\"} AND log_time >= '2024-01-01T00:00:00'"
-        )
+        result = validator.validate_logql("{job=\"app\"} AND log_time >= '2024-01-01T00:00:00'")
         assert not result.is_valid
         assert result.errors
 
@@ -119,9 +107,7 @@ class TestQueryValidator:
     def test_logql_auto_correction_sql_style(self, validator):
         """SQLスタイルのクエリの自動修正を試みる."""
         # 完全なSQL形式は修正不可能かもしれないが、試みる
-        result = validator.validate_logql(
-            "pod_name = 'my-pod' AND namespace = 'default'"
-        )
+        result = validator.validate_logql("pod_name = 'my-pod' AND namespace = 'default'")
         # 修正を試みるが、完全には成功しない可能性
         assert result.corrected_query is not None or not result.is_valid
 
@@ -138,9 +124,7 @@ class TestQueryValidator:
     # validate_and_fix のテスト
 
     def test_validate_and_fix_valid_query(self, validator):
-        query, result = validator.validate_and_fix(
-            '{job="app"}', QueryType.LOGQL
-        )
+        query, result = validator.validate_and_fix('{job="app"}', QueryType.LOGQL)
         assert query == '{job="app"}'
         assert result.is_valid
 
@@ -195,27 +179,19 @@ class TestValidationEdgeCases:
         assert result.is_valid
 
     def test_logql_with_complex_pipeline(self, validator):
-        result = validator.validate_logql(
-            '{job="app"} |= "error" | json | level="error"'
-        )
+        result = validator.validate_logql('{job="app"} |= "error" | json | level="error"')
         assert result.is_valid
 
     def test_promql_with_offset(self, validator):
-        result = validator.validate_promql(
-            'http_requests_total{job="api"} offset 5m'
-        )
+        result = validator.validate_promql('http_requests_total{job="api"} offset 5m')
         # offset修飾子は有効
         assert result.is_valid
 
     def test_promql_histogram_quantile(self, validator):
-        result = validator.validate_promql(
-            'histogram_quantile(0.99, rate(http_request_duration_bucket[5m]))'
-        )
+        result = validator.validate_promql("histogram_quantile(0.99, rate(http_request_duration_bucket[5m]))")
         # histogram_quantileはPROMQL_AGGREGATIONS にないが有効なクエリ
         # バリデータはメトリクス名として扱うが、括弧のバランスは検証
-        assert result.is_valid or not any(
-            "バランス" in e for e in (result.errors or [])
-        )
+        assert result.is_valid or not any("バランス" in e for e in (result.errors or []))
 
     def test_logql_negative_filter(self, validator):
         result = validator.validate_logql('{job="app"} != "healthcheck"')
@@ -282,16 +258,14 @@ class TestGrafanaVariableDetection:
 
     def test_detect_multiple_variables(self, validator):
         """複数変数の検出."""
-        vars = validator.contains_grafana_variables(
-            "rate(cpu{cluster=$cluster, namespace=$namespace}[5m])"
-        )
+        vars = validator.contains_grafana_variables("rate(cpu{cluster=$cluster, namespace=$namespace}[5m])")
         assert len(vars) == 2
         assert "$cluster" in vars
         assert "$namespace" in vars
 
     def test_no_variables(self, validator):
         """変数なしの場合は空リスト."""
-        vars = validator.contains_grafana_variables("rate(cpu{job=\"test\"}[5m])")
+        vars = validator.contains_grafana_variables('rate(cpu{job="test"}[5m])')
         assert vars == []
 
 
@@ -328,23 +302,17 @@ class TestSanitizeQuery:
 
     def test_sanitize_double_braces(self, validator):
         """二重ブレースをサニタイズ."""
-        sanitized, warnings = validator.sanitize_query(
-            '{{job="app"}}', QueryType.LOGQL
-        )
+        sanitized, warnings = validator.sanitize_query('{{job="app"}}', QueryType.LOGQL)
         assert sanitized == '{job="app"}'
         assert any("二重ブレース" in w for w in warnings)
 
     def test_sanitize_grafana_variable_warning(self, validator):
         """Grafana変数は警告を出す."""
-        _sanitized, warnings = validator.sanitize_query(
-            "rate(cpu{cluster=$cluster}[5m])", QueryType.PROMQL
-        )
+        _sanitized, warnings = validator.sanitize_query("rate(cpu{cluster=$cluster}[5m])", QueryType.PROMQL)
         assert any("Grafana変数" in w for w in warnings)
 
     def test_sanitize_clean_query(self, validator):
         """問題なしのクエリは警告なし."""
-        sanitized, warnings = validator.sanitize_query(
-            '{job="app"}', QueryType.LOGQL
-        )
+        sanitized, warnings = validator.sanitize_query('{job="app"}', QueryType.LOGQL)
         assert sanitized == '{job="app"}'
         assert warnings == []

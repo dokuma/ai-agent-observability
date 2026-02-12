@@ -18,13 +18,13 @@ from ai_agent_monitoring.tools.loki import create_loki_tools
 try:
     from langfuse import observe as _observe
 except ImportError:
-    def _observe(
-        func: Any = None, **kwargs: Any
-    ) -> Any:
+
+    def _observe(func: Any = None, **kwargs: Any) -> Any:
         """No-op fallback when langfuse is not installed."""
         if func is not None:
             return func
         return lambda f: f
+
 
 logger = logging.getLogger(__name__)
 
@@ -93,16 +93,10 @@ class LogsAgent:
             return {"messages": [AIMessage(content="調査計画がありません。")]}
 
         # 初回のみシステムプロンプトと調査指示を付与
-        if not any(
-            isinstance(m, SystemMessage) and "Logs Agent" in m.content
-            for m in state.get("messages", [])
-        ):
+        if not any(isinstance(m, SystemMessage) and "Logs Agent" in m.content for m in state.get("messages", [])):
             time_desc = "指定なし"
             if plan.time_range:
-                time_desc = (
-                    f"{plan.time_range.start.isoformat()} 〜 "
-                    f"{plan.time_range.end.isoformat()}"
-                )
+                time_desc = f"{plan.time_range.start.isoformat()} 〜 {plan.time_range.end.isoformat()}"
 
             queries_text = "\n".join(f"- {q}" for q in plan.logql_queries)
             datasource_uid = plan.loki_datasource_uid
@@ -129,7 +123,7 @@ class LogsAgent:
                         f"対象インスタンス: {', '.join(plan.target_instances) or '全て'}\n"
                         f"時間範囲: {time_desc}\n"
                         f"{datasource_instruction}\n"
-                        "**重要**: LogQLは {job=\"xxx\"} |= \"error\" の形式です。"
+                        '**重要**: LogQLは {job="xxx"} |= "error" の形式です。'
                         "SQLではありません。二重ブレース {{...}} は使用しないでください。\n"
                         "Toolを使ってクエリを実行し、エラーパターンを分析してください。"
                     )

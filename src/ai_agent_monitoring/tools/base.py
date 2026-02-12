@@ -26,17 +26,17 @@ if TYPE_CHECKING:
 # Langfuse observe デコレータ（未インストール時はno-op）
 try:
     from langfuse import observe as _observe
+
     _LANGFUSE_OBSERVE_AVAILABLE = True
 except ImportError:
     _LANGFUSE_OBSERVE_AVAILABLE = False
 
-    def _observe(
-        func: Any = None, **kwargs: Any
-    ) -> Any:
+    def _observe(func: Any = None, **kwargs: Any) -> Any:
         """No-op fallback when langfuse is not installed."""
         if func is not None:
             return func
         return lambda f: f
+
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,7 @@ class MCPConnectionError(Exception):
 
 class MCPTimeoutError(MCPConnectionError):
     """MCP Server への接続がタイムアウトした場合に送出される例外."""
+
 
 T = TypeVar("T", bound="BaseMCPTool")
 
@@ -160,14 +161,10 @@ class MCPClient:
                     yield session
         except TimeoutError as e:
             logger.error("MCP connection timed out: %s (url=%s)", e, self.sse_url)
-            raise MCPTimeoutError(
-                f"MCP server connection timed out: {self.sse_url}"
-            ) from e
+            raise MCPTimeoutError(f"MCP server connection timed out: {self.sse_url}") from e
         except (ConnectionError, OSError) as e:
             logger.error("MCP connection failed: %s: %s (url=%s)", type(e).__name__, e, self.sse_url)
-            raise MCPConnectionError(
-                f"MCP server connection failed: {self.sse_url}: {e}"
-            ) from e
+            raise MCPConnectionError(f"MCP server connection failed: {self.sse_url}: {e}") from e
 
     @asynccontextmanager
     async def persistent_session(self) -> AsyncGenerator[ClientSession, None]:
@@ -279,16 +276,20 @@ class MCPClient:
             if isinstance(content, types.TextContent):
                 extracted["content"].append({"type": "text", "text": content.text})
             elif isinstance(content, types.ImageContent):
-                extracted["content"].append({
-                    "type": "image",
-                    "mimeType": content.mimeType,
-                    "data": content.data,
-                })
+                extracted["content"].append(
+                    {
+                        "type": "image",
+                        "mimeType": content.mimeType,
+                        "data": content.data,
+                    }
+                )
             elif isinstance(content, types.EmbeddedResource):
-                extracted["content"].append({
-                    "type": "resource",
-                    "resource": content.resource.model_dump(),
-                })
+                extracted["content"].append(
+                    {
+                        "type": "resource",
+                        "resource": content.resource.model_dump(),
+                    }
+                )
 
         return extracted
 

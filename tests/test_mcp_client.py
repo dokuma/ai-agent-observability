@@ -49,9 +49,7 @@ class TestExtractResult:
 
     def test_extract_image_content(self):
         """正常系: ImageContentを抽出."""
-        img_content = types.ImageContent(
-            type="image", mimeType="image/png", data="base64data"
-        )
+        img_content = types.ImageContent(type="image", mimeType="image/png", data="base64data")
         result = types.CallToolResult(content=[img_content], isError=False)
         extracted = self.client._extract_result(result)
         assert len(extracted["content"]) == 1
@@ -107,7 +105,8 @@ class TestMCPClientCallTool:
 
         text_content = types.TextContent(type="text", text='{"status": "ok"}')
         mock_call_result = types.CallToolResult(
-            content=[text_content], isError=False,
+            content=[text_content],
+            isError=False,
         )
 
         mock_session = AsyncMock()
@@ -115,9 +114,7 @@ class TestMCPClientCallTool:
         mock_session.initialize = AsyncMock()
 
         with patch.object(client, "session") as mock_session_cm:
-            mock_session_cm.return_value.__aenter__ = AsyncMock(
-                return_value=mock_session
-            )
+            mock_session_cm.return_value.__aenter__ = AsyncMock(return_value=mock_session)
             mock_session_cm.return_value.__aexit__ = AsyncMock(return_value=None)
 
             result = await client.call_tool("my_tool", {"key": "value"})
@@ -133,16 +130,15 @@ class TestMCPClientCallTool:
 
         error_content = types.TextContent(type="text", text="tool error")
         mock_call_result = types.CallToolResult(
-            content=[error_content], isError=True,
+            content=[error_content],
+            isError=True,
         )
 
         mock_session = AsyncMock()
         mock_session.call_tool = AsyncMock(return_value=mock_call_result)
 
         with patch.object(client, "session") as mock_session_cm:
-            mock_session_cm.return_value.__aenter__ = AsyncMock(
-                return_value=mock_session
-            )
+            mock_session_cm.return_value.__aenter__ = AsyncMock(return_value=mock_session)
             mock_session_cm.return_value.__aexit__ = AsyncMock(return_value=None)
 
             result = await client.call_tool("failing_tool", {})
@@ -160,9 +156,7 @@ class TestMCPClientCallTool:
         mock_session.call_tool = AsyncMock(return_value=mock_call_result)
 
         with patch.object(client, "session") as mock_session_cm:
-            mock_session_cm.return_value.__aenter__ = AsyncMock(
-                return_value=mock_session
-            )
+            mock_session_cm.return_value.__aenter__ = AsyncMock(return_value=mock_session)
             mock_session_cm.return_value.__aexit__ = AsyncMock(return_value=None)
 
             await client.call_tool("tool_no_args")
@@ -195,7 +189,8 @@ class TestBaseMCPToolCallTool:
         """セッションあり: session.call_tool + _extract_result が呼ばれる."""
         text_content = types.TextContent(type="text", text="result")
         mock_call_result = types.CallToolResult(
-            content=[text_content], isError=False,
+            content=[text_content],
+            isError=False,
         )
 
         mock_session = AsyncMock()
@@ -220,9 +215,7 @@ class TestBaseMCPToolCallTool:
 
         mock_client = MagicMock(spec=MCPClient)
         mock_client.session = MagicMock()
-        mock_client.session.return_value.__aenter__ = AsyncMock(
-            return_value=mock_session
-        )
+        mock_client.session.return_value.__aenter__ = AsyncMock(return_value=mock_session)
         mock_client.session.return_value.__aexit__ = AsyncMock(return_value=None)
 
         tool = BaseMCPTool(mock_client)
@@ -273,9 +266,7 @@ class TestMCPSessionManager:
 
         mock_client = MagicMock(spec=MCPClient)
         mock_client.session = MagicMock()
-        mock_client.session.return_value.__aenter__ = AsyncMock(
-            return_value=mock_session
-        )
+        mock_client.session.return_value.__aenter__ = AsyncMock(return_value=mock_session)
         mock_client.session.return_value.__aexit__ = AsyncMock(return_value=None)
 
         manager.register("grafana", mock_client)
@@ -320,19 +311,13 @@ class TestMCPSessionManager:
         manager = MCPSessionManager()
         mock_session = AsyncMock()
         mock_client = MagicMock(spec=MCPClient)
-        mock_client.call_tool_with_session = AsyncMock(
-            return_value={"content": [{"type": "text", "text": "ok"}]}
-        )
+        mock_client.call_tool_with_session = AsyncMock(return_value={"content": [{"type": "text", "text": "ok"}]})
 
         manager.register("loki", mock_client)
 
-        result = await manager.call_tool_with_session(
-            "loki", mock_session, "query_logs", {"query": '{job="app"}'}
-        )
+        result = await manager.call_tool_with_session("loki", mock_session, "query_logs", {"query": '{job="app"}'})
 
-        mock_client.call_tool_with_session.assert_called_once_with(
-            mock_session, "query_logs", {"query": '{job="app"}'}
-        )
+        mock_client.call_tool_with_session.assert_called_once_with(mock_session, "query_logs", {"query": '{job="app"}'})
         assert result["content"][0]["text"] == "ok"
 
     @pytest.mark.asyncio

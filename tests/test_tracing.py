@@ -52,7 +52,9 @@ class TestCreateLangfuseHandler:
         with patch("ai_agent_monitoring.core.tracing.LangfuseCallbackHandler") as mock_cls:
             mock_cls.return_value = MagicMock()
             handler = create_langfuse_handler(
-                settings, session_id="sess-1", tags=["alert"],
+                settings,
+                session_id="sess-1",
+                tags=["alert"],
             )
         assert handler is not None
         mock_cls.assert_called_once()
@@ -113,7 +115,9 @@ class TestBuildRunnableConfig:
         with patch("ai_agent_monitoring.core.tracing.create_langfuse_handler") as mock_create:
             mock_create.return_value = None
             build_runnable_config(
-                settings, trigger_type="alert", extra_tags=["high-priority"],
+                settings,
+                trigger_type="alert",
+                extra_tags=["high-priority"],
             )
             call_kwargs = mock_create.call_args[1]
             assert "high-priority" in call_kwargs["tags"]

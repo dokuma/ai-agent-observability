@@ -39,9 +39,7 @@ class TestMCPClientExtractResult:
 
         error_result = MagicMock(spec=types.CallToolResult)
         error_result.isError = True
-        error_result.content = [
-            MagicMock(spec=types.TextContent, text="Error occurred")
-        ]
+        error_result.content = [MagicMock(spec=types.TextContent, text="Error occurred")]
         # TextContentであることを示す
         error_result.content[0].__class__ = types.TextContent
 
@@ -181,12 +179,14 @@ class TestLokiToolFunctions:
         tools = create_loki_tools(mock_mcp_client)
         query_tool = next(t for t in tools if t.name == "query_loki_logs")
 
-        await query_tool.ainvoke({
-            "query": '{job="app"}',
-            "start": "2026-02-01T15:00:00+00:00",
-            "end": "2026-02-01T16:00:00+00:00",
-            "limit": 100,
-        })
+        await query_tool.ainvoke(
+            {
+                "query": '{job="app"}',
+                "start": "2026-02-01T15:00:00+00:00",
+                "end": "2026-02-01T16:00:00+00:00",
+                "limit": 100,
+            }
+        )
         call_args = mock_mcp_client.call_tool.call_args[0][1]
         assert "start" in call_args
 
@@ -219,9 +219,7 @@ class TestGrafanaMCPTool:
         """タイプ指定でデータソース一覧を取得."""
         grafana = GrafanaMCPTool(mock_mcp_client)
         await grafana.list_datasources(ds_type="prometheus")
-        mock_mcp_client.call_tool.assert_called_once_with(
-            "list_datasources", {"type": "prometheus"}
-        )
+        mock_mcp_client.call_tool.assert_called_once_with("list_datasources", {"type": "prometheus"})
 
     @pytest.mark.asyncio
     async def test_list_prometheus_metric_names(self, mock_mcp_client):
@@ -279,7 +277,8 @@ class TestGrafanaMCPTool:
         await grafana.get_dashboard_by_uid("test-uid")
 
         mock_mcp_client.call_tool.assert_called_once_with(
-            "get_dashboard_by_uid", {"uid": "test-uid"},
+            "get_dashboard_by_uid",
+            {"uid": "test-uid"},
         )
 
     @pytest.mark.asyncio
@@ -288,7 +287,8 @@ class TestGrafanaMCPTool:
         await grafana.get_dashboard_panels("test-uid")
 
         mock_mcp_client.call_tool.assert_called_once_with(
-            "get_dashboard_by_uid", {"uid": "test-uid"},
+            "get_dashboard_by_uid",
+            {"uid": "test-uid"},
         )
 
     @pytest.mark.asyncio
@@ -347,7 +347,8 @@ class TestGrafanaMCPTool:
         grafana = GrafanaMCPTool(mock_mcp_client)
         await grafana.get_alert_rule("rule-uid")
         mock_mcp_client.call_tool.assert_called_once_with(
-            "get_alert_rule_by_uid", {"uid": "rule-uid"},
+            "get_alert_rule_by_uid",
+            {"uid": "rule-uid"},
         )
 
     @pytest.mark.asyncio
@@ -362,7 +363,8 @@ class TestGrafanaMCPTool:
         grafana = GrafanaMCPTool(mock_mcp_client)
         await grafana.search_dashboards("cpu")
         mock_mcp_client.call_tool.assert_called_once_with(
-            "search_dashboards", {"query": "cpu"},
+            "search_dashboards",
+            {"query": "cpu"},
         )
 
     @pytest.mark.asyncio
@@ -384,7 +386,12 @@ class TestGrafanaMCPTool:
 
         with patch("httpx.AsyncClient", return_value=mock_client):
             result = await grafana.render_panel_image(
-                "dash-uid", 1, start=start, end=end, width=800, height=400,
+                "dash-uid",
+                1,
+                start=start,
+                end=end,
+                width=800,
+                height=400,
             )
 
         assert result == b"\x89PNG fake image"
@@ -456,13 +463,15 @@ class TestGrafanaToolFunctions:
     async def test_grafana_query_prometheus_with_time(self, mock_mcp_client):
         tools = create_grafana_tools(mock_mcp_client)
         tool = next(t for t in tools if t.name == "grafana_query_prometheus")
-        await tool.ainvoke({
-            "datasource_uid": "prom-uid",
-            "expr": "up",
-            "start": "2026-02-01T15:00:00+00:00",
-            "end": "2026-02-01T16:00:00+00:00",
-            "step_seconds": 60,
-        })
+        await tool.ainvoke(
+            {
+                "datasource_uid": "prom-uid",
+                "expr": "up",
+                "start": "2026-02-01T15:00:00+00:00",
+                "end": "2026-02-01T16:00:00+00:00",
+                "step_seconds": 60,
+            }
+        )
         call_args = mock_mcp_client.call_tool.call_args[0][1]
         assert "startTime" in call_args
         assert call_args["datasourceUid"] == "prom-uid"
@@ -471,13 +480,15 @@ class TestGrafanaToolFunctions:
     async def test_grafana_query_loki_with_time(self, mock_mcp_client):
         tools = create_grafana_tools(mock_mcp_client)
         tool = next(t for t in tools if t.name == "grafana_query_loki")
-        await tool.ainvoke({
-            "datasource_uid": "loki-uid",
-            "logql": '{job="app"}',
-            "start": "2026-02-01T15:00:00+00:00",
-            "end": "2026-02-01T16:00:00+00:00",
-            "limit": 100,
-        })
+        await tool.ainvoke(
+            {
+                "datasource_uid": "loki-uid",
+                "logql": '{job="app"}',
+                "start": "2026-02-01T15:00:00+00:00",
+                "end": "2026-02-01T16:00:00+00:00",
+                "limit": 100,
+            }
+        )
         call_args = mock_mcp_client.call_tool.call_args[0][1]
         assert call_args["datasourceUid"] == "loki-uid"
         assert call_args["logql"] == '{job="app"}'
@@ -515,9 +526,7 @@ class TestToolRegistry:
         # httpxをモックして全サーバーへの接続を失敗させる
         with patch("ai_agent_monitoring.tools.registry.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
-            mock_client.get = AsyncMock(
-                side_effect=httpx.ConnectError("Connection refused")
-            )
+            mock_client.get = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_cls.return_value = mock_client

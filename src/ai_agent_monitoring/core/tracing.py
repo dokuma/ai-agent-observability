@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 # Langfuse がインストールされていない場合のフォールバック
 try:
     from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
+
     LANGFUSE_AVAILABLE = True
 except ImportError:
     LANGFUSE_AVAILABLE = False

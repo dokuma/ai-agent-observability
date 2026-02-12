@@ -183,8 +183,10 @@ class TestParseRelativeTimeTool:
 
     def test_custom_timezone(self):
         """タイムゾーンを指定."""
-        result = self.tool.invoke({
-            "expression": "30分前",
-            "timezone_name": "UTC",
-        })
+        result = self.tool.invoke(
+            {
+                "expression": "30分前",
+                "timezone_name": "UTC",
+            }
+        )
         assert result["timezone"] == "UTC"

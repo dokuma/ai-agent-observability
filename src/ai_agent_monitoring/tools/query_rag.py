@@ -42,21 +42,113 @@ class SimpleTokenizer:
 
     # 日本語と英語の両方に対応
     STOP_WORDS: ClassVar[set[str]] = {
-        "the", "a", "an", "is", "are", "was", "were", "be", "been",
-        "being", "have", "has", "had", "do", "does", "did", "will",
-        "would", "could", "should", "may", "might", "must", "shall",
-        "can", "need", "dare", "ought", "used", "to", "of", "in",
-        "for", "on", "with", "at", "by", "from", "as", "into",
-        "through", "during", "before", "after", "above", "below",
-        "between", "under", "again", "further", "then", "once",
-        "here", "there", "when", "where", "why", "how", "all",
-        "each", "few", "more", "most", "other", "some", "such",
-        "no", "nor", "not", "only", "own", "same", "so", "than",
-        "too", "very", "just", "and", "but", "if", "or", "because",
-        "until", "while", "this", "that", "these", "those", "it",
+        "the",
+        "a",
+        "an",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "could",
+        "should",
+        "may",
+        "might",
+        "must",
+        "shall",
+        "can",
+        "need",
+        "dare",
+        "ought",
+        "used",
+        "to",
+        "of",
+        "in",
+        "for",
+        "on",
+        "with",
+        "at",
+        "by",
+        "from",
+        "as",
+        "into",
+        "through",
+        "during",
+        "before",
+        "after",
+        "above",
+        "below",
+        "between",
+        "under",
+        "again",
+        "further",
+        "then",
+        "once",
+        "here",
+        "there",
+        "when",
+        "where",
+        "why",
+        "how",
+        "all",
+        "each",
+        "few",
+        "more",
+        "most",
+        "other",
+        "some",
+        "such",
+        "no",
+        "nor",
+        "not",
+        "only",
+        "own",
+        "same",
+        "so",
+        "than",
+        "too",
+        "very",
+        "just",
+        "and",
+        "but",
+        "if",
+        "or",
+        "because",
+        "until",
+        "while",
+        "this",
+        "that",
+        "these",
+        "those",
+        "it",
         # 日本語
-        "の", "は", "が", "を", "に", "で", "と", "も", "や", "など",
-        "です", "ます", "する", "した", "して", "される", "された",
+        "の",
+        "は",
+        "が",
+        "を",
+        "に",
+        "で",
+        "と",
+        "も",
+        "や",
+        "など",
+        "です",
+        "ます",
+        "する",
+        "した",
+        "して",
+        "される",
+        "された",
     }
 
     @classmethod
@@ -104,9 +196,7 @@ class BM25Index:
                 self.doc_freqs[term] = self.doc_freqs.get(term, 0) + 1
 
         self.N = len(self.documents)
-        self.avg_doc_length = (
-            sum(self.doc_lengths) / self.N if self.N > 0 else 0
-        )
+        self.avg_doc_length = sum(self.doc_lengths) / self.N if self.N > 0 else 0
 
     def search(self, query: str, top_k: int = 5) -> list[SearchResult]:
         """クエリでドキュメントを検索."""
@@ -130,20 +220,15 @@ class BM25Index:
                 df = self.doc_freqs.get(term, 0)
 
                 # IDF計算
-                idf = (
-                    (self.N - df + 0.5) / (df + 0.5)
-                    if df > 0
-                    else 0
-                )
+                idf = (self.N - df + 0.5) / (df + 0.5) if df > 0 else 0
                 if idf > 0:
                     import math
+
                     idf = math.log(1 + idf)
 
                 # BM25スコア計算
                 numerator = tf * (self.k1 + 1)
-                denominator = tf + self.k1 * (
-                    1 - self.b + self.b * doc_len / self.avg_doc_length
-                )
+                denominator = tf + self.k1 * (1 - self.b + self.b * doc_len / self.avg_doc_length)
                 score += idf * numerator / denominator
 
             if score > 0:
@@ -156,20 +241,18 @@ class BM25Index:
         results = []
         for doc_idx, score in scores[:top_k]:
             # ハイライト抽出
-            highlights = self._extract_highlights(
-                self.documents[doc_idx].content, query_tokens
+            highlights = self._extract_highlights(self.documents[doc_idx].content, query_tokens)
+            results.append(
+                SearchResult(
+                    document=self.documents[doc_idx],
+                    score=score,
+                    highlights=highlights,
+                )
             )
-            results.append(SearchResult(
-                document=self.documents[doc_idx],
-                score=score,
-                highlights=highlights,
-            ))
 
         return results
 
-    def _extract_highlights(
-        self, content: str, query_tokens: list[str], context_chars: int = 100
-    ) -> list[str]:
+    def _extract_highlights(self, content: str, query_tokens: list[str], context_chars: int = 100) -> list[str]:
         """クエリトークンを含む部分を抽出."""
         highlights: list[str] = []
         content_lower = content.lower()
@@ -272,16 +355,18 @@ class QueryDocumentRAG:
                     re.DOTALL,
                 )
 
-                chunks.append(Document(
-                    content=subsection,
-                    metadata={
-                        "source": filename,
-                        "title": title,
-                        "subtitle": subtitle,
-                        "code_examples": code_blocks,
-                        "query_type": self._detect_query_type(filename),
-                    },
-                ))
+                chunks.append(
+                    Document(
+                        content=subsection,
+                        metadata={
+                            "source": filename,
+                            "title": title,
+                            "subtitle": subtitle,
+                            "code_examples": code_blocks,
+                            "query_type": self._detect_query_type(filename),
+                        },
+                    )
+                )
 
         return chunks
 
@@ -317,10 +402,7 @@ class QueryDocumentRAG:
 
         # query_typeでフィルタ
         if query_type:
-            results = [
-                r for r in results
-                if r.document.metadata.get("query_type") == query_type
-            ]
+            results = [r for r in results if r.document.metadata.get("query_type") == query_type]
 
         return results[:top_k]
 
@@ -428,11 +510,7 @@ class QueryDocumentRAG:
             self.index.doc_freqs = data["doc_freqs"]
             self.index.term_freqs = data["term_freqs"]
             self.index.N = len(self.index.documents)
-            self.index.avg_doc_length = (
-                sum(self.index.doc_lengths) / self.index.N
-                if self.index.N > 0
-                else 0
-            )
+            self.index.avg_doc_length = sum(self.index.doc_lengths) / self.index.N if self.index.N > 0 else 0
             self._initialized = True
 
             logger.info("Index loaded from %s", path)

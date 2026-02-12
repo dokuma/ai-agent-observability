@@ -14,9 +14,13 @@ class TestAppStateInitialize:
         app = AppState()
 
         mock_registry = MagicMock()
-        mock_registry.health_check = AsyncMock(return_value={
-            "prometheus": True, "loki": True, "grafana": True,
-        })
+        mock_registry.health_check = AsyncMock(
+            return_value={
+                "prometheus": True,
+                "loki": True,
+                "grafana": True,
+            }
+        )
         mock_registry.prometheus = MagicMock()
         mock_registry.prometheus.client = MagicMock()
         mock_registry.loki = MagicMock()
@@ -24,9 +28,11 @@ class TestAppStateInitialize:
         mock_registry.grafana = MagicMock()
         mock_registry.grafana.client = MagicMock()
 
-        with patch("ai_agent_monitoring.api.dependencies.ToolRegistry") as mock_tr_cls, \
-             patch("ai_agent_monitoring.api.dependencies.ChatOpenAI") as mock_llm_cls, \
-             patch("ai_agent_monitoring.api.dependencies.OrchestratorAgent") as mock_orch_cls:
+        with (
+            patch("ai_agent_monitoring.api.dependencies.ToolRegistry") as mock_tr_cls,
+            patch("ai_agent_monitoring.api.dependencies.ChatOpenAI") as mock_llm_cls,
+            patch("ai_agent_monitoring.api.dependencies.OrchestratorAgent") as mock_orch_cls,
+        ):
             mock_tr_cls.from_settings.return_value = mock_registry
             mock_llm_cls.return_value = MagicMock()
             mock_orch_cls.return_value = MagicMock()
