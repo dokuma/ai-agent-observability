@@ -1,0 +1,23 @@
+{{- if .Values.rbac.enabled }}
+{{- $fullName := include "ai-agent-monitoring.fullname" . }}
+{{- $saName := include "ai-agent-monitoring.serviceAccountName" . }}
+{{- $namespace := .Release.Namespace }}
+{{- $labels := include "ai-agent-monitoring.labels" . }}
+{{- range .Values.rbac.clusterRoleBindings }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $fullName }}-{{ .clusterRoleName }}
+  labels:
+    {{- $labels | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .clusterRoleName }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $saName }}
+    namespace: {{ $namespace }}
+{{- end }}
+{{- end }}

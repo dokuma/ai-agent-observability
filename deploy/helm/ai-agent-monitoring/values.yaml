@@ -180,6 +180,29 @@ secrets:
   langfuseSecretKey: ""
 
 # ===========================================================
+# ServiceAccount
+# ===========================================================
+serviceAccount:
+  create: true
+  # 空の場合、fullname から自動生成
+  name: ""
+  annotations: {}
+
+# ===========================================================
+# RBAC — ClusterRoleBinding
+# ===========================================================
+rbac:
+  # ClusterRoleBinding の作成を有効にする
+  enabled: false
+  # バインドする ClusterRole のリスト（環境に合わせて名前を変更可能）
+  clusterRoleBindings:
+    - clusterRoleName: cluster-monitoring-view
+    - clusterRoleName: cluster-reader
+    - clusterRoleName: system:auth-delegator
+    - clusterRoleName: thanos-querier
+    - clusterRoleName: grafana-loki-logs-reader
+
+# ===========================================================
 # Security Context（OpenShift restricted SCC 準拠）
 # ===========================================================
 securityContext:
