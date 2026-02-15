@@ -68,3 +68,14 @@ ConfigMap 名
 {{- define "ai-agent-monitoring.configmapName" -}}
 {{- printf "%s-config" (include "ai-agent-monitoring.fullname" .) }}
 {{- end }}
+
+{{/*
+ServiceAccount 名
+*/}}
+{{- define "ai-agent-monitoring.serviceAccountName" -}}
+{{- if .Values.serviceAccount.name }}
+{{- .Values.serviceAccount.name }}
+{{- else }}
+{{- include "ai-agent-monitoring.fullname" . }}
+{{- end }}
+{{- end }}
