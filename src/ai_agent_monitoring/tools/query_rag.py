@@ -372,10 +372,15 @@ class QueryDocumentRAG:
 
     def _detect_query_type(self, filename: str) -> str:
         """ファイル名からクエリタイプを検出."""
-        if "promql" in filename.lower():
+        filename_lower = filename.lower()
+        if "promql" in filename_lower:
             return "promql"
-        if "logql" in filename.lower():
+        if "logql" in filename_lower:
             return "logql"
+        if "prometheus" in filename_lower and "endpoint" in filename_lower:
+            return "prometheus_endpoint"
+        if "loki" in filename_lower and "endpoint" in filename_lower:
+            return "loki_endpoint"
         return "unknown"
 
     def search(
