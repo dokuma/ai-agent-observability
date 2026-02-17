@@ -1,0 +1,49 @@
+image:
+  registry: docker.io
+  repository: clickhouse/clickhouse-server
+  tag: "24.3"
+  pullPolicy: IfNotPresent
+
+auth:
+  username: default
+  password: changeme
+  ## 既存の Secret を使う場合はここに指定（password は無視される）
+  # existingSecret: my-clickhouse-secret
+  ## Secret 内のキー名
+  # existingSecretKey: password
+
+database: default
+
+service:
+  type: ClusterIP
+  httpPort: 8123
+  tcpPort: 9000
+
+persistence:
+  enabled: true
+  data:
+    size: 10Gi
+    # storageClass: ""
+    # existingClaim: ""
+  logs:
+    size: 1Gi
+    # storageClass: ""
+    # existingClaim: ""
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    cpu: "2"
+    memory: 4Gi
+
+podSecurityContext: {}
+
+containerSecurityContext: {}
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
