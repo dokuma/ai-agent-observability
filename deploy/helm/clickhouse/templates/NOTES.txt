@@ -1,0 +1,19 @@
+ClickHouse がデプロイされました。
+
+接続情報:
+  HTTP: {{ include "clickhouse.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.httpPort }}
+  TCP:  {{ include "clickhouse.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.tcpPort }}
+
+Langfuse values.yaml に以下を設定してください:
+
+  clickhouse:
+    deploy: false
+    host: {{ include "clickhouse.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+    httpPort: {{ .Values.service.httpPort }}
+    nativePort: {{ .Values.service.tcpPort }}
+    auth:
+      username: {{ .Values.auth.username }}
+      password:
+        secretKeyRef:
+          name: {{ include "clickhouse.secretName" . }}
+          key: {{ include "clickhouse.secretKey" . }}
