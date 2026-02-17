@@ -468,12 +468,8 @@ curl 'http://localhost:3100/ready'
 
     def test_search_filters_endpoint_type(self, rag_with_endpoints):
         """エンドポイントタイプフィルタの動作確認."""
-        prom_results = rag_with_endpoints.search(
-            "query", query_type="prometheus_endpoint"
-        )
-        loki_results = rag_with_endpoints.search(
-            "query", query_type="loki_endpoint"
-        )
+        prom_results = rag_with_endpoints.search("query", query_type="prometheus_endpoint")
+        loki_results = rag_with_endpoints.search("query", query_type="loki_endpoint")
 
         for r in prom_results:
             assert r.document.metadata.get("query_type") == "prometheus_endpoint"
