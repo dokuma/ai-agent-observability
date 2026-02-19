@@ -59,6 +59,10 @@ spec:
               mountPath: /var/lib/clickhouse
             - name: logs
               mountPath: /var/log/clickhouse-server
+            - name: keeper-config
+              mountPath: /etc/clickhouse-server/config.d/keeper.xml
+              subPath: keeper.xml
+              readOnly: true
           {{- with .Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
@@ -75,6 +79,16 @@ spec:
               port: http
             initialDelaySeconds: 5
             periodSeconds: 5
+      volumes:
+        - name: keeper-config
+          configMap:
+            name: {{ include "clickhouse.fullname" . }}-config
+  {{- if not .Values.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        - name: logs
+          emptyDir: {}
+  {{- end }}
   {{- if .Values.persistence.enabled }}
   volumeClaimTemplates:
     - metadata:
@@ -97,10 +111,4 @@ spec:
         resources:
           requests:
             storage: {{ .Values.persistence.logs.size }}
-  {{- else }}
-      volumes:
-        - name: data
-          emptyDir: {}
-        - name: logs
-          emptyDir: {}
   {{- end }}
