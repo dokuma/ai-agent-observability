@@ -115,6 +115,10 @@ lokiMcp:
 # ===========================================================
 grafana-mcp:
   enabled: true
+  # 親チャートの ServiceAccount を共有（独自SA作成するとSCC未付与でFailedCreateになる）
+  serviceAccount:
+    create: false
+    name: "ai-agent-monitoring"  # 親チャートの SA 名（= release名）に合わせる
   grafana:
     url: "http://grafana.monitoring.svc.cluster.local:3000"
     apiKeySecret:
@@ -132,6 +136,7 @@ grafana-mcp:
     readOnlyRootFilesystem: true
     runAsNonRoot: true
   securityContext:
+    runAsNonRoot: true
     seccompProfile:
       type: RuntimeDefault
 
