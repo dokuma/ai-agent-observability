@@ -41,7 +41,7 @@ spec:
                 configMapKeyRef:
                   name: {{ include "ai-agent-monitoring.configmapName" . }}
                   key: LOKI_URL
-            - name: SSE_PORT
+            - name: PORT
               valueFrom:
                 configMapKeyRef:
                   name: {{ include "ai-agent-monitoring.configmapName" . }}

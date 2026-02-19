@@ -10,6 +10,8 @@ RUN uv sync --frozen --no-dev
 COPY src/ src/
 COPY docs/query_reference/ docs/query_reference/
 
+ENV PYTHONPATH=/app/src
+
 RUN useradd -r -u 1000 -m appuser && chown -R appuser:appuser /app
 USER appuser
 

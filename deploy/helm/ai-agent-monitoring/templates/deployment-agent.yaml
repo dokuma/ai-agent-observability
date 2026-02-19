@@ -46,6 +46,8 @@ spec:
               protocol: TCP
           env:
             # --- Runtime ---
+            - name: PYTHONPATH
+              value: "/app/src"
             - name: UV_CACHE_DIR
               value: "/tmp/.cache/uv"
             # --- ConfigMap ---

@@ -13,6 +13,7 @@ import httpx
 from mcp import types
 from mcp.client.session import ClientSession
 from mcp.client.sse import sse_client
+from mcp.client.streamable_http import streamable_http_client
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -76,6 +77,7 @@ class MCPClient:
         base_url: str,
         timeout: float = 30.0,
         *,
+        transport: str = "streamable_http",
         use_tls: bool = False,
         verify_ssl: bool = True,
         ca_bundle: str = "",
@@ -85,6 +87,7 @@ class MCPClient:
         Args:
             base_url: MCPサーバーのベースURL（例: http://localhost:9091）
             timeout: HTTP接続タイムアウト（秒）
+            transport: MCPトランスポート種別（"sse" or "streamable_http"）
             use_tls: TLSを使用するかどうか（Trueの場合、httpをhttpsに変換）
             verify_ssl: SSL証明書を検証するかどうか
             ca_bundle: カスタムCA証明書パス（空の場合はシステムデフォルト）
@@ -93,6 +96,7 @@ class MCPClient:
         if use_tls:
             self.base_url = self.base_url.replace("http://", "https://", 1)
         self.timeout = timeout
+        self._transport = transport
         self._use_tls = use_tls
         self._verify_ssl = verify_ssl
         self._ca_bundle = ca_bundle
@@ -101,15 +105,31 @@ class MCPClient:
         self._connection_context: Any = None
 
     @property
+    def endpoint_url(self) -> str:
+        """トランスポートに応じたエンドポイントURLを取得."""
+        if self._transport == "sse":
+            return f"{self.base_url}/sse"
+        return f"{self.base_url}/mcp"
+
+    @property
     def sse_url(self) -> str:
-        """SSEエンドポイントURLを取得."""
-        return f"{self.base_url}/sse"
+        """SSEエンドポイントURLを取得（後方互換性）."""
+        return self.endpoint_url
+
+    def _build_ssl_verify(self) -> ssl.SSLContext | bool:
+        """SSL検証設定を構築."""
+        verify: ssl.SSLContext | bool = self._verify_ssl
+        if self._ca_bundle:
+            ctx = ssl.create_default_context(cafile=self._ca_bundle)
+            verify = ctx
+        return verify
 
     @asynccontextmanager
     async def session(self) -> AsyncGenerator[ClientSession, None]:
         """MCPセッションを確立するコンテキストマネージャー.
 
-        SSE接続を開き、初期化を行い、セッションを返す。
+        トランスポート設定に応じてSSEまたはStreamable HTTP接続を開き、
+        初期化を行い、セッションを返す。
         コンテキスト終了時に自動的にクリーンアップされる。
 
         注意: このメソッドは毎回新しい接続を作成する。
@@ -122,17 +142,33 @@ class MCPClient:
             MCPTimeoutError: 接続がタイムアウトした場合
             MCPConnectionError: 接続に失敗した場合
         """
-        logger.debug("Connecting to MCP server: %s", self.sse_url)
+        url = self.endpoint_url
+        logger.debug("Connecting to MCP server: %s (transport=%s)", url, self._transport)
+
+        try:
+            if self._transport == "sse":
+                async with self._connect_sse() as session:
+                    yield session
+            else:
+                async with self._connect_streamable_http() as session:
+                    yield session
+        except TimeoutError as e:
+            logger.error("MCP connection timed out: %s (url=%s)", e, url)
+            raise MCPTimeoutError(f"MCP server connection timed out: {url}") from e
+        except (ConnectionError, OSError) as e:
+            logger.error("MCP connection failed: %s: %s (url=%s)", type(e).__name__, e, url)
+            raise MCPConnectionError(f"MCP server connection failed: {url}: {e}") from e
+
+    @asynccontextmanager
+    async def _connect_sse(self) -> AsyncGenerator[ClientSession, None]:
+        """SSEトランスポートで接続."""
+        verify = self._build_ssl_verify()
 
         def _httpx_client_factory(
             headers: dict[str, str] | None = None,
             timeout: httpx.Timeout | None = None,
             auth: httpx.Auth | None = None,
         ) -> httpx.AsyncClient:
-            verify: ssl.SSLContext | bool = self._verify_ssl
-            if self._ca_bundle:
-                ctx = ssl.create_default_context(cafile=self._ca_bundle)
-                verify = ctx
             return httpx.AsyncClient(
                 headers=headers,
                 timeout=timeout or httpx.Timeout(self.timeout),
@@ -141,30 +177,48 @@ class MCPClient:
                 follow_redirects=True,
             )
 
-        try:
-            async with sse_client(
-                url=self.sse_url,
-                timeout=self.timeout,
-                httpx_client_factory=_httpx_client_factory,
-            ) as (read_stream, write_stream):
+        async with sse_client(
+            url=self.endpoint_url,
+            timeout=self.timeout,
+            httpx_client_factory=_httpx_client_factory,
+        ) as (read_stream, write_stream):
+            async with ClientSession(
+                read_stream=read_stream,
+                write_stream=write_stream,
+            ) as session:
+                init_result = await session.initialize()
+                logger.debug(
+                    "MCP session initialized (SSE): server=%s version=%s",
+                    init_result.serverInfo.name,
+                    init_result.serverInfo.version,
+                )
+                yield session
+
+    @asynccontextmanager
+    async def _connect_streamable_http(self) -> AsyncGenerator[ClientSession, None]:
+        """Streamable HTTPトランスポートで接続."""
+        verify = self._build_ssl_verify()
+
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(self.timeout),
+            verify=verify,
+            follow_redirects=True,
+        ) as http_client:
+            async with streamable_http_client(
+                url=self.endpoint_url,
+                http_client=http_client,
+            ) as (read_stream, write_stream, _get_session_id):
                 async with ClientSession(
                     read_stream=read_stream,
                     write_stream=write_stream,
                 ) as session:
-                    # MCPプロトコルの初期化
                     init_result = await session.initialize()
                     logger.debug(
-                        "MCP session initialized: server=%s version=%s",
+                        "MCP session initialized (Streamable HTTP): server=%s version=%s",
                         init_result.serverInfo.name,
                         init_result.serverInfo.version,
                     )
                     yield session
-        except TimeoutError as e:
-            logger.error("MCP connection timed out: %s (url=%s)", e, self.sse_url)
-            raise MCPTimeoutError(f"MCP server connection timed out: {self.sse_url}") from e
-        except (ConnectionError, OSError) as e:
-            logger.error("MCP connection failed: %s: %s (url=%s)", type(e).__name__, e, self.sse_url)
-            raise MCPConnectionError(f"MCP server connection failed: {self.sse_url}: {e}") from e
 
     @asynccontextmanager
     async def persistent_session(self) -> AsyncGenerator[ClientSession, None]:
