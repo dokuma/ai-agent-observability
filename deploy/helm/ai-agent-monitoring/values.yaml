@@ -170,7 +170,7 @@ externalServices:
 config:
   maxIterations: "5"
   investigationTimeoutSeconds: "120"
-  corsAllowedOrigins: "http://localhost:3000"
+  corsAllowedOrigins: '["http://localhost:3000"]'
   mcpUseTls: "false"
   mcpVerifySsl: "true"
   mcpCaBundle: ""
