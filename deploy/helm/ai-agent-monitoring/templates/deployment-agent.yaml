@@ -147,6 +147,10 @@ spec:
                 secretKeyRef:
                   name: {{ include "ai-agent-monitoring.secretName" . }}
                   key: LANGFUSE_SECRET_KEY
+          {{- with .Values.agent.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           {{- with .Values.agent.livenessProbe }}
           livenessProbe:
             {{- toYaml . | nindent 12 }}

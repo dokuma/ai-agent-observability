@@ -21,15 +21,20 @@ agent:
   resources:
     requests:
       cpu: 200m
-      memory: 256Mi
+      memory: 512Mi
     limits:
       cpu: "1"
-      memory: 512Mi
+      memory: 1Gi
+  startupProbe:
+    httpGet:
+      path: /api/v1/health
+      port: http
+    periodSeconds: 10
+    failureThreshold: 18  # 最大180秒の起動猶予
   livenessProbe:
     httpGet:
       path: /api/v1/health
       port: http
-    initialDelaySeconds: 10
     periodSeconds: 30
     timeoutSeconds: 5
     failureThreshold: 3
@@ -37,7 +42,6 @@ agent:
     httpGet:
       path: /api/v1/health
       port: http
-    initialDelaySeconds: 5
     periodSeconds: 10
     timeoutSeconds: 3
     failureThreshold: 3
@@ -115,6 +119,10 @@ lokiMcp:
 # ===========================================================
 grafana-mcp:
   enabled: true
+  # 親チャートの ServiceAccount を共有（独自SA作成するとSCC未付与でFailedCreateになる）
+  serviceAccount:
+    create: false
+    name: "ai-agent-monitoring"  # 親チャートの SA 名（= release名）に合わせる
   grafana:
     url: "http://grafana.monitoring.svc.cluster.local:3000"
     apiKeySecret:
@@ -131,8 +139,8 @@ grafana-mcp:
       drop: [ALL]
     readOnlyRootFilesystem: true
     runAsNonRoot: true
-    runAsUser: 1000
   securityContext:
+    runAsNonRoot: true
     seccompProfile:
       type: RuntimeDefault
 
