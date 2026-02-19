@@ -25,11 +25,16 @@ agent:
     limits:
       cpu: "1"
       memory: 1Gi
+  startupProbe:
+    httpGet:
+      path: /api/v1/health
+      port: http
+    periodSeconds: 10
+    failureThreshold: 18  # 最大180秒の起動猶予
   livenessProbe:
     httpGet:
       path: /api/v1/health
       port: http
-    initialDelaySeconds: 10
     periodSeconds: 30
     timeoutSeconds: 5
     failureThreshold: 3
@@ -37,7 +42,6 @@ agent:
     httpGet:
       path: /api/v1/health
       port: http
-    initialDelaySeconds: 5
     periodSeconds: 10
     timeoutSeconds: 3
     failureThreshold: 3
