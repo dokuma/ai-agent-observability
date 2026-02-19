@@ -37,6 +37,9 @@ spec:
               containerPort: 8000
               protocol: TCP
           env:
+            # --- Runtime ---
+            - name: UV_CACHE_DIR
+              value: "/tmp/.cache/uv"
             # --- ConfigMap ---
             - name: LLM_ENDPOINT
               valueFrom:

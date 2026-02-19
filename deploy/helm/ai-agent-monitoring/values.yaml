@@ -114,10 +114,13 @@ lokiMcp:
 # grafana-mcp 依存チャート上書き
 # ===========================================================
 grafana-mcp:
+  enabled: true
   grafana:
     url: "http://grafana.monitoring.svc.cluster.local:3000"
     apiKeySecret:
-      name: ""  # テンプレートで自動設定
+      # 親チャートの Secret 名を指定する（<release-name>-ai-agent-monitoring-secret）
+      # helm install 時に --set grafana-mcp.grafana.apiKeySecret.name=<secret名> で上書き可能
+      name: "ai-agent-monitoring-secret"
       key: GRAFANA_SERVICE_ACCOUNT_TOKEN
   service:
     type: ClusterIP
