@@ -173,6 +173,12 @@ secrets:
   existingSecret: ""
   # existingSecret が空の場合、以下の値で Secret を自動生成
   llmApiKey: "not-needed"
+  # LLMカスタムヘッダー（環境変数 LLM_CUSTOM_HEADER_<KEY> として注入）
+  # ヘッダー名のハイフンはアンダースコアに変換される（例: Authorization → LLM_CUSTOM_HEADER_AUTHORIZATION）
+  # llmCustomHeaders:
+  #   Authorization: "Bearer eyJhbG..."
+  #   X-Custom-Header: "my-value"
+  llmCustomHeaders: {}
   grafanaApiKey: ""
   grafanaServiceAccountToken: ""
   slackWebhookUrl: ""

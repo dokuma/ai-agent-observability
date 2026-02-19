@@ -1,6 +1,11 @@
 """アプリケーション設定."""
 
+import os
+
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
+
+_LLM_HEADER_PREFIX = "LLM_CUSTOM_HEADER_"
 
 
 class Settings(BaseSettings):
@@ -12,6 +17,16 @@ class Settings(BaseSettings):
     llm_endpoint: str = "http://localhost:8000"
     llm_model: str = "llama-3.1-8b"
     llm_api_key: str = "not-needed"
+    llm_custom_headers: dict[str, str] = {}
+
+    @model_validator(mode="after")
+    def _parse_llm_custom_header_env(self) -> "Settings":
+        """LLM_CUSTOM_HEADER_<KEY> 環境変数をパースしてヘッダー辞書に追加."""
+        for key, value in os.environ.items():
+            if key.startswith(_LLM_HEADER_PREFIX):
+                header_name = key[len(_LLM_HEADER_PREFIX) :].replace("_", "-")
+                self.llm_custom_headers[header_name] = value
+        return self
 
     # Monitoring Stack
     prometheus_url: str = "http://localhost:9090"
