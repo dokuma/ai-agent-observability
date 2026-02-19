@@ -30,6 +30,14 @@ spec:
         - name: agent
           image: {{ include "ai-agent-monitoring.image" (dict "global" .Values.global "image" .Values.agent.image) }}
           imagePullPolicy: {{ .Values.agent.image.pullPolicy }}
+          {{- with .Values.agent.command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.agent.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           ports:

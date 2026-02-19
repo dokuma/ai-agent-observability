@@ -15,4 +15,4 @@ USER appuser
 
 EXPOSE 8000
 
-CMD ["uv", "run", "uvicorn", "ai_agent_monitoring.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD [".venv/bin/uvicorn", "ai_agent_monitoring.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
