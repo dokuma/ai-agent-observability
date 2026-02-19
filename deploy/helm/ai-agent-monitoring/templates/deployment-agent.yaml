@@ -126,6 +126,12 @@ spec:
                 configMapKeyRef:
                   name: {{ include "ai-agent-monitoring.configmapName" . }}
                   key: LANGFUSE_ENABLED
+            # Langfuse SDK は LANGFUSE_TRACING_ENABLED で @observe デコレータを制御
+            - name: LANGFUSE_TRACING_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "ai-agent-monitoring.configmapName" . }}
+                  key: LANGFUSE_ENABLED
             - name: LANGFUSE_BASE_URL
               valueFrom:
                 configMapKeyRef:
@@ -152,11 +158,13 @@ spec:
                 secretKeyRef:
                   name: {{ include "ai-agent-monitoring.secretName" . }}
                   key: LANGFUSE_PUBLIC_KEY
+                  optional: true
             - name: LANGFUSE_SECRET_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ include "ai-agent-monitoring.secretName" . }}
                   key: LANGFUSE_SECRET_KEY
+                  optional: true
           {{- with .Values.agent.startupProbe }}
           startupProbe:
             {{- toYaml . | nindent 12 }}
