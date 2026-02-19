@@ -15,9 +15,9 @@ agent:
     name: ai-agent-monitoring
     tag: "0.1.0"
     pullPolicy: IfNotPresent
-  # コンテナの CMD を上書き（オフライン環境で uv run を回避する場合など）
-  command: [".venv/bin/uvicorn"]
-  args: ["ai_agent_monitoring.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+  # コンテナの CMD を上書き（--no-sync でオフライン環境でもパッケージ同期をスキップ）
+  command: ["uv", "run", "--no-sync"]
+  args: ["uvicorn", "ai_agent_monitoring.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
   service:
     type: ClusterIP
     port: 8000
