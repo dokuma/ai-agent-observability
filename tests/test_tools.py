@@ -13,13 +13,21 @@ from ai_agent_monitoring.tools.registry import ToolRegistry
 
 
 class TestMCPClient:
-    def test_sse_url(self):
-        """SSE URLが正しく生成されることを確認."""
+    def test_endpoint_url_streamable_http(self):
+        """デフォルト（Streamable HTTP）でエンドポイントURLが正しく生成される."""
         client = MCPClient("http://localhost:8080")
+        assert client.endpoint_url == "http://localhost:8080/mcp"
+        # sse_url は endpoint_url のエイリアス（後方互換性）
+        assert client.sse_url == "http://localhost:8080/mcp"
+
+    def test_endpoint_url_sse(self):
+        """SSEトランスポートでエンドポイントURLが正しく生成される."""
+        client = MCPClient("http://localhost:8080", transport="sse")
+        assert client.endpoint_url == "http://localhost:8080/sse"
         assert client.sse_url == "http://localhost:8080/sse"
 
         # 末尾スラッシュが正規化されることを確認
-        client2 = MCPClient("http://localhost:8080/")
+        client2 = MCPClient("http://localhost:8080/", transport="sse")
         assert client2.sse_url == "http://localhost:8080/sse"
 
     def test_base_url_normalization(self):

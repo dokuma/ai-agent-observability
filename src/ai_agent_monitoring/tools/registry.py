@@ -81,29 +81,34 @@ class ToolRegistry:
         """全MCP Serverのヘルスチェックを実行.
 
         各MCPサーバーのヘルスチェック方法:
-        - grafana: GET /healthz (専用エンドポイント)
-        - prometheus: HEAD /sse (SSEエンドポイントの存在確認)
-        - loki: HEAD /sse (SSEエンドポイントの存在確認)
+        - grafana: GET /healthz (専用ヘルスエンドポイント)
+        - prometheus: GET /mcp (Streamable HTTPエンドポイント応答確認)
+        - loki: GET /mcp (Streamable HTTPエンドポイント応答確認)
+
+        /mcp エンドポイントはGET/POSTどちらでも応答を返す。
+        5xx以外の応答（405含む）はサーバー稼働中と判定する。
         """
         # 各MCPサーバー固有のヘルスチェック設定
-        # (endpoint, use_head_request)
+        # (endpoint_path, dedicated_health_endpoint)
         health_config: dict[str, tuple[str, bool]] = {
-            "grafana": ("/healthz", False),  # GET
-            "prometheus": ("/sse", True),  # HEAD
-            "loki": ("/sse", True),  # HEAD
+            "grafana": ("/healthz", True),
+            "prometheus": ("/mcp", False),
+            "loki": ("/mcp", False),
         }
 
         results: dict[str, bool] = {}
         for conn in self._all_connections:
-            endpoint, use_head = health_config.get(conn.name, ("/healthz", False))
+            endpoint, is_dedicated = health_config.get(conn.name, ("/healthz", True))
             try:
                 async with httpx.AsyncClient(timeout=5.0) as client:
                     url = f"{conn.client.base_url}{endpoint}"
-                    if use_head:
-                        response = await client.head(url)
+                    response = await client.get(url)
+                    if is_dedicated:
+                        # 専用ヘルスエンドポイントは200を期待
+                        conn.healthy = response.status_code == 200
                     else:
-                        response = await client.get(url)
-                    conn.healthy = response.status_code == 200
+                        # MCPエンドポイントはサーバー応答があればOK（5xx以外）
+                        conn.healthy = response.status_code < 500
             except httpx.HTTPError:
                 conn.healthy = False
 
