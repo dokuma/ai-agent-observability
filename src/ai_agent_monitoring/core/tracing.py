@@ -31,7 +31,7 @@ def _configure_langfuse_env(settings: Settings) -> None:
     if settings.langfuse_secret_key:
         os.environ.setdefault("LANGFUSE_SECRET_KEY", settings.langfuse_secret_key)
     if settings.langfuse_base_url:
-        os.environ.setdefault("LANGFUSE_HOST", settings.langfuse_base_url)
+        os.environ.setdefault("LANGFUSE_BASE_URL", settings.langfuse_base_url)
 
 
 def create_langfuse_handler(
