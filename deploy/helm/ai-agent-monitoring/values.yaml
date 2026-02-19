@@ -21,10 +21,10 @@ agent:
   resources:
     requests:
       cpu: 200m
-      memory: 256Mi
+      memory: 512Mi
     limits:
       cpu: "1"
-      memory: 512Mi
+      memory: 1Gi
   livenessProbe:
     httpGet:
       path: /api/v1/health
@@ -131,7 +131,6 @@ grafana-mcp:
       drop: [ALL]
     readOnlyRootFilesystem: true
     runAsNonRoot: true
-    runAsUser: 1000
   securityContext:
     seccompProfile:
       type: RuntimeDefault
