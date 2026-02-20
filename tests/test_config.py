@@ -459,3 +459,110 @@ class TestLLMCustomHeadersInRawRequest:
         assert captured_request is not None, "リクエストが送信されていない"
         assert captured_request.headers["authorization"] == "Bearer langchain-token"
         assert captured_request.headers["x-team"] == "monitoring"
+
+    @pytest.mark.asyncio
+    async def test_async_chat_openai_sends_custom_headers(self):
+        """ChatOpenAI の非同期呼び出し (ainvoke) でもカスタムヘッダーが送信される."""
+        import httpx
+        from langchain_openai import ChatOpenAI
+        from pydantic import SecretStr
+
+        dummy_resp = {
+            "id": "test",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "test",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "hi"},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+
+        custom = {"Authorization": "Bearer async-token", "X-Async": "yes"}
+        captured_request: httpx.Request | None = None
+
+        class CaptureAsyncTransport(httpx.AsyncBaseTransport):
+            async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+                nonlocal captured_request
+                captured_request = request
+                return httpx.Response(200, json=dummy_resp)
+
+        http_async_client = httpx.AsyncClient(transport=CaptureAsyncTransport())
+        # http_client も必要（langchain が同期クライアントも初期化するため）
+        http_client = httpx.Client(
+            transport=httpx.MockTransport(lambda req: httpx.Response(200, json=dummy_resp))
+        )
+
+        llm = ChatOpenAI(
+            base_url="http://localhost:11434/v1",
+            model="test",
+            api_key=SecretStr("dummy"),
+            default_headers=custom,
+            http_client=http_client,
+            http_async_client=http_async_client,
+        )
+
+        await llm.ainvoke("hello")
+
+        assert captured_request is not None, "非同期リクエストが送信されていない"
+        assert captured_request.headers["authorization"] == "Bearer async-token"
+        assert captured_request.headers["x-async"] == "yes"
+
+    @pytest.mark.asyncio
+    async def test_async_event_hook_fires(self):
+        """http_async_client の event_hooks が非同期呼び出しで実行される."""
+        import httpx
+        from langchain_openai import ChatOpenAI
+        from pydantic import SecretStr
+
+        dummy_resp = {
+            "id": "test",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "test",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "hi"},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+
+        hook_called = False
+        captured_headers: dict[str, str] = {}
+
+        async def on_request(request: httpx.Request) -> None:
+            nonlocal hook_called, captured_headers
+            hook_called = True
+            captured_headers = dict(request.headers)
+
+        class NoOpAsyncTransport(httpx.AsyncBaseTransport):
+            async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+                return httpx.Response(200, json=dummy_resp)
+
+        http_async_client = httpx.AsyncClient(
+            transport=NoOpAsyncTransport(),
+            event_hooks={"request": [on_request]},
+        )
+        http_client = httpx.Client(
+            transport=httpx.MockTransport(lambda req: httpx.Response(200, json=dummy_resp))
+        )
+
+        custom = {"X-My-Header": "my-value"}
+        llm = ChatOpenAI(
+            base_url="http://localhost:11434/v1",
+            model="test",
+            api_key=SecretStr("dummy"),
+            default_headers=custom,
+            http_client=http_client,
+            http_async_client=http_async_client,
+        )
+
+        await llm.ainvoke("hello")
+
+        assert hook_called, "event_hooks の request フックが呼ばれていない"
+        assert captured_headers.get("x-my-header") == "my-value"

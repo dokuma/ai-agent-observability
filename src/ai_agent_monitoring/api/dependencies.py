@@ -1,9 +1,12 @@
 """API 依存注入 — アプリケーション全体の共有リソース管理."""
 
+from __future__ import annotations
+
 import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 from uuid import uuid4
 
 import httpx
@@ -18,24 +21,30 @@ from ai_agent_monitoring.tools.registry import ToolRegistry
 logger = logging.getLogger(__name__)
 
 
-def _log_llm_request(request: httpx.Request) -> None:
-    """LLM への HTTP リクエストヘッダーをログ出力（同期用、OPENAI_LOG=debug 時のみ有効）."""
-    logger.info(
-        "LLM HTTP Request: %s %s headers=%s",
-        request.method,
-        request.url,
-        dict(request.headers),
-    )
+class _DebugHttpClient(httpx.Client):
+    """send() をオーバーライドして HTTP リクエストをログ出力（同期用）."""
+
+    def send(self, request: httpx.Request, **kwargs: Any) -> httpx.Response:
+        logger.info(
+            "LLM HTTP Request: %s %s headers=%s",
+            request.method,
+            request.url,
+            dict(request.headers),
+        )
+        return super().send(request, **kwargs)
 
 
-async def _log_llm_request_async(request: httpx.Request) -> None:
-    """LLM への HTTP リクエストヘッダーをログ出力（非同期用、OPENAI_LOG=debug 時のみ有効）."""
-    logger.info(
-        "LLM HTTP Request: %s %s headers=%s",
-        request.method,
-        request.url,
-        dict(request.headers),
-    )
+class _DebugAsyncHttpClient(httpx.AsyncClient):
+    """send() をオーバーライドして HTTP リクエストをログ出力（非同期用）."""
+
+    async def send(self, request: httpx.Request, **kwargs: Any) -> httpx.Response:
+        logger.info(
+            "LLM HTTP Request: %s %s headers=%s",
+            request.method,
+            request.url,
+            dict(request.headers),
+        )
+        return await super().send(request, **kwargs)
 
 
 @dataclass
@@ -77,8 +86,8 @@ class AppState:
         http_client = None
         http_async_client = None
         if os.environ.get("OPENAI_LOG", "").lower() == "debug":
-            http_client = httpx.Client(event_hooks={"request": [_log_llm_request]})
-            http_async_client = httpx.AsyncClient(event_hooks={"request": [_log_llm_request_async]})
+            http_client = _DebugHttpClient()
+            http_async_client = _DebugAsyncHttpClient()
         llm = ChatOpenAI(
             base_url=self.settings.llm_endpoint,
             model=self.settings.llm_model,
@@ -87,6 +96,22 @@ class AppState:
             http_client=http_client,
             http_async_client=http_async_client,
         )
+
+        # デバッグ: 内部クライアントチェーンを検証
+        if http_async_client is not None:
+            root = getattr(llm, "root_async_client", None)
+            internal = getattr(root, "_client", None) if root else None
+            logger.info(
+                "LLM async client chain: "
+                "http_async_client=%s, "
+                "root_async_client=%s, "
+                "root._client=%s, "
+                "is_our_client=%s",
+                type(http_async_client).__name__,
+                type(root).__name__ if root else None,
+                type(internal).__name__ if internal else None,
+                internal is http_async_client,
+            )
 
         # Orchestrator（registryを渡してhealthy状態を考慮）
         self.orchestrator = OrchestratorAgent(
