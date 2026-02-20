@@ -85,28 +85,23 @@ class ToolRegistry:
         """全MCP Serverのヘルスチェックを実行.
 
         各MCPサーバーのヘルスチェック方法:
-        - grafana: GET /healthz (専用ヘルスエンドポイント)
-        - prometheus: GET /mcp (Streamable HTTPエンドポイント応答確認)
-        - loki: GET /mcp (Streamable HTTPエンドポイント応答確認)
-
-        /mcp エンドポイントはGET/POSTどちらでも応答を返す。
-        5xx以外の応答（405含む）はサーバー稼働中と判定する。
-        ヘルスチェック先はクライアントのトランスポート設定とは独立。
+        - grafana: GET /healthz (専用ヘルスエンドポイント、200を期待)
+        - prometheus/loki: GET <endpoint_url> (トランスポートに応じたエンドポイント)
+          - SSE: GET /sse
+          - Streamable HTTP: GET /mcp
+          5xx以外の応答（405含む）はサーバー稼働中と判定する。
         """
-        # 各MCPサーバー固有のヘルスチェック設定
-        # (endpoint_path, dedicated_health_endpoint)
-        health_config: dict[str, tuple[str, bool]] = {
-            "grafana": ("/healthz", True),
-            "prometheus": ("/mcp", False),
-            "loki": ("/mcp", False),
-        }
-
         results: dict[str, bool] = {}
         for conn in self._all_connections:
-            endpoint, is_dedicated = health_config.get(conn.name, ("/healthz", True))
+            # grafana-mcp は専用ヘルスエンドポイント、他はMCPエンドポイントで応答確認
+            if conn.name == "grafana":
+                url = f"{conn.client.base_url}/healthz"
+                is_dedicated = True
+            else:
+                url = conn.client.endpoint_url
+                is_dedicated = False
             try:
                 async with httpx.AsyncClient(timeout=5.0) as client:
-                    url = f"{conn.client.base_url}{endpoint}"
                     response = await client.get(url)
                     if is_dedicated:
                         # 専用ヘルスエンドポイントは200を期待
