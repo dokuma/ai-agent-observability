@@ -174,9 +174,9 @@ config:
   investigationTimeoutSeconds: "120"
   corsAllowedOrigins: '["http://localhost:3000"]'
   # MCP Transport（"sse" or "streamable_http"）
-  mcpTransport: "sse"             # グローバルデフォルト
-  mcpGrafanaTransport: ""         # 空の場合は mcpTransport を使用
-  mcpPrometheusTransport: ""
+  mcpTransport: "sse"                          # グローバルデフォルト
+  mcpGrafanaTransport: ""                      # 空の場合は mcpTransport を使用
+  mcpPrometheusTransport: "streamable_http"    # prometheus-mcp の "http" transport に対応
   mcpLokiTransport: ""
   mcpUseTls: "false"
   mcpVerifySsl: "true"

@@ -86,37 +86,37 @@ class ToolRegistry:
 
         各MCPサーバーのヘルスチェック方法:
         - grafana: GET /healthz (専用ヘルスエンドポイント、200を期待)
-        - prometheus/loki: GET <endpoint_url> (トランスポートに応じたエンドポイント)
-          - SSE: GET /sse
-          - Streamable HTTP: GET /mcp
-          5xx以外の応答（405含む）はサーバー稼働中と判定する。
+        - prometheus/loki: GET <base_url> (ルートパス) で応答確認
+          プロトコルエンドポイント (/sse, /mcp) はヘルスチェックに不適切:
+          - /sse: SSEストリーム接続が開始されハングする
+          - /mcp: POST only のため GET に 405/406 を返す
+          - トランスポート不一致時は 404 を返す
+          ベースURLへのGETはルート未定義で 404 を返すが、
+          HTTP応答自体がサーバー稼働の証拠となる。
         """
         results: dict[str, bool] = {}
         for conn in self._all_connections:
-            # grafana-mcp は専用ヘルスエンドポイント、他はMCPエンドポイントで応答確認
             if conn.name == "grafana":
                 url = f"{conn.client.base_url}/healthz"
-                is_dedicated = True
             else:
-                url = conn.client.endpoint_url
-                is_dedicated = False
+                # プロトコルエンドポイントではなくベースURLを使用
+                url = conn.client.base_url
             try:
                 async with httpx.AsyncClient(timeout=5.0) as client:
                     response = await client.get(url)
-                    if is_dedicated:
-                        # 専用ヘルスエンドポイントは200を期待
+                    if conn.name == "grafana":
                         conn.healthy = response.status_code == 200
                     else:
-                        # MCPエンドポイントはサーバー応答があればOK（5xx以外）
+                        # HTTP応答があればサーバー稼働中（5xx以外）
                         conn.healthy = response.status_code < 500
             except httpx.HTTPError:
                 conn.healthy = False
 
             results[conn.name] = conn.healthy
             if conn.healthy:
-                logger.info("MCP Server '%s' is healthy", conn.name)
+                logger.info("MCP Server '%s' is healthy (url=%s)", conn.name, url)
             else:
-                logger.warning("MCP Server '%s' is unreachable", conn.name)
+                logger.warning("MCP Server '%s' is unreachable (url=%s)", conn.name, url)
 
         return results
 
