@@ -62,6 +62,7 @@ strict = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+addopts = "-m 'not integration'"
 markers = [
     "integration: 結合テスト（docker-compose環境が必要）",
 ]
