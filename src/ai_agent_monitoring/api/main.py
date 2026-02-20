@@ -1,6 +1,7 @@
 """FastAPI アプリケーションエントリポイント."""
 
 import logging
+import sys
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -12,11 +13,18 @@ from ai_agent_monitoring.api.routes import router
 from ai_agent_monitoring.core.config import Settings
 
 _settings = Settings()
-logging.basicConfig(
-    level=getattr(logging, _settings.log_level.upper(), logging.INFO),
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    force=True,
+
+# logging.basicConfig() は uvicorn 環境で確実に動作しない場合があるため、
+# ハンドラを明示的に構築して stdout に出力する。
+_log_level = getattr(logging, _settings.log_level.upper(), logging.INFO)
+_handler = logging.StreamHandler(sys.stdout)
+_handler.setFormatter(
+    logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"),
 )
+logging.root.handlers.clear()
+logging.root.addHandler(_handler)
+logging.root.setLevel(_log_level)
+
 logger = logging.getLogger(__name__)
 
 

@@ -11,6 +11,7 @@ COPY src/ src/
 COPY docs/query_reference/ docs/query_reference/
 
 ENV PYTHONPATH=/app/src
+ENV PYTHONUNBUFFERED=1
 
 RUN useradd -r -u 1000 -m appuser && chown -R appuser:appuser /app
 USER appuser
