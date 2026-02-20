@@ -42,10 +42,7 @@ spec:
                   name: {{ include "ai-agent-monitoring.configmapName" . }}
                   key: LOKI_URL
             - name: PORT
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ include "ai-agent-monitoring.configmapName" . }}
-                  key: SSE_PORT
+              value: {{ .Values.lokiMcp.service.port | quote }}
           {{- with .Values.lokiMcp.livenessProbe }}
           livenessProbe:
             {{- toYaml . | nindent 12 }}

@@ -42,20 +42,11 @@ spec:
                   name: {{ include "ai-agent-monitoring.configmapName" . }}
                   key: PROMETHEUS_URL
             - name: PROMETHEUS_MCP_SERVER_TRANSPORT
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ include "ai-agent-monitoring.configmapName" . }}
-                  key: PROMETHEUS_MCP_SERVER_TRANSPORT
+              value: {{ .Values.prometheusMcp.transport | default "http" | quote }}
             - name: PROMETHEUS_MCP_BIND_HOST
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ include "ai-agent-monitoring.configmapName" . }}
-                  key: PROMETHEUS_MCP_BIND_HOST
+              value: "0.0.0.0"
             - name: PROMETHEUS_MCP_BIND_PORT
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ include "ai-agent-monitoring.configmapName" . }}
-                  key: PROMETHEUS_MCP_BIND_PORT
+              value: {{ .Values.prometheusMcp.service.port | quote }}
           {{- with .Values.prometheusMcp.livenessProbe }}
           livenessProbe:
             {{- toYaml . | nindent 12 }}
