@@ -50,6 +50,16 @@ _RETRYABLE_EXCEPTIONS = (
 )
 
 
+def _flatten_exception_group(eg: BaseException) -> list[BaseException]:
+    """ExceptionGroup を再帰的に展開しリーフ例外のリストを返す."""
+    if isinstance(eg, ExceptionGroup):
+        result: list[BaseException] = []
+        for exc in eg.exceptions:
+            result.extend(_flatten_exception_group(exc))
+        return result
+    return [eg]
+
+
 class MCPConnectionError(Exception):
     """MCP Server への接続に失敗した場合に送出される例外."""
 
@@ -153,14 +163,15 @@ class MCPClient:
                 async with self._connect_streamable_http() as session:
                     yield session
         except ExceptionGroup as eg:
-            # MCP SDK内部のTaskGroupから発生したExceptionGroupを展開
-            error_details = "; ".join(f"{type(exc).__name__}: {exc}" for exc in eg.exceptions)
+            # MCP SDK内部のTaskGroupから発生したExceptionGroupを再帰的に展開
+            leaf_exceptions = _flatten_exception_group(eg)
+            error_details = "; ".join(f"{type(exc).__name__}: {exc}" for exc in leaf_exceptions)
             logger.error("MCP TaskGroup errors (url=%s): %s", url, error_details)
-            for exc in eg.exceptions:
+            for exc in leaf_exceptions:
                 if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
-                    raise MCPTimeoutError(f"MCP server connection timed out: {url}") from eg
+                    raise MCPTimeoutError(f"MCP server connection timed out: {url}") from exc
                 if isinstance(exc, (ConnectionError, OSError)):
-                    raise MCPConnectionError(f"MCP server connection failed: {url}: {exc}") from eg
+                    raise MCPConnectionError(f"MCP server connection failed: {url}: {exc}") from exc
             raise MCPConnectionError(f"MCP server error: {url}: {error_details}") from eg
         except TimeoutError as e:
             logger.error("MCP connection timed out: %s (url=%s)", e, url)
