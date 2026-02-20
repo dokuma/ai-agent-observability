@@ -178,6 +178,8 @@ config:
   mcpGrafanaTransport: ""                      # 空の場合は mcpTransport を使用
   mcpPrometheusTransport: "streamable_http"    # prometheus-mcp の "http" transport に対応
   mcpLokiTransport: ""
+  # ログレベル（DEBUG, INFO, WARNING, ERROR）
+  logLevel: "INFO"
   # OpenAI SDK デバッグログ（"debug" で有効、空で無効）
   openaiLog: ""
   mcpUseTls: "false"
