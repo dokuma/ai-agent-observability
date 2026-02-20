@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 def _log_llm_request(request: httpx.Request) -> None:
     """LLM への HTTP リクエストヘッダーをログ出力（OPENAI_LOG=debug 時のみ有効）."""
-    logger.debug(
+    logger.info(
         "LLM HTTP Request: %s %s headers=%s",
         request.method,
         request.url,
