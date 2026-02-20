@@ -1,10 +1,12 @@
 """API 依存注入 — アプリケーション全体の共有リソース管理."""
 
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import uuid4
 
+import httpx
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
@@ -14,6 +16,16 @@ from ai_agent_monitoring.core.models import RCAReport
 from ai_agent_monitoring.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
+
+
+def _log_llm_request(request: httpx.Request) -> None:
+    """LLM への HTTP リクエストヘッダーをログ出力（OPENAI_LOG=debug 時のみ有効）."""
+    logger.debug(
+        "LLM HTTP Request: %s %s headers=%s",
+        request.method,
+        request.url,
+        dict(request.headers),
+    )
 
 
 @dataclass
@@ -52,11 +64,15 @@ class AppState:
         logger.info("MCP health check: %s", health)
 
         # LLM
+        http_client = None
+        if os.environ.get("OPENAI_LOG", "").lower() == "debug":
+            http_client = httpx.Client(event_hooks={"request": [_log_llm_request]})
         llm = ChatOpenAI(
             base_url=self.settings.llm_endpoint,
             model=self.settings.llm_model,
             api_key=SecretStr(self.settings.llm_api_key),
             default_headers=self.settings.llm_custom_headers or None,
+            http_client=http_client,
         )
 
         # Orchestrator（registryを渡してhealthy状態を考慮）
