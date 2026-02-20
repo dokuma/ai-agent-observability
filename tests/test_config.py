@@ -366,15 +366,9 @@ class TestLLMCustomHeadersInRawRequest:
     def test_custom_headers_in_httpx_request(self):
         """default_headers が実際の httpx.Request ヘッダーに含まれる."""
         import httpx
-
         from openai import OpenAI
 
         custom = {"Authorization": "Bearer my-secret", "X-Custom": "value"}
-        client = OpenAI(
-            api_key="dummy",
-            base_url="http://localhost:11434/v1",
-            default_headers=custom,
-        )
 
         # httpx Transport をモックしてリクエストを捕捉
         captured_request: httpx.Request | None = None
@@ -423,7 +417,6 @@ class TestLLMCustomHeadersInRawRequest:
     def test_langchain_chat_openai_sends_custom_headers(self):
         """ChatOpenAI 経由でもカスタムヘッダーが httpx リクエストに含まれる."""
         import httpx
-
         from langchain_openai import ChatOpenAI
         from pydantic import SecretStr
 
