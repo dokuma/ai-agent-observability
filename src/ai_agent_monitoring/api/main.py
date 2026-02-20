@@ -15,6 +15,7 @@ _settings = Settings()
 logging.basicConfig(
     level=getattr(logging, _settings.log_level.upper(), logging.INFO),
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    force=True,
 )
 logger = logging.getLogger(__name__)
 
