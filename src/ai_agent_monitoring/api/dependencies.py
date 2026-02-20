@@ -4,7 +4,6 @@ import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
 from uuid import uuid4
 
 import httpx
@@ -19,30 +18,24 @@ from ai_agent_monitoring.tools.registry import ToolRegistry
 logger = logging.getLogger(__name__)
 
 
-class _DebugHttpClient(httpx.Client):
-    """send() をオーバーライドして HTTP リクエストをログ出力（同期用）."""
-
-    def send(self, request: httpx.Request, **kwargs: Any) -> httpx.Response:
-        logger.info(
-            "LLM HTTP Request: %s %s headers=%s",
-            request.method,
-            request.url,
-            dict(request.headers),
-        )
-        return super().send(request, **kwargs)
+def _log_llm_request(request: httpx.Request) -> None:
+    """LLM への HTTP リクエストヘッダーをログ出力（同期用、OPENAI_LOG=debug 時のみ有効）."""
+    logger.info(
+        "LLM HTTP Request: %s %s headers=%s",
+        request.method,
+        request.url,
+        dict(request.headers),
+    )
 
 
-class _DebugAsyncHttpClient(httpx.AsyncClient):
-    """send() をオーバーライドして HTTP リクエストをログ出力（非同期用）."""
-
-    async def send(self, request: httpx.Request, **kwargs: Any) -> httpx.Response:
-        logger.info(
-            "LLM HTTP Request: %s %s headers=%s",
-            request.method,
-            request.url,
-            dict(request.headers),
-        )
-        return await super().send(request, **kwargs)
+async def _log_llm_request_async(request: httpx.Request) -> None:
+    """LLM への HTTP リクエストヘッダーをログ出力（非同期用、OPENAI_LOG=debug 時のみ有効）."""
+    logger.info(
+        "LLM HTTP Request: %s %s headers=%s",
+        request.method,
+        request.url,
+        dict(request.headers),
+    )
 
 
 @dataclass
@@ -84,8 +77,8 @@ class AppState:
         http_client = None
         http_async_client = None
         if os.environ.get("OPENAI_LOG", "").lower() == "debug":
-            http_client = _DebugHttpClient()
-            http_async_client = _DebugAsyncHttpClient()
+            http_client = httpx.Client(event_hooks={"request": [_log_llm_request]})
+            http_async_client = httpx.AsyncClient(event_hooks={"request": [_log_llm_request_async]})
         llm = ChatOpenAI(
             base_url=self.settings.llm_endpoint,
             model=self.settings.llm_model,
