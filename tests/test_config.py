@@ -323,3 +323,146 @@ class TestLLMCustomHeadersInjection:
 
             # llm_custom_headers が空 → `{} or None` → None
             assert headers is None
+
+
+class TestLLMCustomHeadersInRawRequest:
+    """カスタムヘッダーが実際の HTTP リクエストに含まれることを検証.
+
+    ChatOpenAI をモックせず、OpenAI SDK が構築する httpx リクエストの
+    ヘッダーを直接検査する。
+    """
+
+    def test_custom_headers_in_openai_client(self):
+        """default_headers が OpenAI クライアントの _custom_headers に格納される."""
+        from openai import OpenAI
+
+        custom = {"Authorization": "Bearer my-secret", "X-Custom": "value"}
+        client = OpenAI(
+            api_key="dummy",
+            base_url="http://localhost:11434/v1",
+            default_headers=custom,
+        )
+
+        # _custom_headers に渡した値が保持されている
+        assert client._custom_headers["Authorization"] == "Bearer my-secret"
+        assert client._custom_headers["X-Custom"] == "value"
+
+    def test_custom_headers_in_built_request(self):
+        """default_headers が _build_headers で最終ヘッダーにマージされる."""
+        from openai import OpenAI
+
+        custom = {"Authorization": "Bearer my-secret", "X-Custom": "value"}
+        client = OpenAI(
+            api_key="dummy",
+            base_url="http://localhost:11434/v1",
+            default_headers=custom,
+        )
+
+        # default_headers プロパティは platform + auth + custom をマージした結果
+        merged = client.default_headers
+        assert merged["Authorization"] == "Bearer my-secret"
+        assert merged["X-Custom"] == "value"
+
+    def test_custom_headers_in_httpx_request(self):
+        """default_headers が実際の httpx.Request ヘッダーに含まれる."""
+        import httpx
+
+        from openai import OpenAI
+
+        custom = {"Authorization": "Bearer my-secret", "X-Custom": "value"}
+        client = OpenAI(
+            api_key="dummy",
+            base_url="http://localhost:11434/v1",
+            default_headers=custom,
+        )
+
+        # httpx Transport をモックしてリクエストを捕捉
+        captured_request: httpx.Request | None = None
+
+        class CaptureTransport(httpx.BaseTransport):
+            def handle_request(self, request: httpx.Request) -> httpx.Response:
+                nonlocal captured_request
+                captured_request = request
+                # ダミーレスポンスを返す（接続不要）
+                return httpx.Response(
+                    200,
+                    json={
+                        "id": "test",
+                        "object": "chat.completion",
+                        "created": 0,
+                        "model": "test",
+                        "choices": [
+                            {
+                                "index": 0,
+                                "message": {"role": "assistant", "content": "hi"},
+                                "finish_reason": "stop",
+                            }
+                        ],
+                    },
+                )
+
+        # カスタム httpx クライアントで OpenAI を再作成
+        http_client = httpx.Client(transport=CaptureTransport())
+        client_with_transport = OpenAI(
+            api_key="dummy",
+            base_url="http://localhost:11434/v1",
+            default_headers=custom,
+            http_client=http_client,
+        )
+
+        client_with_transport.chat.completions.create(
+            model="test",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+
+        assert captured_request is not None, "リクエストが送信されていない"
+        # 生の httpx リクエストヘッダーにカスタムヘッダーが含まれる
+        assert captured_request.headers["authorization"] == "Bearer my-secret"
+        assert captured_request.headers["x-custom"] == "value"
+
+    def test_langchain_chat_openai_sends_custom_headers(self):
+        """ChatOpenAI 経由でもカスタムヘッダーが httpx リクエストに含まれる."""
+        import httpx
+
+        from langchain_openai import ChatOpenAI
+        from pydantic import SecretStr
+
+        custom = {"Authorization": "Bearer langchain-token", "X-Team": "monitoring"}
+        captured_request: httpx.Request | None = None
+
+        class CaptureTransport(httpx.BaseTransport):
+            def handle_request(self, request: httpx.Request) -> httpx.Response:
+                nonlocal captured_request
+                captured_request = request
+                return httpx.Response(
+                    200,
+                    json={
+                        "id": "test",
+                        "object": "chat.completion",
+                        "created": 0,
+                        "model": "test",
+                        "choices": [
+                            {
+                                "index": 0,
+                                "message": {"role": "assistant", "content": "hi"},
+                                "finish_reason": "stop",
+                            }
+                        ],
+                    },
+                )
+
+        http_client = httpx.Client(transport=CaptureTransport())
+
+        llm = ChatOpenAI(
+            base_url="http://localhost:11434/v1",
+            model="test",
+            api_key=SecretStr("dummy"),
+            default_headers=custom,
+            http_client=http_client,
+        )
+
+        llm.invoke("hello")
+
+        assert captured_request is not None, "リクエストが送信されていない"
+        assert captured_request.headers["authorization"] == "Bearer langchain-token"
+        assert captured_request.headers["x-team"] == "monitoring"
