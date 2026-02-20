@@ -1,6 +1,9 @@
 """core/config.py (Settings) のテスト."""
 
 import os
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from ai_agent_monitoring.core.config import Settings
 
@@ -212,3 +215,111 @@ class TestSettingsExtraIgnore:
         """コンストラクタで未知のキーワード引数が無視される."""
         s = Settings(unknown_param="ignored_value")
         assert not hasattr(s, "unknown_param")
+
+
+class TestLLMCustomHeaders:
+    """LLM_CUSTOM_HEADER_* 環境変数のパースと注入テスト."""
+
+    def test_parse_single_header(self, monkeypatch):
+        """単一の LLM_CUSTOM_HEADER_* 環境変数がパースされる."""
+        monkeypatch.setenv("LLM_CUSTOM_HEADER_AUTHORIZATION", "Bearer my-token")
+        s = Settings(llm_custom_headers={})
+        assert "AUTHORIZATION" in s.llm_custom_headers
+        assert s.llm_custom_headers["AUTHORIZATION"] == "Bearer my-token"
+
+    def test_parse_multiple_headers(self, monkeypatch):
+        """複数の LLM_CUSTOM_HEADER_* 環境変数がパースされる."""
+        monkeypatch.setenv("LLM_CUSTOM_HEADER_AUTHORIZATION", "Bearer token")
+        monkeypatch.setenv("LLM_CUSTOM_HEADER_X_CUSTOM", "custom-value")
+        s = Settings(llm_custom_headers={})
+        assert s.llm_custom_headers["AUTHORIZATION"] == "Bearer token"
+        assert s.llm_custom_headers["X-CUSTOM"] == "custom-value"
+
+    def test_underscore_to_hyphen_conversion(self, monkeypatch):
+        """ヘッダー名のアンダースコアがハイフンに変換される."""
+        monkeypatch.setenv("LLM_CUSTOM_HEADER_X_FORWARDED_FOR", "127.0.0.1")
+        s = Settings(llm_custom_headers={})
+        assert "X-FORWARDED-FOR" in s.llm_custom_headers
+        assert s.llm_custom_headers["X-FORWARDED-FOR"] == "127.0.0.1"
+
+    def test_no_custom_headers(self):
+        """LLM_CUSTOM_HEADER_* がない場合は空辞書."""
+        s = _clean_settings()
+        assert isinstance(s.llm_custom_headers, dict)
+
+    def test_empty_value_header(self, monkeypatch):
+        """空の値を持つヘッダーもパースされる."""
+        monkeypatch.setenv("LLM_CUSTOM_HEADER_X_EMPTY", "")
+        s = Settings(llm_custom_headers={})
+        assert "X-EMPTY" in s.llm_custom_headers
+        assert s.llm_custom_headers["X-EMPTY"] == ""
+
+
+class TestLLMCustomHeadersInjection:
+    """カスタムヘッダーが ChatOpenAI に正しく渡されることを検証."""
+
+    @pytest.mark.asyncio
+    async def test_headers_passed_to_chat_openai(self, monkeypatch):
+        """パースされたカスタムヘッダーが ChatOpenAI の default_headers に渡される."""
+        from ai_agent_monitoring.api.dependencies import AppState
+
+        monkeypatch.setenv("LLM_CUSTOM_HEADER_AUTHORIZATION", "Bearer test-token")
+
+        mock_registry = MagicMock()
+        mock_registry.health_check = AsyncMock(return_value={"prometheus": True, "loki": True, "grafana": True})
+        mock_registry.prometheus = MagicMock()
+        mock_registry.prometheus.client = MagicMock()
+        mock_registry.loki = MagicMock()
+        mock_registry.loki.client = MagicMock()
+        mock_registry.grafana = MagicMock()
+        mock_registry.grafana.client = MagicMock()
+
+        with (
+            patch("ai_agent_monitoring.api.dependencies.ToolRegistry") as mock_tr_cls,
+            patch("ai_agent_monitoring.api.dependencies.ChatOpenAI") as mock_llm_cls,
+            patch("ai_agent_monitoring.api.dependencies.OrchestratorAgent"),
+        ):
+            mock_tr_cls.from_settings.return_value = mock_registry
+            mock_llm_cls.return_value = MagicMock()
+
+            app = AppState()
+            await app.initialize()
+
+            mock_llm_cls.assert_called_once()
+            call_kwargs = mock_llm_cls.call_args.kwargs
+            headers = call_kwargs.get("default_headers")
+
+            assert headers is not None, "default_headers が ChatOpenAI に渡されていない"
+            assert "AUTHORIZATION" in headers
+            assert headers["AUTHORIZATION"] == "Bearer test-token"
+
+    @pytest.mark.asyncio
+    async def test_no_headers_passes_none(self):
+        """カスタムヘッダーがない場合は default_headers=None."""
+        from ai_agent_monitoring.api.dependencies import AppState
+
+        mock_registry = MagicMock()
+        mock_registry.health_check = AsyncMock(return_value={"prometheus": True, "loki": True, "grafana": True})
+        mock_registry.prometheus = MagicMock()
+        mock_registry.prometheus.client = MagicMock()
+        mock_registry.loki = MagicMock()
+        mock_registry.loki.client = MagicMock()
+        mock_registry.grafana = MagicMock()
+        mock_registry.grafana.client = MagicMock()
+
+        with (
+            patch("ai_agent_monitoring.api.dependencies.ToolRegistry") as mock_tr_cls,
+            patch("ai_agent_monitoring.api.dependencies.ChatOpenAI") as mock_llm_cls,
+            patch("ai_agent_monitoring.api.dependencies.OrchestratorAgent"),
+        ):
+            mock_tr_cls.from_settings.return_value = mock_registry
+            mock_llm_cls.return_value = MagicMock()
+
+            app = AppState()
+            await app.initialize()
+
+            call_kwargs = mock_llm_cls.call_args.kwargs
+            headers = call_kwargs.get("default_headers")
+
+            # llm_custom_headers が空 → `{} or None` → None
+            assert headers is None
