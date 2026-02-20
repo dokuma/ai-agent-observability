@@ -87,7 +87,7 @@ class MCPClient:
         base_url: str,
         timeout: float = 30.0,
         *,
-        transport: str = "streamable_http",
+        transport: str = "sse",
         use_tls: bool = False,
         verify_ssl: bool = True,
         ca_bundle: str = "",
