@@ -152,6 +152,16 @@ class MCPClient:
             else:
                 async with self._connect_streamable_http() as session:
                     yield session
+        except ExceptionGroup as eg:
+            # MCP SDK内部のTaskGroupから発生したExceptionGroupを展開
+            error_details = "; ".join(f"{type(exc).__name__}: {exc}" for exc in eg.exceptions)
+            logger.error("MCP TaskGroup errors (url=%s): %s", url, error_details)
+            for exc in eg.exceptions:
+                if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+                    raise MCPTimeoutError(f"MCP server connection timed out: {url}") from eg
+                if isinstance(exc, (ConnectionError, OSError)):
+                    raise MCPConnectionError(f"MCP server connection failed: {url}: {exc}") from eg
+            raise MCPConnectionError(f"MCP server error: {url}: {error_details}") from eg
         except TimeoutError as e:
             logger.error("MCP connection timed out: %s (url=%s)", e, url)
             raise MCPTimeoutError(f"MCP server connection timed out: {url}") from e
@@ -207,7 +217,7 @@ class MCPClient:
             async with streamable_http_client(
                 url=self.endpoint_url,
                 http_client=http_client,
-            ) as (read_stream, write_stream, _get_session_id):
+            ) as (read_stream, write_stream, _):
                 async with ClientSession(
                     read_stream=read_stream,
                     write_stream=write_stream,

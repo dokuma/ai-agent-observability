@@ -372,10 +372,13 @@ class OrchestratorAgent:
                 # キーワードを使ってダッシュボードを探索
                 await self._discover_dashboard_queries(grafana, env)
         except Exception as e:
+            detail = str(e)
+            if isinstance(e, ExceptionGroup):
+                detail = "; ".join(f"{type(exc).__name__}: {exc}" for exc in e.exceptions)
             logger.warning(
                 "Environment discovery failed: %s: %s",
                 type(e).__name__,
-                e,
+                detail,
             )
 
         return {"environment": env}
