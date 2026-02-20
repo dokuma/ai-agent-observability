@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     # Notifications
     slack_webhook_url: str = ""
 
+    # Logging
+    log_level: str = "INFO"
+
     # Agent
     max_iterations: int = 5
     investigation_timeout_seconds: int = 120

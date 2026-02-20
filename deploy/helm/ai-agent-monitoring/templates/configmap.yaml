@@ -25,7 +25,8 @@ data:
   MCP_GRAFANA_TRANSPORT: {{ .Values.config.mcpGrafanaTransport | quote }}
   MCP_PROMETHEUS_TRANSPORT: {{ .Values.config.mcpPrometheusTransport | quote }}
   MCP_LOKI_TRANSPORT: {{ .Values.config.mcpLokiTransport | quote }}
-  # Debug
+  # Debug / Logging
+  LOG_LEVEL: {{ .Values.config.logLevel | quote }}
   OPENAI_LOG: {{ .Values.config.openaiLog | quote }}
   # MCP TLS
   MCP_USE_TLS: {{ .Values.config.mcpUseTls | quote }}

@@ -11,8 +11,9 @@ from ai_agent_monitoring.api.dependencies import app_state
 from ai_agent_monitoring.api.routes import router
 from ai_agent_monitoring.core.config import Settings
 
+_settings = Settings()
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, _settings.log_level.upper(), logging.INFO),
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
@@ -35,7 +36,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-_settings = Settings()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_settings.cors_allowed_origins,

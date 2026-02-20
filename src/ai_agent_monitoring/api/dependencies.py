@@ -19,8 +19,18 @@ logger = logging.getLogger(__name__)
 
 
 def _log_llm_request(request: httpx.Request) -> None:
-    """LLM への HTTP リクエストヘッダーをログ出力（OPENAI_LOG=debug 時のみ有効）."""
-    logger.debug(
+    """LLM への HTTP リクエストヘッダーをログ出力（同期用、OPENAI_LOG=debug 時のみ有効）."""
+    logger.info(
+        "LLM HTTP Request: %s %s headers=%s",
+        request.method,
+        request.url,
+        dict(request.headers),
+    )
+
+
+async def _log_llm_request_async(request: httpx.Request) -> None:
+    """LLM への HTTP リクエストヘッダーをログ出力（非同期用、OPENAI_LOG=debug 時のみ有効）."""
+    logger.info(
         "LLM HTTP Request: %s %s headers=%s",
         request.method,
         request.url,
@@ -65,14 +75,17 @@ class AppState:
 
         # LLM
         http_client = None
+        http_async_client = None
         if os.environ.get("OPENAI_LOG", "").lower() == "debug":
             http_client = httpx.Client(event_hooks={"request": [_log_llm_request]})
+            http_async_client = httpx.AsyncClient(event_hooks={"request": [_log_llm_request_async]})
         llm = ChatOpenAI(
             base_url=self.settings.llm_endpoint,
             model=self.settings.llm_model,
             api_key=SecretStr(self.settings.llm_api_key),
             default_headers=self.settings.llm_custom_headers or None,
             http_client=http_client,
+            http_async_client=http_async_client,
         )
 
         # Orchestrator（registryを渡してhealthy状態を考慮）
