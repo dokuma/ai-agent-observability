@@ -126,6 +126,11 @@ spec:
                 configMapKeyRef:
                   name: {{ include "ai-agent-monitoring.configmapName" . }}
                   key: MCP_LOKI_TRANSPORT
+            - name: OPENAI_LOG
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "ai-agent-monitoring.configmapName" . }}
+                  key: OPENAI_LOG
             - name: MCP_USE_TLS
               valueFrom:
                 configMapKeyRef:
