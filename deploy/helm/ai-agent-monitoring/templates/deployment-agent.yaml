@@ -106,6 +106,26 @@ spec:
                 configMapKeyRef:
                   name: {{ include "ai-agent-monitoring.configmapName" . }}
                   key: CORS_ALLOWED_ORIGINS
+            - name: MCP_TRANSPORT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "ai-agent-monitoring.configmapName" . }}
+                  key: MCP_TRANSPORT
+            - name: MCP_GRAFANA_TRANSPORT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "ai-agent-monitoring.configmapName" . }}
+                  key: MCP_GRAFANA_TRANSPORT
+            - name: MCP_PROMETHEUS_TRANSPORT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "ai-agent-monitoring.configmapName" . }}
+                  key: MCP_PROMETHEUS_TRANSPORT
+            - name: MCP_LOKI_TRANSPORT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "ai-agent-monitoring.configmapName" . }}
+                  key: MCP_LOKI_TRANSPORT
             - name: MCP_USE_TLS
               valueFrom:
                 configMapKeyRef:

@@ -47,11 +47,13 @@ class ToolRegistry:
         use_tls = settings.mcp_use_tls
         verify_ssl = settings.mcp_verify_ssl
         ca_bundle = settings.mcp_ca_bundle
+        default_transport = settings.mcp_transport
         return cls(
             prometheus=MCPConnection(
                 name="prometheus",
                 client=MCPClient(
                     settings.mcp_prometheus_url,
+                    transport=settings.mcp_prometheus_transport or default_transport,
                     use_tls=use_tls,
                     verify_ssl=verify_ssl,
                     ca_bundle=ca_bundle,
@@ -61,6 +63,7 @@ class ToolRegistry:
                 name="loki",
                 client=MCPClient(
                     settings.mcp_loki_url,
+                    transport=settings.mcp_loki_transport or default_transport,
                     use_tls=use_tls,
                     verify_ssl=verify_ssl,
                     ca_bundle=ca_bundle,
@@ -70,6 +73,7 @@ class ToolRegistry:
                 name="grafana",
                 client=MCPClient(
                     settings.mcp_grafana_url,
+                    transport=settings.mcp_grafana_transport or default_transport,
                     use_tls=use_tls,
                     verify_ssl=verify_ssl,
                     ca_bundle=ca_bundle,
@@ -87,6 +91,7 @@ class ToolRegistry:
 
         /mcp エンドポイントはGET/POSTどちらでも応答を返す。
         5xx以外の応答（405含む）はサーバー稼働中と判定する。
+        ヘルスチェック先はクライアントのトランスポート設定とは独立。
         """
         # 各MCPサーバー固有のヘルスチェック設定
         # (endpoint_path, dedicated_health_endpoint)

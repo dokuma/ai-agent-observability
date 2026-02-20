@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     mcp_loki_url: str = "http://localhost:8081"
     mcp_prometheus_url: str = "http://localhost:8082"
 
+    # MCP Transport（"sse" or "streamable_http"）
+    mcp_transport: str = "sse"  # グローバルデフォルト
+    mcp_grafana_transport: str = ""  # 空の場合は mcp_transport を使用
+    mcp_loki_transport: str = ""
+    mcp_prometheus_transport: str = ""
+
     # Notifications
     slack_webhook_url: str = ""
 
