@@ -1,7 +1,5 @@
 """API 依存注入 — アプリケーション全体の共有リソース管理."""
 
-from __future__ import annotations
-
 import logging
 import os
 from dataclasses import dataclass, field
