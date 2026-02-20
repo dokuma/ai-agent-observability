@@ -54,6 +54,8 @@ agent:
 # ===========================================================
 prometheusMcp:
   replicaCount: 1
+  # サーバー側トランスポート（prometheus-mcp-server が受け付ける方式: http / sse / stdio）
+  transport: "http"
   image:
     name: prometheus-mcp-server
     tag: "latest"
@@ -179,10 +181,6 @@ config:
   mcpUseTls: "false"
   mcpVerifySsl: "true"
   mcpCaBundle: ""
-  prometheusMcpTransport: "http"
-  prometheusMcpBindHost: "0.0.0.0"
-  prometheusMcpBindPort: "8080"
-  ssePort: "8080"
 
 # ===========================================================
 # Secret 設定値（機密）

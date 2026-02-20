@@ -32,9 +32,3 @@ data:
   # Langfuse
   LANGFUSE_ENABLED: {{ .Values.externalServices.langfuse.enabled | quote }}
   LANGFUSE_BASE_URL: {{ .Values.externalServices.langfuse.baseUrl | quote }}
-  # Prometheus MCP
-  PROMETHEUS_MCP_SERVER_TRANSPORT: {{ .Values.config.prometheusMcpTransport | quote }}
-  PROMETHEUS_MCP_BIND_HOST: {{ .Values.config.prometheusMcpBindHost | quote }}
-  PROMETHEUS_MCP_BIND_PORT: {{ .Values.config.prometheusMcpBindPort | quote }}
-  # Loki MCP
-  SSE_PORT: {{ .Values.config.ssePort | quote }}
