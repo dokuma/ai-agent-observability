@@ -374,7 +374,10 @@ class OrchestratorAgent:
         except Exception as e:
             detail = str(e)
             if isinstance(e, ExceptionGroup):
-                detail = "; ".join(f"{type(exc).__name__}: {exc}" for exc in e.exceptions)
+                from ai_agent_monitoring.tools.base import _flatten_exception_group
+
+                leaves = _flatten_exception_group(e)
+                detail = "; ".join(f"{type(exc).__name__}: {exc}" for exc in leaves)
             logger.warning(
                 "Environment discovery failed: %s: %s",
                 type(e).__name__,
