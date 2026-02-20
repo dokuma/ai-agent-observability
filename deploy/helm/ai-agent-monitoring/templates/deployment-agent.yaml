@@ -53,6 +53,8 @@ spec:
             # envFrom に含まれないランタイム固定値
             - name: PYTHONPATH
               value: "/app/src"
+            - name: PYTHONUNBUFFERED
+              value: "1"
             - name: UV_CACHE_DIR
               value: "/tmp/.cache/uv"
           {{- with .Values.agent.startupProbe }}

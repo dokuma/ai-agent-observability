@@ -88,6 +88,18 @@ class AppState:
             http_async_client=http_async_client,
         )
 
+        # デバッグ: 内部クライアントチェーンを検証
+        if http_async_client is not None:
+            root = getattr(llm, "root_async_client", None)
+            internal = getattr(root, "_client", None) if root else None
+            logger.info(
+                "LLM async client chain: http_async_client=%s, root_async_client=%s, root._client=%s, is_our_client=%s",
+                type(http_async_client).__name__,
+                type(root).__name__ if root else None,
+                type(internal).__name__ if internal else None,
+                internal is http_async_client,
+            )
+
         # Orchestrator（registryを渡してhealthy状態を考慮）
         self.orchestrator = OrchestratorAgent(
             llm=llm,
