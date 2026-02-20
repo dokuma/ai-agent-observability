@@ -44,6 +44,10 @@ spec:
             - name: http
               containerPort: 8000
               protocol: TCP
+          envFrom:
+            # Secret 全体を注入（LLM_CUSTOM_HEADER_* 等の動的キーを含む）
+            - secretRef:
+                name: {{ include "ai-agent-monitoring.secretName" . }}
           env:
             # --- Runtime ---
             - name: PYTHONPATH
@@ -162,34 +166,7 @@ spec:
                 configMapKeyRef:
                   name: {{ include "ai-agent-monitoring.configmapName" . }}
                   key: LANGFUSE_BASE_URL
-            # --- Secret ---
-            - name: LLM_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "ai-agent-monitoring.secretName" . }}
-                  key: LLM_API_KEY
-            - name: GRAFANA_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "ai-agent-monitoring.secretName" . }}
-                  key: GRAFANA_API_KEY
-            - name: SLACK_WEBHOOK_URL
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "ai-agent-monitoring.secretName" . }}
-                  key: SLACK_WEBHOOK_URL
-            - name: LANGFUSE_PUBLIC_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "ai-agent-monitoring.secretName" . }}
-                  key: LANGFUSE_PUBLIC_KEY
-                  optional: true
-            - name: LANGFUSE_SECRET_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "ai-agent-monitoring.secretName" . }}
-                  key: LANGFUSE_SECRET_KEY
-                  optional: true
+            # Secret は envFrom で一括注入済み（LLM_CUSTOM_HEADER_* 等の動的キー対応）
           {{- with .Values.agent.startupProbe }}
           startupProbe:
             {{- toYaml . | nindent 12 }}
