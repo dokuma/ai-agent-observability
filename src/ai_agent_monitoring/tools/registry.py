@@ -86,18 +86,21 @@ class ToolRegistry:
 
         各MCPサーバーのヘルスチェック方法:
         - grafana: GET /healthz (専用ヘルスエンドポイント、200を期待)
-        - prometheus/loki: GET <endpoint_url> で応答確認
-          HTTP応答があればサーバー稼働中と判定する（4xx含む）。
-          Streamable HTTPエンドポイントはPOSTのみ受け付けるため
-          GETに対して405/406を返すが、これは正常稼働を意味する。
+        - prometheus/loki: GET <base_url> (ルートパス) で応答確認
+          プロトコルエンドポイント (/sse, /mcp) はヘルスチェックに不適切:
+          - /sse: SSEストリーム接続が開始されハングする
+          - /mcp: POST only のため GET に 405/406 を返す
+          - トランスポート不一致時は 404 を返す
+          ベースURLへのGETはルート未定義で 404 を返すが、
+          HTTP応答自体がサーバー稼働の証拠となる。
         """
         results: dict[str, bool] = {}
         for conn in self._all_connections:
-            # grafana-mcp は専用ヘルスエンドポイント
             if conn.name == "grafana":
                 url = f"{conn.client.base_url}/healthz"
             else:
-                url = conn.client.endpoint_url
+                # プロトコルエンドポイントではなくベースURLを使用
+                url = conn.client.base_url
             try:
                 async with httpx.AsyncClient(timeout=5.0) as client:
                     response = await client.get(url)
@@ -111,9 +114,9 @@ class ToolRegistry:
 
             results[conn.name] = conn.healthy
             if conn.healthy:
-                logger.info("MCP Server '%s' is healthy", conn.name)
+                logger.info("MCP Server '%s' is healthy (url=%s)", conn.name, url)
             else:
-                logger.warning("MCP Server '%s' is unreachable", conn.name)
+                logger.warning("MCP Server '%s' is unreachable (url=%s)", conn.name, url)
 
         return results
 
