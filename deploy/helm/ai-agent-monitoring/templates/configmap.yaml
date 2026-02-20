@@ -33,4 +33,6 @@ data:
   MCP_CA_BUNDLE: {{ .Values.config.mcpCaBundle | quote }}
   # Langfuse
   LANGFUSE_ENABLED: {{ .Values.externalServices.langfuse.enabled | quote }}
+  # Langfuse SDK は LANGFUSE_TRACING_ENABLED で @observe デコレータを制御
+  LANGFUSE_TRACING_ENABLED: {{ .Values.externalServices.langfuse.enabled | quote }}
   LANGFUSE_BASE_URL: {{ .Values.externalServices.langfuse.baseUrl | quote }}
