@@ -492,9 +492,7 @@ class TestLLMCustomHeadersInRawRequest:
 
         http_async_client = httpx.AsyncClient(transport=CaptureAsyncTransport())
         # http_client も必要（langchain が同期クライアントも初期化するため）
-        http_client = httpx.Client(
-            transport=httpx.MockTransport(lambda req: httpx.Response(200, json=dummy_resp))
-        )
+        http_client = httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(200, json=dummy_resp)))
 
         llm = ChatOpenAI(
             base_url="http://localhost:11434/v1",
@@ -548,9 +546,7 @@ class TestLLMCustomHeadersInRawRequest:
             transport=NoOpAsyncTransport(),
             event_hooks={"request": [on_request]},
         )
-        http_client = httpx.Client(
-            transport=httpx.MockTransport(lambda req: httpx.Response(200, json=dummy_resp))
-        )
+        http_client = httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(200, json=dummy_resp)))
 
         custom = {"X-My-Header": "my-value"}
         llm = ChatOpenAI(

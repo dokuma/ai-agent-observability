@@ -93,11 +93,7 @@ class AppState:
             root = getattr(llm, "root_async_client", None)
             internal = getattr(root, "_client", None) if root else None
             logger.info(
-                "LLM async client chain: "
-                "http_async_client=%s, "
-                "root_async_client=%s, "
-                "root._client=%s, "
-                "is_our_client=%s",
+                "LLM async client chain: http_async_client=%s, root_async_client=%s, root._client=%s, is_our_client=%s",
                 type(http_async_client).__name__,
                 type(root).__name__ if root else None,
                 type(internal).__name__ if internal else None,
