@@ -64,15 +64,16 @@ class AppState:
         logger.info("MCP health check: %s", health)
 
         # LLM
-        llm_kwargs: dict = {
-            "base_url": self.settings.llm_endpoint,
-            "model": self.settings.llm_model,
-            "api_key": SecretStr(self.settings.llm_api_key),
-            "default_headers": self.settings.llm_custom_headers or None,
-        }
+        http_client = None
         if os.environ.get("OPENAI_LOG", "").lower() == "debug":
-            llm_kwargs["http_client"] = httpx.Client(event_hooks={"request": [_log_llm_request]})
-        llm = ChatOpenAI(**llm_kwargs)
+            http_client = httpx.Client(event_hooks={"request": [_log_llm_request]})
+        llm = ChatOpenAI(
+            base_url=self.settings.llm_endpoint,
+            model=self.settings.llm_model,
+            api_key=SecretStr(self.settings.llm_api_key),
+            default_headers=self.settings.llm_custom_headers or None,
+            http_client=http_client,
+        )
 
         # Orchestrator（registryを渡してhealthy状態を考慮）
         self.orchestrator = OrchestratorAgent(
