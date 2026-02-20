@@ -156,6 +156,7 @@ externalServices:
   llm:
     endpoint: "http://ollama.ai-monitoring.svc.cluster.local:11434/v1"
     model: "qwen2.5:0.5b"
+    verifySsl: true
   prometheus:
     url: "http://prometheus.monitoring.svc.cluster.local:9090"
   loki:

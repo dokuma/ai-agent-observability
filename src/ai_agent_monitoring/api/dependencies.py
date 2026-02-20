@@ -74,11 +74,18 @@ class AppState:
         logger.info("MCP health check: %s", health)
 
         # LLM
-        http_client = None
-        http_async_client = None
+        verify_ssl = self.settings.llm_verify_ssl
+        http_client_kwargs: dict[str, object] = {"verify": verify_ssl}
+        http_async_client_kwargs: dict[str, object] = {"verify": verify_ssl}
         if os.environ.get("OPENAI_LOG", "").lower() == "debug":
-            http_client = httpx.Client(event_hooks={"request": [_log_llm_request]})
-            http_async_client = httpx.AsyncClient(event_hooks={"request": [_log_llm_request_async]})
+            http_client_kwargs["event_hooks"] = {"request": [_log_llm_request]}
+            http_async_client_kwargs["event_hooks"] = {"request": [_log_llm_request_async]}
+        if not verify_ssl or os.environ.get("OPENAI_LOG", "").lower() == "debug":
+            http_client = httpx.Client(**http_client_kwargs)  # type: ignore[arg-type]
+            http_async_client = httpx.AsyncClient(**http_async_client_kwargs)  # type: ignore[arg-type]
+        else:
+            http_client = None
+            http_async_client = None
         llm = ChatOpenAI(
             base_url=self.settings.llm_endpoint,
             model=self.settings.llm_model,

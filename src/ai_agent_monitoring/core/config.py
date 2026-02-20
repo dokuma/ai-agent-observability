@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     llm_model: str = "llama-3.1-8b"
     llm_api_key: str = "not-needed"
     llm_custom_headers: dict[str, str] = {}
+    llm_verify_ssl: bool = True
 
     @model_validator(mode="after")
     def _parse_llm_custom_header_env(self) -> "Settings":
