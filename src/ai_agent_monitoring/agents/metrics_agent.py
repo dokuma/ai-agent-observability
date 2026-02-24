@@ -115,7 +115,7 @@ class MetricsAgent:
                     "uidを取得し、そのuidを grafana_query_prometheus に指定してください。"
                 )
 
-            setup_messages = [
+            setup_messages: list[BaseMessage] = [
                 SystemMessage(content=METRICS_AGENT_SYSTEM_PROMPT),
                 HumanMessage(
                     content=(
@@ -127,7 +127,8 @@ class MetricsAgent:
                     )
                 ),
             ]
-            messages: list[BaseMessage] = setup_messages
+            response = await self.llm.ainvoke(setup_messages)
+            return {"messages": setup_messages + [response]}
         else:
             messages = list(state["messages"])
 
