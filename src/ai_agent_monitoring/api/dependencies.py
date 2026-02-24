@@ -150,6 +150,7 @@ class AppState:
             base_url=self.settings.llm_endpoint,
             model=self.settings.llm_model,
             api_key=SecretStr(self.settings.llm_api_key),
+            max_retries=self.settings.llm_max_retries,
             http_client=http_client,
             http_async_client=http_async_client,
         )
