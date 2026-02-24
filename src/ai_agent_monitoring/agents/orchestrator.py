@@ -998,8 +998,7 @@ class OrchestratorAgent:
         if rag_examples:
             plan_prompt_parts.append(
                 "## クエリ構文リファレンス\n"
-                "以下は関連するクエリの構文例です。これらを参考にしてください:\n"
-                + rag_examples
+                "以下は関連するクエリの構文例です。これらを参考にしてください:\n" + rag_examples
             )
 
         # 環境の既存パネルクエリをテンプレートとして提供
@@ -1007,8 +1006,7 @@ class OrchestratorAgent:
             plan_prompt_parts.append(
                 "## この環境で動作確認済みのクエリテンプレート\n"
                 "以下はこの環境のダッシュボードで実際に使われているクエリです。\n"
-                "ラベル名やメトリクス名を参考にしてください:\n"
-                + panel_templates
+                "ラベル名やメトリクス名を参考にしてください:\n" + panel_templates
             )
 
         # 最終指示
@@ -1084,10 +1082,12 @@ class OrchestratorAgent:
 
         for attempt in range(self._MAX_VALIDATION_RETRIES + 1):
             valid_promql, invalid_promql = self._validate_query_list(
-                candidate_promql, QueryType.PROMQL,
+                candidate_promql,
+                QueryType.PROMQL,
             )
             valid_logql, invalid_logql = self._validate_query_list(
-                candidate_logql, QueryType.LOGQL,
+                candidate_logql,
+                QueryType.LOGQL,
             )
 
             all_errors = invalid_promql + invalid_logql
@@ -1118,7 +1118,9 @@ class OrchestratorAgent:
             )
 
             last_response, new_plan = await self._request_query_regeneration(
-                state, all_errors, attempt,
+                state,
+                all_errors,
+                attempt,
             )
             candidate_promql = new_plan.promql_queries
             candidate_logql = new_plan.logql_queries
@@ -1234,10 +1236,7 @@ class OrchestratorAgent:
         fewshot = get_all_fewshot_examples()
         error_msg = "\n".join(validation_errors)
 
-        retry_content = (
-            f"生成されたクエリに文法エラーがありました（修正試行 {attempt + 1}回目）:\n"
-            f"{error_msg}\n\n"
-        )
+        retry_content = f"生成されたクエリに文法エラーがありました（修正試行 {attempt + 1}回目）:\n{error_msg}\n\n"
         if rag_context:
             retry_content += f"参考ドキュメント:\n{rag_context}\n\n"
         retry_content += (

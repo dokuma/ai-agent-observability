@@ -111,6 +111,7 @@ class AppState:
         response_hooks_async: list[object] = []
 
         if custom_headers:
+
             def _apply_custom_headers(request: httpx.Request) -> None:
                 for key, value in custom_headers.items():
                     request.headers[key] = value

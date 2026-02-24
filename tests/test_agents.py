@@ -853,7 +853,9 @@ class TestOrchestratorGetQueryText:
         agent, _ = _make_orchestrator()
         uq = UserQuery(raw_input="CPU使用率が高い")
         state = AgentState(
-            messages=[], trigger_type=TriggerType.USER_QUERY, user_query=uq,
+            messages=[],
+            trigger_type=TriggerType.USER_QUERY,
+            user_query=uq,
         )
         assert agent._get_query_text(state) == "CPU使用率が高い"
 
@@ -909,7 +911,7 @@ class TestOrchestratorFormatPanelQueryTemplates:
         env = EnvironmentContext(
             discovered_panel_queries=[
                 PanelQuery(
-                    query='rate(http_requests_total[5m])',
+                    query="rate(http_requests_total[5m])",
                     query_type="promql",
                     panel_title="Request Rate",
                 ),
