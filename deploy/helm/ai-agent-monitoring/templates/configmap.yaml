@@ -13,10 +13,10 @@ data:
   PROMETHEUS_URL: {{ .Values.externalServices.prometheus.url | quote }}
   LOKI_URL: {{ .Values.externalServices.loki.url | quote }}
   GRAFANA_URL: {{ .Values.externalServices.grafana.url | quote }}
-  # MCP Server URLs（Chart 内 Service DNS から自動構築）
-  MCP_PROMETHEUS_URL: {{ printf "http://%s-prometheus-mcp:%d" (include "ai-agent-monitoring.fullname" .) (.Values.prometheusMcp.service.port | int) | quote }}
-  MCP_LOKI_URL: {{ printf "http://%s-loki-mcp:%d" (include "ai-agent-monitoring.fullname" .) (.Values.lokiMcp.service.port | int) | quote }}
-  MCP_GRAFANA_URL: {{ printf "http://%s-grafana-mcp:%d" .Release.Name (index .Values "grafana-mcp" "service" "port" | int) | quote }}
+  # MCP Server URLs（Chart 内 Service DNS から自動構築、NO_PROXY=.svc に対応）
+  MCP_PROMETHEUS_URL: {{ printf "http://%s-prometheus-mcp.%s.svc:%d" (include "ai-agent-monitoring.fullname" .) .Release.Namespace (.Values.prometheusMcp.service.port | int) | quote }}
+  MCP_LOKI_URL: {{ printf "http://%s-loki-mcp.%s.svc:%d" (include "ai-agent-monitoring.fullname" .) .Release.Namespace (.Values.lokiMcp.service.port | int) | quote }}
+  MCP_GRAFANA_URL: {{ printf "http://%s-grafana-mcp.%s.svc:%d" .Release.Name .Release.Namespace (index .Values "grafana-mcp" "service" "port" | int) | quote }}
   # Agent
   MAX_ITERATIONS: {{ .Values.config.maxIterations | quote }}
   INVESTIGATION_TIMEOUT_SECONDS: {{ .Values.config.investigationTimeoutSeconds | quote }}
