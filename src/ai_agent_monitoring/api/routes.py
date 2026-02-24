@@ -5,6 +5,7 @@ import logging
 from datetime import datetime
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
+from openai import RateLimitError
 
 from ai_agent_monitoring.api.dependencies import app_state
 from ai_agent_monitoring.api.schemas import (
@@ -236,6 +237,12 @@ async def _run_alert_investigation(inv_id: str, alert: Alert) -> None:
     except asyncio.CancelledError:
         logger.info("Investigation cancelled: %s", inv_id)
         app_state.fail_investigation(inv_id, "調査がキャンセルされました")
+    except RateLimitError as e:
+        logger.warning("Investigation rate-limited: %s - %s", inv_id, e)
+        app_state.fail_investigation(
+            inv_id,
+            "LLM APIのレートリミットにより調査を中断しました。しばらく待ってから再試行してください。",
+        )
     except Exception as e:
         logger.exception("Investigation failed: %s", inv_id)
         app_state.fail_investigation(inv_id, str(e))
@@ -289,6 +296,12 @@ async def _run_user_query_investigation(inv_id: str, user_query: UserQuery) -> N
     except asyncio.CancelledError:
         logger.info("Investigation cancelled: %s", inv_id)
         app_state.fail_investigation(inv_id, "調査がキャンセルされました")
+    except RateLimitError as e:
+        logger.warning("Investigation rate-limited: %s - %s", inv_id, e)
+        app_state.fail_investigation(
+            inv_id,
+            "LLM APIのレートリミットにより調査を中断しました。しばらく待ってから再試行してください。",
+        )
     except Exception as e:
         logger.exception("Investigation failed: %s", inv_id)
         app_state.fail_investigation(inv_id, str(e))

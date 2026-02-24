@@ -60,7 +60,10 @@ class TestSettingsDefaults:
         """エージェント関連のデフォルト値."""
         s = _clean_settings()
         assert s.max_iterations == 5
-        assert s.investigation_timeout_seconds == 120
+        assert s.investigation_timeout_seconds == 300
+        assert s.llm_rate_limit_max_attempts == 3
+        assert s.llm_rate_limit_wait_min == 5
+        assert s.llm_rate_limit_wait_max == 120
 
     def test_langfuse_defaults(self):
         """Langfuse関連のデフォルト値."""

@@ -55,7 +55,12 @@ class Settings(BaseSettings):
 
     # Agent
     max_iterations: int = 5
-    investigation_timeout_seconds: int = 120
+    investigation_timeout_seconds: int = 300
+
+    # LLM RateLimit Retry
+    llm_rate_limit_max_attempts: int = 3
+    llm_rate_limit_wait_min: float = 5
+    llm_rate_limit_wait_max: float = 120
 
     # MCP TLS
     mcp_use_tls: bool = False

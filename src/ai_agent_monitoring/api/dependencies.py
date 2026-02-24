@@ -12,6 +12,7 @@ from pydantic import SecretStr
 
 from ai_agent_monitoring.agents.orchestrator import OrchestratorAgent
 from ai_agent_monitoring.core.config import Settings
+from ai_agent_monitoring.core.llm_retry import RateLimitRetryWrapper
 from ai_agent_monitoring.core.models import RCAReport
 from ai_agent_monitoring.tools.registry import ToolRegistry
 
@@ -147,7 +148,7 @@ class AppState:
         else:
             http_client = None
             http_async_client = None
-        llm = ChatOpenAI(
+        raw_llm = ChatOpenAI(
             base_url=self.settings.llm_endpoint,
             model=self.settings.llm_model,
             api_key=SecretStr(self.settings.llm_api_key),
@@ -155,10 +156,16 @@ class AppState:
             http_client=http_client,
             http_async_client=http_async_client,
         )
+        llm = RateLimitRetryWrapper(
+            raw_llm,
+            max_attempts=self.settings.llm_rate_limit_max_attempts,
+            wait_min=self.settings.llm_rate_limit_wait_min,
+            wait_max=self.settings.llm_rate_limit_wait_max,
+        )
 
         # デバッグ: 内部クライアントチェーンを検証
         if http_async_client is not None:
-            root = getattr(llm, "root_async_client", None)
+            root = getattr(raw_llm, "root_async_client", None)
             internal = getattr(root, "_client", None) if root else None
             logger.info(
                 "LLM async client chain: http_async_client=%s, root_async_client=%s, root._client=%s, is_our_client=%s",
