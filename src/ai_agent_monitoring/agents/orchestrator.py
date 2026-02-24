@@ -153,18 +153,33 @@ class OrchestratorAgent:
         if inv_id and self._stage_callback:
             self._stage_callback(inv_id, stage, iteration)
 
-    def _wrap_with_stage(self, subgraph: Pregel[Any], stage_name: str) -> Any:
+    def _wrap_with_stage(
+        self,
+        subgraph: Pregel[Any],
+        stage_name: str,
+        output_keys: frozenset[str] | None = None,
+    ) -> Any:
         """サブグラフをステージ更新でラップ.
 
         サブグラフ（MetricsAgent, LogsAgent, RCAAgent）の実行前に
         ステージを更新するラッパー関数を返す。
         LangGraphの config（LangfuseCallbackHandler含む）を
         サブグラフに伝播させる。
+
+        Args:
+            subgraph: コンパイル済みサブグラフ
+            stage_name: ステージ表示名
+            output_keys: 返却するステートキーのセット。指定時は
+                ainvoke結果をフィルタリングし、reducer付きキーのみ
+                返すことで並列fan-out時のInvalidUpdateErrorを防止する。
+                Noneの場合は全キーを返す（直列ノード用）。
         """
 
         async def wrapped(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
             self._update_stage(state, stage_name)
             result: dict[str, Any] = await subgraph.ainvoke(cast(Any, state), config=config)
+            if output_keys is not None:
+                return {k: v for k, v in result.items() if k in output_keys}
             return result
 
         return wrapped
@@ -208,12 +223,16 @@ class OrchestratorAgent:
         compiled_metrics = self._compiled_metrics
         compiled_logs = self._compiled_logs
 
+        # 並列ノードはreducer付きキーのみ返却し、InvalidUpdateErrorを防止
+        # messages: MessagesStateの組込みreducer
+        # metrics_results / logs_results: Annotated[..., _merge_list]
         if compiled_metrics is not None:
             graph.add_node(
                 "investigate_metrics",
                 self._wrap_with_stage(
                     compiled_metrics,
                     "メトリクスを調査中",
+                    output_keys=frozenset({"messages", "metrics_results"}),
                 ),
             )
             graph.add_edge("resolve_time_range", "investigate_metrics")
@@ -227,6 +246,7 @@ class OrchestratorAgent:
                 self._wrap_with_stage(
                     compiled_logs,
                     "ログを調査中",
+                    output_keys=frozenset({"messages", "logs_results"}),
                 ),
             )
             graph.add_edge("resolve_time_range", "investigate_logs")

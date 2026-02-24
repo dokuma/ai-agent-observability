@@ -606,6 +606,69 @@ class TestOrchestratorStageUpdate:
         assert result == {"test_result": "ok"}
 
     @pytest.mark.asyncio
+    async def test_wrap_with_stage_output_keys_filters_result(self):
+        """output_keys指定時、reducer付きキーのみ返却しInvalidUpdateErrorを防止."""
+        llm = MagicMock()
+        llm.bind_tools = MagicMock(return_value=llm)
+        registry = _make_mock_registry()
+
+        agent = OrchestratorAgent(llm=llm, registry=registry)
+
+        # サブグラフが全ステートキーを返すケースをシミュレート
+        mock_subgraph = MagicMock()
+        mock_subgraph.ainvoke = AsyncMock(
+            return_value={
+                "messages": [HumanMessage(content="test")],
+                "metrics_results": [{"summary": "ok"}],
+                "investigation_id": "inv-123",
+                "trigger_type": "alert",
+                "plan": {"promql_queries": []},
+            }
+        )
+
+        output_keys = frozenset({"messages", "metrics_results"})
+        wrapped = agent._wrap_with_stage(mock_subgraph, "テスト", output_keys=output_keys)
+
+        state = AgentState(messages=[], investigation_id="inv-123")
+        result = await wrapped(state, {"callbacks": []})
+
+        # output_keysに含まれるキーのみ返される
+        assert "messages" in result
+        assert "metrics_results" in result
+        # reducer無しキーはフィルタリングされる
+        assert "investigation_id" not in result
+        assert "trigger_type" not in result
+        assert "plan" not in result
+
+    @pytest.mark.asyncio
+    async def test_wrap_with_stage_no_output_keys_returns_all(self):
+        """output_keys未指定時は全キーを返す（直列ノード用）."""
+        llm = MagicMock()
+        llm.bind_tools = MagicMock(return_value=llm)
+        registry = _make_mock_registry()
+
+        agent = OrchestratorAgent(llm=llm, registry=registry)
+
+        mock_subgraph = MagicMock()
+        mock_subgraph.ainvoke = AsyncMock(
+            return_value={
+                "messages": [],
+                "rca_report": {"summary": "root cause"},
+                "investigation_id": "inv-123",
+            }
+        )
+
+        # output_keys=None（デフォルト）は全キーを返す
+        wrapped = agent._wrap_with_stage(mock_subgraph, "RCAテスト")
+
+        state = AgentState(messages=[], investigation_id="inv-123")
+        result = await wrapped(state, {"callbacks": []})
+
+        assert "messages" in result
+        assert "rca_report" in result
+        assert "investigation_id" in result
+
+    @pytest.mark.asyncio
     async def test_discover_environment_updates_stage(self):
         """_discover_environmentがステージを更新する."""
         llm = MagicMock()
