@@ -57,6 +57,9 @@ spec:
               value: "1"
             - name: UV_CACHE_DIR
               value: "/tmp/.cache/uv"
+            {{- with .Values.agent.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- with .Values.agent.startupProbe }}
           startupProbe:
             {{- toYaml . | nindent 12 }}

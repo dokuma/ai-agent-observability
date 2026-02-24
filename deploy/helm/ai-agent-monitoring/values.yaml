@@ -48,6 +48,15 @@ agent:
     periodSeconds: 10
     timeoutSeconds: 3
     failureThreshold: 3
+  # 追加の環境変数（プロキシ設定など）
+  # extraEnv:
+  #   - name: HTTPS_PROXY
+  #     value: "http://proxy.example.com:8080"
+  #   - name: HTTP_PROXY
+  #     value: "http://proxy.example.com:8080"
+  #   - name: NO_PROXY
+  #     value: "localhost,127.0.0.1,.svc.cluster.local"
+  extraEnv: []
 
 # ===========================================================
 # Prometheus MCP Server
