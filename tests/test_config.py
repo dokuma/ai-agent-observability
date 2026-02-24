@@ -259,8 +259,8 @@ class TestLLMCustomHeadersInjection:
     """カスタムヘッダーが ChatOpenAI に正しく渡されることを検証."""
 
     @pytest.mark.asyncio
-    async def test_headers_passed_to_chat_openai(self, monkeypatch):
-        """パースされたカスタムヘッダーが ChatOpenAI の default_headers に渡される."""
+    async def test_headers_applied_via_event_hook(self, monkeypatch):
+        """カスタムヘッダーが httpx event hook 経由で適用される."""
         from ai_agent_monitoring.api.dependencies import AppState
 
         monkeypatch.setenv("LLM_CUSTOM_HEADER_AUTHORIZATION", "Bearer test-token")
@@ -273,6 +273,8 @@ class TestLLMCustomHeadersInjection:
         mock_registry.loki.client = MagicMock()
         mock_registry.grafana = MagicMock()
         mock_registry.grafana.client = MagicMock()
+
+        captured_async_client = None
 
         with (
             patch("ai_agent_monitoring.api.dependencies.ToolRegistry") as mock_tr_cls,
@@ -287,15 +289,18 @@ class TestLLMCustomHeadersInjection:
 
             mock_llm_cls.assert_called_once()
             call_kwargs = mock_llm_cls.call_args.kwargs
-            headers = call_kwargs.get("default_headers")
 
-            assert headers is not None, "default_headers が ChatOpenAI に渡されていない"
-            assert "AUTHORIZATION" in headers
-            assert headers["AUTHORIZATION"] == "Bearer test-token"
+            # event hook 方式ではカスタム httpx クライアントが渡される
+            captured_async_client = call_kwargs.get("http_async_client")
+            assert captured_async_client is not None, "http_async_client が ChatOpenAI に渡されていない"
+
+            # event hooks にリクエストフックが登録されていることを確認
+            event_hooks = captured_async_client._event_hooks
+            assert len(event_hooks.get("request", [])) > 0, "request event hook が未登録"
 
     @pytest.mark.asyncio
-    async def test_no_headers_passes_none(self):
-        """カスタムヘッダーがない場合は default_headers=None."""
+    async def test_no_headers_no_custom_client(self):
+        """カスタムヘッダーがない場合は http_async_client=None."""
         from ai_agent_monitoring.api.dependencies import AppState
 
         mock_registry = MagicMock()
@@ -319,10 +324,9 @@ class TestLLMCustomHeadersInjection:
             await app.initialize()
 
             call_kwargs = mock_llm_cls.call_args.kwargs
-            headers = call_kwargs.get("default_headers")
 
-            # llm_custom_headers が空 → `{} or None` → None
-            assert headers is None
+            # カスタムヘッダーなし・SSL検証有効・デバッグ無効 → カスタムクライアント不要
+            assert call_kwargs.get("http_async_client") is None
 
 
 class TestLLMCustomHeadersInRawRequest:

@@ -978,12 +978,16 @@ class OrchestratorAgent:
             "iteration_count": state.get("iteration_count", 0) + 1,
         }
 
+    # クエリ修正リトライの最大回数
+    _MAX_VALIDATION_RETRIES = 3
+
     @_observe(name="validate_queries", as_type="span")
     async def _validate_queries(self, state: AgentState) -> dict[str, Any]:
-        """生成されたクエリを検証し、必要に応じて修正.
+        """生成されたクエリを検証し、成功するまでLLMに修正を繰り返す.
 
         LLMが生成したPromQL/LogQLクエリの文法を検証し、
-        エラーがある場合は修正を試みるか、LLMに再生成を依頼する。
+        エラーがある場合はLLMに修正を依頼する。最大 _MAX_VALIDATION_RETRIES 回
+        繰り返し、有効なクエリが1つ以上揃うまで試行する。
 
         検証項目:
         - datasource_uid の有効性
@@ -998,11 +1002,74 @@ class OrchestratorAgent:
             return {}
 
         env = state.get("environment")
-        validation_errors: list[str] = []
-        corrected_promql: list[str] = []
-        corrected_logql: list[str] = []
 
         # datasource_uid の検証と自動修正
+        self._fix_datasource_uids(plan, env)
+
+        # バリデーション→修正ループ
+        candidate_promql = list(plan.promql_queries)
+        candidate_logql = list(plan.logql_queries)
+        last_response = None
+
+        for attempt in range(self._MAX_VALIDATION_RETRIES + 1):
+            valid_promql, invalid_promql = self._validate_query_list(
+                candidate_promql, QueryType.PROMQL,
+            )
+            valid_logql, invalid_logql = self._validate_query_list(
+                candidate_logql, QueryType.LOGQL,
+            )
+
+            all_errors = invalid_promql + invalid_logql
+
+            # 有効なクエリが1つ以上あればOK
+            if valid_promql or valid_logql:
+                plan.promql_queries = valid_promql
+                plan.logql_queries = valid_logql
+                if all_errors:
+                    logger.info(
+                        "Validation passed with %d valid queries (%d errors ignored)",
+                        len(valid_promql) + len(valid_logql),
+                        len(all_errors),
+                    )
+                result: dict[str, Any] = {"plan": plan}
+                if last_response:
+                    result["messages"] = [last_response]
+                return result
+
+            # 全てエラーかつリトライ回数が残っている場合、LLMに修正を依頼
+            if attempt >= self._MAX_VALIDATION_RETRIES:
+                break
+
+            logger.warning(
+                "Query validation attempt %d/%d: all queries invalid, asking LLM to fix",
+                attempt + 1,
+                self._MAX_VALIDATION_RETRIES,
+            )
+
+            last_response, new_plan = await self._request_query_regeneration(
+                state, all_errors, attempt,
+            )
+            candidate_promql = new_plan.promql_queries
+            candidate_logql = new_plan.logql_queries
+
+        # 最大リトライ到達 — 空のまま返す
+        logger.error(
+            "Query validation failed after %d retries, no valid queries",
+            self._MAX_VALIDATION_RETRIES,
+        )
+        plan.promql_queries = []
+        plan.logql_queries = []
+        result = {"plan": plan}
+        if last_response:
+            result["messages"] = [last_response]
+        return result
+
+    def _fix_datasource_uids(
+        self,
+        plan: InvestigationPlan,
+        env: EnvironmentContext | None,
+    ) -> None:
+        """datasource_uid を検証し、環境コンテキストで自動修正."""
         if not self.query_validator.is_valid_datasource_uid(plan.prometheus_datasource_uid):
             if env and env.prometheus_datasource_uid:
                 logger.info(
@@ -1031,121 +1098,91 @@ class OrchestratorAgent:
                     plan.loki_datasource_uid,
                 )
 
-        # PromQLの検証
-        for query in plan.promql_queries:
+    def _validate_query_list(
+        self,
+        queries: list[str],
+        query_type: QueryType,
+    ) -> tuple[list[str], list[str]]:
+        """クエリリストを検証し、有効/無効に分類.
+
+        Returns:
+            tuple[list[str], list[str]]:
+                (有効なクエリリスト, エラー説明リスト)
+        """
+        valid: list[str] = []
+        errors: list[str] = []
+        type_label = "PromQL" if query_type == QueryType.PROMQL else "LogQL"
+
+        validate_fn = (
+            self.query_validator.validate_promql
+            if query_type == QueryType.PROMQL
+            else self.query_validator.validate_logql
+        )
+
+        for query in queries:
             # サニタイズ（二重ブレース、Grafana変数）
-            sanitized, warnings = self.query_validator.sanitize_query(query, QueryType.PROMQL)
+            sanitized, warnings = self.query_validator.sanitize_query(query, query_type)
             for w in warnings:
-                logger.warning("PromQL sanitize warning: %s - %s", query, w)
+                logger.warning("%s sanitize warning: %s - %s", type_label, query, w)
 
             # Grafana変数を含む場合はスキップ
             if self.query_validator.contains_grafana_variables(sanitized):
                 logger.info("Skipping query with Grafana variables: %s", sanitized)
                 continue
 
-            result = self.query_validator.validate_promql(sanitized)
+            result = validate_fn(sanitized)
             if result.is_valid:
-                corrected_promql.append(sanitized)
+                valid.append(sanitized)
             elif result.corrected_query:
-                # 修正されたクエリを再検証
-                revalidated = self.query_validator.validate_promql(result.corrected_query)
+                revalidated = validate_fn(result.corrected_query)
                 if revalidated.is_valid:
-                    corrected_promql.append(result.corrected_query)
-                    logger.info("PromQL auto-corrected: %s -> %s", query, result.corrected_query)
+                    valid.append(result.corrected_query)
+                    logger.info("%s auto-corrected: %s -> %s", type_label, query, result.corrected_query)
                 else:
-                    validation_errors.append(f"PromQL: {query} - {', '.join(result.errors or [])}")
+                    errors.append(f"{type_label}: {query} - {', '.join(result.errors or [])}")
             else:
-                validation_errors.append(f"PromQL: {query} - {', '.join(result.errors or [])}")
+                errors.append(f"{type_label}: {query} - {', '.join(result.errors or [])}")
 
-        # LogQLの検証
-        for query in plan.logql_queries:
-            # サニタイズ（二重ブレース、Grafana変数）
-            sanitized, warnings = self.query_validator.sanitize_query(query, QueryType.LOGQL)
-            for w in warnings:
-                logger.warning("LogQL sanitize warning: %s - %s", query, w)
+        return valid, errors
 
-            # Grafana変数を含む場合はスキップ
-            if self.query_validator.contains_grafana_variables(sanitized):
-                logger.info("Skipping query with Grafana variables: %s", sanitized)
-                continue
+    async def _request_query_regeneration(
+        self,
+        state: AgentState,
+        validation_errors: list[str],
+        attempt: int,
+    ) -> tuple[Any, InvestigationPlan]:
+        """バリデーションエラーを伝えてLLMにクエリ再生成を依頼.
 
-            result = self.query_validator.validate_logql(sanitized)
-            if result.is_valid:
-                corrected_logql.append(sanitized)
-            elif result.corrected_query:
-                # 修正されたクエリを再検証
-                revalidated = self.query_validator.validate_logql(result.corrected_query)
-                if revalidated.is_valid:
-                    corrected_logql.append(result.corrected_query)
-                    logger.info("LogQL auto-corrected: %s -> %s", query, result.corrected_query)
-                else:
-                    validation_errors.append(f"LogQL: {query} - {', '.join(result.errors or [])}")
-            else:
-                validation_errors.append(f"LogQL: {query} - {', '.join(result.errors or [])}")
+        Returns:
+            tuple[AIMessage, InvestigationPlan]: LLMのレスポンスとパースされたプラン
+        """
+        # RAGから関連ドキュメントを取得
+        error_keywords = " ".join(q.split(":")[0] for q in validation_errors)
+        rag_context = self._get_rag_context(error_keywords, max_tokens=1000)
 
-        # エラーがあればLLMに再生成を依頼
-        if validation_errors:
-            logger.warning("Query validation errors: %s", validation_errors)
+        fewshot = get_all_fewshot_examples()
+        error_msg = "\n".join(validation_errors)
 
-            # RAGから関連ドキュメントを取得
-            error_keywords = " ".join(q.split(":")[0] for q in validation_errors)
-            rag_context = self._get_rag_context(error_keywords, max_tokens=1000)
+        retry_content = (
+            f"生成されたクエリに文法エラーがありました（修正試行 {attempt + 1}回目）:\n"
+            f"{error_msg}\n\n"
+        )
+        if rag_context:
+            retry_content += f"参考ドキュメント:\n{rag_context}\n\n"
+        retry_content += (
+            f"以下のクエリ例を参考に、正しい文法でクエリを再生成してください:\n"
+            f"{fewshot}\n\n"
+            "修正した調査計画をJSON形式で出力してください。"
+        )
 
-            # Few-shot例を含めて再生成を依頼
-            fewshot = get_all_fewshot_examples()
-            error_msg = "\n".join(validation_errors)
+        messages = [
+            *state["messages"],
+            HumanMessage(content=retry_content),
+        ]
+        response = await self.llm.ainvoke(messages)
+        new_plan = self._parse_plan(response.content)
 
-            retry_content = f"生成されたクエリに文法エラーがありました:\n{error_msg}\n\n"
-            if rag_context:
-                retry_content += f"参考ドキュメント:\n{rag_context}\n\n"
-            retry_content += (
-                f"以下のクエリ例を参考に、正しい文法でクエリを再生成してください:\n"
-                f"{fewshot}\n\n"
-                "修正した調査計画をJSON形式で出力してください。"
-            )
-
-            messages = [
-                *state["messages"],
-                HumanMessage(content=retry_content),
-            ]
-            response = await self.llm.ainvoke(messages)
-            new_plan = self._parse_plan(response.content)
-
-            # 再検証（再帰的に呼び出さない - 1回のみ）
-            final_promql = []
-            final_logql = []
-
-            for query in new_plan.promql_queries:
-                result = self.query_validator.validate_promql(query)
-                if result.is_valid:
-                    final_promql.append(query)
-                elif result.corrected_query:
-                    final_promql.append(result.corrected_query)
-                else:
-                    logger.error("PromQL still invalid after retry: %s", query)
-
-            for query in new_plan.logql_queries:
-                result = self.query_validator.validate_logql(query)
-                if result.is_valid:
-                    final_logql.append(query)
-                elif result.corrected_query:
-                    final_logql.append(result.corrected_query)
-                else:
-                    logger.error("LogQL still invalid after retry: %s", query)
-
-            new_plan.promql_queries = final_promql
-            new_plan.logql_queries = final_logql
-
-            return {
-                "messages": [response],
-                "plan": new_plan,
-            }
-
-        # エラーがなければ修正済みクエリを適用
-        plan.promql_queries = corrected_promql
-        plan.logql_queries = corrected_logql
-
-        return {"plan": plan}
+        return response, new_plan
 
     async def _resolve_time_range_node(self, state: AgentState) -> dict[str, Any]:
         """時間範囲を確定させるノード.

@@ -115,7 +115,7 @@ class LogsAgent:
                     "uidを取得し、そのuidを grafana_query_loki に指定してください。"
                 )
 
-            setup_messages = [
+            setup_messages: list[BaseMessage] = [
                 SystemMessage(content=LOGS_AGENT_SYSTEM_PROMPT),
                 HumanMessage(
                     content=(
@@ -129,7 +129,8 @@ class LogsAgent:
                     )
                 ),
             ]
-            messages: list[BaseMessage] = setup_messages
+            response = await self.llm.ainvoke(setup_messages)
+            return {"messages": [*setup_messages, response]}
         else:
             messages = list(state["messages"])
 
