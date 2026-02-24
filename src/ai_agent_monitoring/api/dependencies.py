@@ -19,22 +19,46 @@ logger = logging.getLogger(__name__)
 
 
 def _log_llm_request(request: httpx.Request) -> None:
-    """LLM への HTTP リクエストヘッダーをログ出力（同期用、OPENAI_LOG=debug 時のみ有効）."""
+    """LLM への HTTP リクエストをログ出力（同期用、OPENAI_LOG=debug 時のみ有効）."""
     logger.info(
-        "LLM HTTP Request: %s %s headers=%s",
+        "LLM HTTP Request: %s %s headers=%s body=%s",
         request.method,
         request.url,
         dict(request.headers),
+        request.content.decode("utf-8", errors="replace")[:2000],
     )
 
 
 async def _log_llm_request_async(request: httpx.Request) -> None:
-    """LLM への HTTP リクエストヘッダーをログ出力（非同期用、OPENAI_LOG=debug 時のみ有効）."""
+    """LLM への HTTP リクエストをログ出力（非同期用、OPENAI_LOG=debug 時のみ有効）."""
     logger.info(
-        "LLM HTTP Request: %s %s headers=%s",
+        "LLM HTTP Request: %s %s headers=%s body=%s",
         request.method,
         request.url,
         dict(request.headers),
+        request.content.decode("utf-8", errors="replace")[:2000],
+    )
+
+
+def _log_llm_response(response: httpx.Response) -> None:
+    """LLM からの HTTP レスポンスをログ出力（同期用）."""
+    response.read()
+    logger.info(
+        "LLM HTTP Response: status=%s headers=%s body=%s",
+        response.status_code,
+        dict(response.headers),
+        response.text[:2000],
+    )
+
+
+async def _log_llm_response_async(response: httpx.Response) -> None:
+    """LLM からの HTTP レスポンスをログ出力（非同期用）."""
+    await response.aread()
+    logger.info(
+        "LLM HTTP Response: status=%s headers=%s body=%s",
+        response.status_code,
+        dict(response.headers),
+        response.text[:2000],
     )
 
 
@@ -78,8 +102,14 @@ class AppState:
         http_client_kwargs: dict[str, object] = {"verify": verify_ssl}
         http_async_client_kwargs: dict[str, object] = {"verify": verify_ssl}
         if os.environ.get("OPENAI_LOG", "").lower() == "debug":
-            http_client_kwargs["event_hooks"] = {"request": [_log_llm_request]}
-            http_async_client_kwargs["event_hooks"] = {"request": [_log_llm_request_async]}
+            http_client_kwargs["event_hooks"] = {
+                "request": [_log_llm_request],
+                "response": [_log_llm_response],
+            }
+            http_async_client_kwargs["event_hooks"] = {
+                "request": [_log_llm_request_async],
+                "response": [_log_llm_response_async],
+            }
         if not verify_ssl or os.environ.get("OPENAI_LOG", "").lower() == "debug":
             http_client = httpx.Client(**http_client_kwargs)  # type: ignore[arg-type]
             http_async_client = httpx.AsyncClient(**http_async_client_kwargs)  # type: ignore[arg-type]
