@@ -128,7 +128,7 @@ class MetricsAgent:
                 ),
             ]
             response = await self.llm.ainvoke(setup_messages)
-            return {"messages": setup_messages + [response]}
+            return {"messages": [*setup_messages, response]}
         else:
             messages = list(state["messages"])
 
