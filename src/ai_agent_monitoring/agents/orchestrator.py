@@ -767,11 +767,10 @@ class OrchestratorAgent:
         """入力（アラートまたはユーザクエリ）を分析."""
         self._update_stage(state, "入力を分析中")
 
+        query_text = self._get_query_text(state)
         user_query = state.get("user_query")
-        query_text = ""  # RAG検索用
 
         if state["trigger_type"] == TriggerType.USER_QUERY and user_query is not None:
-            query_text = user_query.raw_input
             sanitized_input = sanitize_user_input(user_query.raw_input)
             content = (
                 f"ユーザからの問い合わせ:\n{sanitized_input}\n\n"
@@ -780,7 +779,6 @@ class OrchestratorAgent:
         else:
             alert = state.get("alert")
             if alert is not None:
-                query_text = f"{alert.alert_name} {alert.summary} {alert.description}"
                 content = (
                     f"アラートを受信しました:\n"
                     f"名前: {alert.alert_name}\n"
@@ -832,6 +830,50 @@ class OrchestratorAgent:
         except Exception as e:
             logger.warning("Failed to get RAG context: %s", e)
             return ""
+
+    def _get_query_text(self, state: AgentState) -> str:
+        """stateから調査対象のテキストを抽出（RAG検索用）."""
+        if state.get("trigger_type") == TriggerType.USER_QUERY:
+            user_query = state.get("user_query")
+            if user_query:
+                return user_query.raw_input
+        alert = state.get("alert")
+        if alert:
+            return f"{alert.alert_name} {alert.summary} {alert.description}"
+        return ""
+
+    def _get_rag_query_examples(self, query_text: str) -> str:
+        """RAGからクエリ生成に関連する具体的なコード例を取得."""
+        if not query_text:
+            return ""
+        try:
+            rag = get_query_rag()
+            examples = rag.get_examples_for_task(query_text)
+            if not examples:
+                return ""
+            return "\n".join(f"- `{ex}`" for ex in examples[:8])
+        except Exception as e:
+            logger.warning("Failed to get RAG query examples: %s", e)
+            return ""
+
+    def _format_panel_query_templates(self, env: EnvironmentContext | None) -> str:
+        """環境の既存パネルクエリをテンプレート文字列にフォーマット."""
+        if not env or not env.discovered_panel_queries:
+            return ""
+        promql_lines: list[str] = []
+        logql_lines: list[str] = []
+        for pq in env.discovered_panel_queries:
+            label = f"- `{pq.query}`  ({pq.panel_title})" if pq.panel_title else f"- `{pq.query}`"
+            if pq.query_type == "promql" and len(promql_lines) < 8:
+                promql_lines.append(label)
+            elif pq.query_type == "logql" and len(logql_lines) < 5:
+                logql_lines.append(label)
+        parts: list[str] = []
+        if promql_lines:
+            parts.append("PromQL:\n" + "\n".join(promql_lines))
+        if logql_lines:
+            parts.append("LogQL:\n" + "\n".join(logql_lines))
+        return "\n".join(parts)
 
     def _format_environment_context(self, env: EnvironmentContext | None) -> str:
         """環境コンテキストをプロンプト用テキストにフォーマット."""
@@ -911,50 +953,78 @@ class OrchestratorAgent:
         前回のイテレーションでINSUFFICIENTと評価された場合、
         評価フィードバック（不足情報、追加調査観点、既試行クエリ）を
         プロンプトに含め、同じクエリの繰り返しを防止する。
+
+        RAGから関連するクエリ構文例を取得し、環境の既存ダッシュボード
+        クエリをテンプレートとしてプロンプトに注入することで、
+        LLMによるクエリ生成の精度を向上させる。
         """
         iteration = state.get("iteration_count", 0) + 1
         self._update_stage(state, f"調査計画を策定中 (イテレーション {iteration})")
 
-        # 基本プロンプト
-        plan_prompt = (
-            "上記の分析に基づき、調査計画をJSON形式で出力してください。\n"
-            "promql_queries, logql_queries, target_instances, time_range を含めてください。\n"
-            "time_rangeは必ずISO 8601絶対時刻のstart/endで指定してください。"
-        )
+        # RAG コンテキストの準備
+        query_text = self._get_query_text(state)
+        rag_examples = self._get_rag_query_examples(query_text)
+        env = state.get("environment")
+        panel_templates = self._format_panel_query_templates(env)
 
-        # 前回の評価フィードバックがある場合、プロンプトに追加
+        # プロンプト構築
+        plan_prompt_parts: list[str] = []
+
+        # 前回の評価フィードバックがある場合
         feedback = state.get("evaluation_feedback")
         if feedback is not None:
-            feedback_sections = []
-
             if feedback.missing_information:
-                feedback_sections.append(
+                plan_prompt_parts.append(
                     "## 前回の調査で不足していた情報\n"
                     + "\n".join(f"- {item}" for item in feedback.missing_information)
                 )
 
             if feedback.additional_investigation_points:
-                feedback_sections.append(
+                plan_prompt_parts.append(
                     "## 追加で調査すべき観点\n"
                     + "\n".join(f"- {point}" for point in feedback.additional_investigation_points)
                 )
 
             if feedback.previous_queries_attempted:
-                feedback_sections.append(
+                plan_prompt_parts.append(
                     "## 前回試行済みのクエリ（同じクエリは避けてください）\n"
                     + "\n".join(f"- `{q}`" for q in feedback.previous_queries_attempted)
                 )
 
             if feedback.reasoning:
-                feedback_sections.append(f"## 前回の評価理由\n{feedback.reasoning}")
+                plan_prompt_parts.append(f"## 前回の評価理由\n{feedback.reasoning}")
 
-            if feedback_sections:
-                plan_prompt = (
-                    "\n\n".join(feedback_sections) + "\n\n上記のフィードバックを踏まえ、前回とは異なるアプローチで"
-                    "調査計画をJSON形式で出力してください。\n"
-                    "promql_queries, logql_queries, target_instances, time_range を含めてください。\n"
-                    "time_rangeは必ずISO 8601絶対時刻のstart/endで指定してください。"
-                )
+        # RAG クエリ構文例
+        if rag_examples:
+            plan_prompt_parts.append(
+                "## クエリ構文リファレンス\n"
+                "以下は関連するクエリの構文例です。これらを参考にしてください:\n" + rag_examples
+            )
+
+        # 環境の既存パネルクエリをテンプレートとして提供
+        if panel_templates:
+            plan_prompt_parts.append(
+                "## この環境で動作確認済みのクエリテンプレート\n"
+                "以下はこの環境のダッシュボードで実際に使われているクエリです。\n"
+                "ラベル名やメトリクス名を参考にしてください:\n" + panel_templates
+            )
+
+        # 最終指示
+        if feedback is not None:
+            plan_prompt_parts.append(
+                "上記のフィードバックとリファレンスを踏まえ、前回とは異なるアプローチで"
+                "調査計画をJSON形式で出力してください。\n"
+                "promql_queries, logql_queries, target_instances, time_range を含めてください。\n"
+                "time_rangeは必ずISO 8601絶対時刻のstart/endで指定してください。"
+            )
+        else:
+            plan_prompt_parts.append(
+                "上記の分析に基づき、調査計画をJSON形式で出力してください。\n"
+                "promql_queries, logql_queries, target_instances, time_range を含めてください。\n"
+                "time_rangeは必ずISO 8601絶対時刻のstart/endで指定してください。"
+            )
+
+        plan_prompt = "\n\n".join(plan_prompt_parts)
 
         messages = [
             *state["messages"],
@@ -965,7 +1035,6 @@ class OrchestratorAgent:
         plan = self._parse_plan(response.content)
 
         # 環境コンテキストからdatasource UIDを自動設定
-        env = state.get("environment")
         if env:
             if not plan.prometheus_datasource_uid and env.prometheus_datasource_uid:
                 plan.prometheus_datasource_uid = env.prometheus_datasource_uid
@@ -1013,10 +1082,12 @@ class OrchestratorAgent:
 
         for attempt in range(self._MAX_VALIDATION_RETRIES + 1):
             valid_promql, invalid_promql = self._validate_query_list(
-                candidate_promql, QueryType.PROMQL,
+                candidate_promql,
+                QueryType.PROMQL,
             )
             valid_logql, invalid_logql = self._validate_query_list(
-                candidate_logql, QueryType.LOGQL,
+                candidate_logql,
+                QueryType.LOGQL,
             )
 
             all_errors = invalid_promql + invalid_logql
@@ -1047,7 +1118,9 @@ class OrchestratorAgent:
             )
 
             last_response, new_plan = await self._request_query_regeneration(
-                state, all_errors, attempt,
+                state,
+                all_errors,
+                attempt,
             )
             candidate_promql = new_plan.promql_queries
             candidate_logql = new_plan.logql_queries
@@ -1163,10 +1236,7 @@ class OrchestratorAgent:
         fewshot = get_all_fewshot_examples()
         error_msg = "\n".join(validation_errors)
 
-        retry_content = (
-            f"生成されたクエリに文法エラーがありました（修正試行 {attempt + 1}回目）:\n"
-            f"{error_msg}\n\n"
-        )
+        retry_content = f"生成されたクエリに文法エラーがありました（修正試行 {attempt + 1}回目）:\n{error_msg}\n\n"
         if rag_context:
             retry_content += f"参考ドキュメント:\n{rag_context}\n\n"
         retry_content += (

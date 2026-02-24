@@ -9,6 +9,7 @@ data:
   LLM_ENDPOINT: {{ .Values.externalServices.llm.endpoint | quote }}
   LLM_MODEL: {{ .Values.externalServices.llm.model | quote }}
   LLM_VERIFY_SSL: {{ .Values.externalServices.llm.verifySsl | quote }}
+  LLM_MAX_RETRIES: {{ .Values.externalServices.llm.maxRetries | quote }}
   # Monitoring Stack
   PROMETHEUS_URL: {{ .Values.externalServices.prometheus.url | quote }}
   LOKI_URL: {{ .Values.externalServices.loki.url | quote }}

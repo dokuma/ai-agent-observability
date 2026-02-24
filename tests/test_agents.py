@@ -13,6 +13,7 @@ from ai_agent_monitoring.agents.metrics_agent import MetricsAgent
 from ai_agent_monitoring.agents.orchestrator import OrchestratorAgent
 from ai_agent_monitoring.agents.rca_agent import RCAAgent
 from ai_agent_monitoring.core.models import (
+    Alert,
     LogEntry,
     LogsResult,
     RCAReport,
@@ -25,6 +26,7 @@ from ai_agent_monitoring.core.state import (
     DashboardInfo,
     EnvironmentContext,
     InvestigationPlan,
+    PanelQuery,
 )
 from ai_agent_monitoring.tools.registry import MCPConnection, ToolRegistry
 
@@ -835,6 +837,96 @@ class TestOrchestratorGetRagContext:
         result = agent._get_rag_context("CPU usage high")
         # 結果は文字列（空でもOK）
         assert isinstance(result, str)
+
+
+class TestOrchestratorGetQueryText:
+    """Orchestrator の _get_query_text テスト."""
+
+    def test_empty_state(self):
+        """trigger_type が未設定の場合は空文字を返す."""
+        agent, _ = _make_orchestrator()
+        state = AgentState(messages=[])
+        assert agent._get_query_text(state) == ""
+
+    def test_user_query(self):
+        """ユーザクエリのraw_inputを返す."""
+        agent, _ = _make_orchestrator()
+        uq = UserQuery(raw_input="CPU使用率が高い")
+        state = AgentState(
+            messages=[],
+            trigger_type=TriggerType.USER_QUERY,
+            user_query=uq,
+        )
+        assert agent._get_query_text(state) == "CPU使用率が高い"
+
+    def test_alert(self):
+        """アラートの名前・概要・詳細を結合して返す."""
+        agent, _ = _make_orchestrator()
+        alert = Alert(
+            alert_name="HighCPU",
+            severity="critical",
+            instance="web-01",
+            starts_at=datetime.now(UTC),
+            summary="CPU high",
+            description="CPU over 90%",
+        )
+        state = AgentState(messages=[], trigger_type=TriggerType.ALERT, alert=alert)
+        result = agent._get_query_text(state)
+        assert "HighCPU" in result
+        assert "CPU high" in result
+
+
+class TestOrchestratorGetRagQueryExamples:
+    """Orchestrator の _get_rag_query_examples テスト."""
+
+    def test_empty_query(self):
+        """空のクエリは空文字を返す."""
+        agent, _ = _make_orchestrator()
+        assert agent._get_rag_query_examples("") == ""
+
+    def test_with_query(self):
+        """クエリがある場合は文字列を返す."""
+        agent, _ = _make_orchestrator()
+        result = agent._get_rag_query_examples("HTTP request rate")
+        assert isinstance(result, str)
+
+
+class TestOrchestratorFormatPanelQueryTemplates:
+    """Orchestrator の _format_panel_query_templates テスト."""
+
+    def test_none_env(self):
+        """envがNoneの場合は空文字を返す."""
+        agent, _ = _make_orchestrator()
+        assert agent._format_panel_query_templates(None) == ""
+
+    def test_empty_queries(self):
+        """パネルクエリが空の場合は空文字を返す."""
+        agent, _ = _make_orchestrator()
+        env = EnvironmentContext()
+        assert agent._format_panel_query_templates(env) == ""
+
+    def test_with_panel_queries(self):
+        """パネルクエリをフォーマットして返す."""
+        agent, _ = _make_orchestrator()
+        env = EnvironmentContext(
+            discovered_panel_queries=[
+                PanelQuery(
+                    query="rate(http_requests_total[5m])",
+                    query_type="promql",
+                    panel_title="Request Rate",
+                ),
+                PanelQuery(
+                    query='{job="app"} |= "error"',
+                    query_type="logql",
+                    panel_title="Error Logs",
+                ),
+            ],
+        )
+        result = agent._format_panel_query_templates(env)
+        assert "rate(http_requests_total[5m])" in result
+        assert "PromQL" in result
+        assert "LogQL" in result
+        assert "Request Rate" in result
 
 
 # ================================================================
