@@ -6,7 +6,7 @@ import json
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
@@ -1438,11 +1438,24 @@ class OrchestratorAgent:
 
     # ---- パーサー ----
 
+    # InvestigationPlan のフィールド名（LLMが別名で出力した場合の変換用）
+    _PLAN_FIELD_ALIASES: ClassVar[dict[str, str]] = {
+        "promql": "promql_queries",
+        "logql": "logql_queries",
+        "prometheus_queries": "promql_queries",
+        "loki_queries": "logql_queries",
+        "instances": "target_instances",
+        "targets": "target_instances",
+    }
+
     def _parse_plan(self, content: str) -> InvestigationPlan:
         """LLM出力から調査計画をパース.
 
-        パースに失敗した場合は例外を発生させ、デフォルト計画にフォールバックしない。
-        これにより、意味のない調査が実行されることを防ぐ。
+        小さなモデルが不正確なJSON構造を出力するケースに対応:
+        - 余分なフィールド → InvestigationPlan(extra="ignore") で無視
+        - ネストされた計画オブジェクト → 自動抽出
+        - フィールド名の揺れ → エイリアス変換
+        - クエリフィールドが文字列 → リストに変換
 
         Raises:
             ValueError: 調査計画のパースに失敗した場合
@@ -1451,15 +1464,30 @@ class OrchestratorAgent:
             json_str = self._extract_json(content)
             data = json.loads(json_str)
 
+            if not isinstance(data, dict):
+                raise ValueError(f"Expected dict, got {type(data).__name__}")
+
+            # ネストされた計画オブジェクトを探索
+            data = self._unwrap_nested_plan(data)
+
+            # フィールド名のエイリアス変換
+            for alias, canonical in self._PLAN_FIELD_ALIASES.items():
+                if alias in data and canonical not in data:
+                    data[canonical] = data.pop(alias)
+
+            # クエリフィールドが文字列の場合はリストに変換
+            for key in ("promql_queries", "logql_queries", "target_instances"):
+                val = data.get(key)
+                if isinstance(val, str):
+                    data[key] = [val] if val.strip() else []
+
             # time_rangeの正規化: LLMが様々な形式で出力する可能性に対応
             if "time_range" in data and data["time_range"] is not None:
                 tr = data["time_range"]
                 if isinstance(tr, str):
-                    # 単一の文字列の場合はNoneに（後続の処理で解決）
                     logger.debug("time_range is string, setting to None: %s", tr)
                     data["time_range"] = None
                 elif isinstance(tr, dict):
-                    # start/endを持つdictの場合はTimeRangeに変換
                     if "start" in tr and "end" in tr:
                         try:
                             data["time_range"] = TimeRange(
@@ -1484,6 +1512,25 @@ class OrchestratorAgent:
                 content[:500] if content else "(empty)",
             )
             raise ValueError(f"調査計画のパースに失敗しました: {e}") from e
+
+    @staticmethod
+    def _unwrap_nested_plan(data: dict[str, Any]) -> dict[str, Any]:
+        """ネストされた計画オブジェクトを抽出.
+
+        LLMが {"investigation_plan": {...}} のようにラップして出力した場合、
+        内側のdictを返す。promql_queries/logql_queries を含むdictを優先する。
+        """
+        # トップレベルにクエリフィールドがあればそのまま返す
+        plan_keys = {"promql_queries", "logql_queries", "promql", "logql"}
+        if plan_keys & data.keys():
+            return data
+
+        # 値がdictであるフィールドを探し、クエリフィールドを含むものを返す
+        for value in data.values():
+            if isinstance(value, dict) and plan_keys & value.keys():
+                return value
+
+        return data
 
     @staticmethod
     def _format_time_range(time_range: TimeRange | None) -> str:

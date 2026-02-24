@@ -97,6 +97,8 @@ class EvaluationFeedback(BaseModel):
 class InvestigationPlan(BaseModel):
     """Orchestratorが生成する調査計画."""
 
+    model_config = {"extra": "ignore"}
+
     # データソースUID（クエリ実行時に必須）
     prometheus_datasource_uid: str = ""
     loki_datasource_uid: str = ""

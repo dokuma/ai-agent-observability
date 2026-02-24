@@ -153,6 +153,62 @@ class TestOrchestratorParsePlan:
 
         assert plan.time_range is None
 
+    def test_parse_plan_extra_fields_ignored(self):
+        """LLMが余分なフィールドを出力しても無視される."""
+        content = json.dumps(
+            {
+                "promql_queries": ["up"],
+                "logql_queries": [],
+                "target_instances": [],
+                "description": "some investigation",
+                "steps": ["step1", "step2"],
+                "reasoning": "because...",
+            }
+        )
+        plan = self.agent._parse_plan(content)
+        assert plan.promql_queries == ["up"]
+
+    def test_parse_plan_nested_object(self):
+        """LLMがネストされた計画オブジェクトを出力した場合も抽出."""
+        content = json.dumps(
+            {
+                "investigation_plan": {
+                    "promql_queries": ["rate(cpu[5m])"],
+                    "logql_queries": ['{job="app"}'],
+                    "target_instances": [],
+                }
+            }
+        )
+        plan = self.agent._parse_plan(content)
+        assert plan.promql_queries == ["rate(cpu[5m])"]
+
+    def test_parse_plan_field_aliases(self):
+        """LLMがフィールド名を省略した場合もエイリアスで変換."""
+        content = json.dumps(
+            {
+                "promql": ["up{job='node'}"],
+                "logql": ['{job="app"} |= "error"'],
+                "instances": ["web-01"],
+            }
+        )
+        plan = self.agent._parse_plan(content)
+        assert plan.promql_queries == ["up{job='node'}"]
+        assert plan.logql_queries == ['{job="app"} |= "error"']
+        assert plan.target_instances == ["web-01"]
+
+    def test_parse_plan_string_query_to_list(self):
+        """クエリが文字列の場合はリストに変換."""
+        content = json.dumps(
+            {
+                "promql_queries": "up",
+                "logql_queries": '{job="app"}',
+                "target_instances": [],
+            }
+        )
+        plan = self.agent._parse_plan(content)
+        assert plan.promql_queries == ["up"]
+        assert plan.logql_queries == ['{job="app"}']
+
 
 class TestOrchestratorExtractJson:
     def test_extract_json_code_block(self):
