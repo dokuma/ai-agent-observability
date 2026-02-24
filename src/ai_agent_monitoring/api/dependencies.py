@@ -98,19 +98,49 @@ class AppState:
         logger.info("MCP health check: %s", health)
 
         # LLM
+        # カスタムヘッダーは event hook で上書き適用する。
+        # ChatOpenAI の default_headers に渡すと既存ヘッダー（content-type 等）
+        # に追記されてフォーマットが壊れるため、event hook で明示的に上書きする。
+        custom_headers = self.settings.llm_custom_headers
         verify_ssl = self.settings.llm_verify_ssl
+        is_debug = os.environ.get("OPENAI_LOG", "").lower() == "debug"
+
+        request_hooks_sync: list[object] = []
+        request_hooks_async: list[object] = []
+        response_hooks_sync: list[object] = []
+        response_hooks_async: list[object] = []
+
+        if custom_headers:
+            def _apply_custom_headers(request: httpx.Request) -> None:
+                for key, value in custom_headers.items():
+                    request.headers[key] = value
+
+            async def _apply_custom_headers_async(request: httpx.Request) -> None:
+                for key, value in custom_headers.items():
+                    request.headers[key] = value
+
+            request_hooks_sync.append(_apply_custom_headers)
+            request_hooks_async.append(_apply_custom_headers_async)
+
+        if is_debug:
+            request_hooks_sync.append(_log_llm_request)
+            request_hooks_async.append(_log_llm_request_async)
+            response_hooks_sync.append(_log_llm_response)
+            response_hooks_async.append(_log_llm_response_async)
+
+        need_custom_client = custom_headers or not verify_ssl or is_debug
         http_client_kwargs: dict[str, object] = {"verify": verify_ssl}
         http_async_client_kwargs: dict[str, object] = {"verify": verify_ssl}
-        if os.environ.get("OPENAI_LOG", "").lower() == "debug":
+        if request_hooks_sync or response_hooks_sync:
             http_client_kwargs["event_hooks"] = {
-                "request": [_log_llm_request],
-                "response": [_log_llm_response],
+                "request": request_hooks_sync,
+                "response": response_hooks_sync,
             }
             http_async_client_kwargs["event_hooks"] = {
-                "request": [_log_llm_request_async],
-                "response": [_log_llm_response_async],
+                "request": request_hooks_async,
+                "response": response_hooks_async,
             }
-        if not verify_ssl or os.environ.get("OPENAI_LOG", "").lower() == "debug":
+        if need_custom_client:
             http_client = httpx.Client(**http_client_kwargs)  # type: ignore[arg-type]
             http_async_client = httpx.AsyncClient(**http_async_client_kwargs)  # type: ignore[arg-type]
         else:
@@ -120,7 +150,6 @@ class AppState:
             base_url=self.settings.llm_endpoint,
             model=self.settings.llm_model,
             api_key=SecretStr(self.settings.llm_api_key),
-            default_headers=self.settings.llm_custom_headers or None,
             http_client=http_client,
             http_async_client=http_async_client,
         )
