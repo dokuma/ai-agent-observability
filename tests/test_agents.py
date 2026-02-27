@@ -209,6 +209,62 @@ class TestOrchestratorParsePlan:
         assert plan.promql_queries == ["up"]
         assert plan.logql_queries == ['{job="app"}']
 
+    def test_parse_plan_dict_queries_to_string_list(self):
+        """クエリが辞書のリストの場合は文字列を抽出."""
+        content = json.dumps(
+            {
+                "promql_queries": [
+                    {"id": "p1", "query": "up{namespace=\"myns\"}", "name": "Pod稼働確認"},
+                    {"id": "p2", "query": "rate(container_cpu_usage_seconds_total[5m])", "name": "CPU使用率"},
+                ],
+                "logql_queries": [
+                    {"id": "l1", "query": '{namespace="myns"} |= "error"', "name": "エラーログ"},
+                ],
+                "target_instances": [
+                    {"instance": "pod-abc-123", "description": "対象Pod"},
+                ],
+            }
+        )
+        plan = self.agent._parse_plan(content)
+        assert plan.promql_queries == [
+            'up{namespace="myns"}',
+            "rate(container_cpu_usage_seconds_total[5m])",
+        ]
+        assert plan.logql_queries == ['{namespace="myns"} |= "error"']
+        assert plan.target_instances == ["pod-abc-123"]
+
+    def test_parse_plan_dict_queries_with_expr_key(self):
+        """辞書のキーが'expr'の場合も文字列を抽出."""
+        content = json.dumps(
+            {
+                "promql_queries": [
+                    {"expr": "up{job=\"node\"}", "description": "Node status"},
+                ],
+                "logql_queries": [],
+                "target_instances": [],
+            }
+        )
+        plan = self.agent._parse_plan(content)
+        assert plan.promql_queries == ['up{job="node"}']
+
+    def test_parse_plan_mixed_string_and_dict_queries(self):
+        """文字列と辞書が混在するリストも正しく処理."""
+        content = json.dumps(
+            {
+                "promql_queries": [
+                    "up{namespace=\"myns\"}",
+                    {"query": "rate(http_requests_total[5m])", "name": "リクエスト数"},
+                ],
+                "logql_queries": [],
+                "target_instances": [],
+            }
+        )
+        plan = self.agent._parse_plan(content)
+        assert plan.promql_queries == [
+            'up{namespace="myns"}',
+            "rate(http_requests_total[5m])",
+        ]
+
 
 class TestOrchestratorExtractJson:
     def test_extract_json_code_block(self):

@@ -51,12 +51,21 @@ Metrics Agent・Logs Agentに調査を委任し、最終的にRCAレポートを
 - promql_queries, logql_queries, target_instancesは、
   上記「監視環境」で示された利用可能なメトリクス・ラベル・インスタンスを使用
 - 上記「クエリ文法」に従った正しい構文でクエリを記述
+- promql_queries, logql_queries, target_instancesは**純粋な文字列の配列**です。
+  各要素はクエリ文字列そのものを直接記述してください。
+  オブジェクト（{{"id": ..., "query": ...}}）で囲まないでください。
 
+正しい例:
 {{
-  "promql_queries": ["<PromQL文法に従ったクエリ>", ...],
-  "logql_queries": ["<LogQL文法に従ったクエリ - 中括弧で始まること>", ...],
-  "target_instances": ["<利用可能なインスタンスから選択>", ...],
+  "promql_queries": ["up{{namespace=\"myns\"}}", "sum(rate(container_cpu_usage_seconds_total{{namespace=\"myns\"}}[5m])) by (pod)"],
+  "logql_queries": ["{{namespace=\"myns\"}} |= \"error\""],
+  "target_instances": ["pod-abc-123"],
   "time_range": {{"start": "<ISO 8601絶対時刻>", "end": "<ISO 8601絶対時刻>"}}
+}}
+
+間違った例（オブジェクトの配列にしないでください）:
+{{
+  "promql_queries": [{{"id": "p1", "query": "up{{namespace=\"myns\"}}"}}, ...]
 }}
 
 ## 判断基準

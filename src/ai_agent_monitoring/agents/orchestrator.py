@@ -1495,11 +1495,32 @@ class OrchestratorAgent:
                 if alias in data and canonical not in data:
                     data[canonical] = data.pop(alias)
 
-            # クエリフィールドが文字列の場合はリストに変換
+            # クエリフィールドの正規化: 文字列→リスト変換、辞書リスト→文字列リスト変換
+            _QUERY_STR_KEYS = ("query", "promql", "logql", "expr", "name", "instance")
             for key in ("promql_queries", "logql_queries", "target_instances"):
                 val = data.get(key)
                 if isinstance(val, str):
                     data[key] = [val] if val.strip() else []
+                elif isinstance(val, list):
+                    normalized: list[str] = []
+                    for item in val:
+                        if isinstance(item, str):
+                            normalized.append(item)
+                        elif isinstance(item, dict):
+                            # 辞書からクエリ文字列を抽出
+                            extracted = next(
+                                (str(item[k]) for k in _QUERY_STR_KEYS if k in item and item[k]),
+                                None,
+                            )
+                            if extracted:
+                                normalized.append(extracted)
+                            else:
+                                logger.warning(
+                                    "クエリフィールド %s の要素から文字列を抽出できません: %s",
+                                    key,
+                                    item,
+                                )
+                    data[key] = normalized
 
             # time_rangeの正規化: LLMが様々な形式で出力する可能性に対応
             if "time_range" in data and data["time_range"] is not None:
