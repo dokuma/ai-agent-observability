@@ -1496,7 +1496,7 @@ class OrchestratorAgent:
                     data[canonical] = data.pop(alias)
 
             # クエリフィールドの正規化: 文字列→リスト変換、辞書リスト→文字列リスト変換
-            _QUERY_STR_KEYS = ("query", "promql", "logql", "expr", "name", "instance")
+            query_str_keys = ("query", "promql", "logql", "expr", "name", "instance")
             for key in ("promql_queries", "logql_queries", "target_instances"):
                 val = data.get(key)
                 if isinstance(val, str):
@@ -1509,7 +1509,7 @@ class OrchestratorAgent:
                         elif isinstance(item, dict):
                             # 辞書からクエリ文字列を抽出
                             extracted = next(
-                                (str(item[k]) for k in _QUERY_STR_KEYS if k in item and item[k]),
+                                (str(item[k]) for k in query_str_keys if item.get(k)),
                                 None,
                             )
                             if extracted:

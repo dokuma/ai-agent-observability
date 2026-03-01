@@ -57,7 +57,10 @@ Metrics Agent・Logs Agentに調査を委任し、最終的にRCAレポートを
 
 正しい例:
 {{
-  "promql_queries": ["up{{namespace=\"myns\"}}", "sum(rate(container_cpu_usage_seconds_total{{namespace=\"myns\"}}[5m])) by (pod)"],
+  "promql_queries": [
+    "up{{namespace=\"myns\"}}",
+    "sum(rate(container_cpu_usage_seconds_total{{namespace=\"myns\"}}[5m])) by (pod)"
+  ],
   "logql_queries": ["{{namespace=\"myns\"}} |= \"error\""],
   "target_instances": ["pod-abc-123"],
   "time_range": {{"start": "<ISO 8601絶対時刻>", "end": "<ISO 8601絶対時刻>"}}

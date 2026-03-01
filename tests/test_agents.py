@@ -214,7 +214,7 @@ class TestOrchestratorParsePlan:
         content = json.dumps(
             {
                 "promql_queries": [
-                    {"id": "p1", "query": "up{namespace=\"myns\"}", "name": "Pod稼働確認"},
+                    {"id": "p1", "query": 'up{namespace="myns"}', "name": "Pod稼働確認"},
                     {"id": "p2", "query": "rate(container_cpu_usage_seconds_total[5m])", "name": "CPU使用率"},
                 ],
                 "logql_queries": [
@@ -238,7 +238,7 @@ class TestOrchestratorParsePlan:
         content = json.dumps(
             {
                 "promql_queries": [
-                    {"expr": "up{job=\"node\"}", "description": "Node status"},
+                    {"expr": 'up{job="node"}', "description": "Node status"},
                 ],
                 "logql_queries": [],
                 "target_instances": [],
@@ -252,7 +252,7 @@ class TestOrchestratorParsePlan:
         content = json.dumps(
             {
                 "promql_queries": [
-                    "up{namespace=\"myns\"}",
+                    'up{namespace="myns"}',
                     {"query": "rate(http_requests_total[5m])", "name": "リクエスト数"},
                 ],
                 "logql_queries": [],
