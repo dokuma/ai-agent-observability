@@ -42,7 +42,7 @@ def create_time_tools(default_tz: str = DEFAULT_TIMEZONE) -> list[BaseTool]:
         """
         now = get_current_time(timezone_name)
         return {
-            "iso8601": now.isoformat(),
+            "iso8601": now.isoformat(timespec="seconds"),
             "unix_timestamp": int(now.timestamp()),
             "human_readable": now.strftime("%Y年%m月%d日 %H時%M分%S秒"),
             "timezone": timezone_name,
@@ -76,8 +76,8 @@ def create_time_tools(default_tz: str = DEFAULT_TIMEZONE) -> list[BaseTool]:
         start = end - timedelta(minutes=duration_minutes)
 
         return {
-            "start": start.isoformat(),
-            "end": end.isoformat(),
+            "start": start.isoformat(timespec="seconds"),
+            "end": end.isoformat(timespec="seconds"),
             "duration_minutes": str(duration_minutes),
         }
 
@@ -121,8 +121,8 @@ def create_time_tools(default_tz: str = DEFAULT_TIMEZONE) -> list[BaseTool]:
 
         return {
             "original_expression": expression,
-            "interpreted_time": result_time.isoformat(),
-            "current_time": now.isoformat(),
+            "interpreted_time": result_time.isoformat(timespec="seconds"),
+            "current_time": now.isoformat(timespec="seconds"),
             "timezone": timezone_name,
         }
 

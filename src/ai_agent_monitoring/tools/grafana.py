@@ -79,11 +79,11 @@ class GrafanaMCPTool(BaseMCPTool):
         params: dict[str, Any] = {
             "datasourceUid": datasource_uid,
             "expr": expr,
-            "startTime": start.isoformat(),
+            "startTime": start.isoformat(timespec="seconds"),
             "queryType": query_type,
         }
         if end:
-            params["endTime"] = end.isoformat()
+            params["endTime"] = end.isoformat(timespec="seconds")
         if query_type == "range":
             params["stepSeconds"] = step_seconds
 
@@ -116,9 +116,9 @@ class GrafanaMCPTool(BaseMCPTool):
             "direction": direction,
         }
         if start:
-            params["startRfc3339"] = start.isoformat()
+            params["startRfc3339"] = start.isoformat(timespec="seconds")
         if end:
-            params["endRfc3339"] = end.isoformat()
+            params["endRfc3339"] = end.isoformat(timespec="seconds")
 
         logger.info("Grafana: LogQL query: %s (datasource=%s)", logql, datasource_uid)
         return await self._call_tool("query_loki_logs", params)
