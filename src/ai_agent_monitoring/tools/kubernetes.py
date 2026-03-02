@@ -139,9 +139,18 @@ class KubernetesMCPTool(BaseMCPTool):
             return await self._call_tool("resources_list", params)
 
 
-def create_kubernetes_tools(mcp_client: MCPClient) -> list[BaseTool]:
-    """LangChain Tool としてラップされた Kubernetes ツール群を生成."""
-    k8s = KubernetesMCPTool(mcp_client)
+def create_kubernetes_tools(
+    mcp_client: MCPClient,
+    *,
+    k8s_tool: KubernetesMCPTool | None = None,
+) -> list[BaseTool]:
+    """LangChain Tool としてラップされた Kubernetes ツール群を生成.
+
+    Args:
+        mcp_client: MCPクライアント（k8s_tool未指定時の生成用）
+        k8s_tool: 既存の KubernetesMCPTool インスタンス（セッション再利用時に指定）
+    """
+    k8s = k8s_tool or KubernetesMCPTool(mcp_client)
 
     @tool
     async def k8s_list_pods(namespace: str = "") -> dict[str, Any]:

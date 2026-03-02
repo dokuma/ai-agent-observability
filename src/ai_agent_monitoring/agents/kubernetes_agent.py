@@ -47,8 +47,10 @@ class KubernetesAgent:
         self._k8s_tool: KubernetesMCPTool | None = None
 
         if kubernetes_mcp:
+            # session_context() でセッション再利用するため、
+            # @tool クロージャと同一インスタンスを共有する
             self._k8s_tool = KubernetesMCPTool(kubernetes_mcp)
-            self.tools = create_kubernetes_tools(kubernetes_mcp)
+            self.tools = create_kubernetes_tools(kubernetes_mcp, k8s_tool=self._k8s_tool)
             logger.info("KubernetesAgent: Using Kubernetes MCP")
 
         if not self.tools:
