@@ -8,6 +8,8 @@ import pytest
 from ai_agent_monitoring.core.config import Settings
 from ai_agent_monitoring.core.models import (
     Alert,
+    KubernetesResourceState,
+    KubernetesResult,
     LogEntry,
     LogsResult,
     MetricsResult,
@@ -117,6 +119,26 @@ def sample_logs_result() -> LogsResult:
         ],
         error_patterns=["OutOfMemoryError", "GC overhead"],
         summary="16:05にOOMエラーが発生。GCオーバーヘッドも検出。",
+    )
+
+
+@pytest.fixture
+def sample_k8s_result() -> KubernetesResult:
+    """テスト用Kubernetes分析結果."""
+    return KubernetesResult(
+        queries=["pods_list", "events_list"],
+        resource_states=[
+            KubernetesResourceState(
+                kind="Pod",
+                name="web-server-01-abc123",
+                namespace="default",
+                status="CrashLoopBackOff",
+                details={"restartCount": 5, "reason": "OOMKilled"},
+            ),
+        ],
+        events=["Warning OOMKilling pod web-server-01-abc123"],
+        anomalies=["Pod web-server-01-abc123 is in CrashLoopBackOff state"],
+        summary="Pod web-server-01-abc123 が OOMKilled により CrashLoopBackOff 状態。再起動5回。",
     )
 
 

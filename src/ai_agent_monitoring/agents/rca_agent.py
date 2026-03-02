@@ -88,6 +88,12 @@ class RCAAgent:
             evidence_parts.append(f"## ログ分析結果\nクエリ: {lr.query}\n{lr.summary}")
             if lr.error_patterns:
                 evidence_parts.append("エラーパターン: " + ", ".join(lr.error_patterns))
+        for kr in state.get("k8s_results", []):
+            evidence_parts.append(f"## Kubernetes分析結果\n{kr.summary}")
+            if kr.anomalies:
+                evidence_parts.append("K8s異常: " + ", ".join(kr.anomalies))
+            if kr.events:
+                evidence_parts.append("K8sイベント: " + ", ".join(kr.events[:10]))
 
         evidence_text = "\n\n".join(evidence_parts) if evidence_parts else "調査結果なし"
 
@@ -149,6 +155,7 @@ class RCAAgent:
                     '  "root_causes": [{"description": "...", "confidence": 0.9, "evidence": ["..."]}],\n'
                     '  "metrics_summary": "メトリクス分析の要約",\n'
                     '  "logs_summary": "ログ分析の要約",\n'
+                    '  "k8s_summary": "Kubernetes分析の要約",\n'
                     '  "recommendations": ["推奨アクション1", ...]\n'
                     "}"
                 )
@@ -293,6 +300,7 @@ class RCAAgent:
             root_causes=root_causes,
             metrics_summary=data.get("metrics_summary", ""),
             logs_summary=data.get("logs_summary", ""),
+            k8s_summary=data.get("k8s_summary", ""),
             recommendations=data.get("recommendations", []),
         )
 

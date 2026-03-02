@@ -13,6 +13,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, StateGraph
 from langgraph.types import interrupt
 
+from ai_agent_monitoring.agents.kubernetes_agent import KubernetesAgent
 from ai_agent_monitoring.agents.logs_agent import LogsAgent
 from ai_agent_monitoring.agents.metrics_agent import MetricsAgent
 from ai_agent_monitoring.agents.prompts import ORCHESTRATOR_SYSTEM_PROMPT
@@ -136,11 +137,18 @@ class OrchestratorAgent:
 
         self.rca_agent = RCAAgent(self.llm, grafana_mcp=self.grafana_mcp)
 
+        # KubernetesAgent: K8s MCPが健全な場合のみ生成
+        kubernetes_mcp = registry.kubernetes.client if registry.kubernetes.healthy else None
+        self.kubernetes_agent = KubernetesAgent(self.llm, kubernetes_mcp=kubernetes_mcp) if kubernetes_mcp else None
+
         # サブエージェントの compile() 結果をキャッシュ
         self._compiled_metrics: Pregel[Any] | None = (
             self.metrics_agent.compile() if self.metrics_agent is not None else None
         )
         self._compiled_logs: Pregel[Any] | None = self.logs_agent.compile() if self.logs_agent is not None else None
+        self._compiled_kubernetes: Pregel[Any] | None = (
+            self.kubernetes_agent.compile() if self.kubernetes_agent is not None else None
+        )
         self._compiled_rca: Pregel[Any] = self.rca_agent.compile()
 
         self.graph = self._build_graph()
@@ -152,7 +160,10 @@ class OrchestratorAgent:
         """
         self.registry = registry
         self._rebuild_agents_and_graph()
-        return {conn.name: conn.healthy for conn in [registry.prometheus, registry.loki, registry.grafana]}
+        return {
+            conn.name: conn.healthy
+            for conn in [registry.prometheus, registry.loki, registry.grafana, registry.kubernetes]
+        }
 
     def _update_stage(self, state: AgentState, stage: str) -> None:
         """調査ステージを更新."""
@@ -233,7 +244,7 @@ class OrchestratorAgent:
 
         # 並列ノードはreducer付きキーのみ返却し、InvalidUpdateErrorを防止
         # messages: MessagesStateの組込みreducer
-        # metrics_results / logs_results: Annotated[..., _merge_list]
+        # metrics_results / logs_results / k8s_results: Annotated[..., _merge_list]
         if compiled_metrics is not None:
             graph.add_node(
                 "investigate_metrics",
@@ -262,8 +273,23 @@ class OrchestratorAgent:
         else:
             logger.warning("LogsAgent unavailable, skipping logs investigation")
 
-        # 両方のAgentが使えない場合は直接評価へ
-        if compiled_metrics is None and compiled_logs is None:
+        compiled_kubernetes = self._compiled_kubernetes
+        if compiled_kubernetes is not None:
+            graph.add_node(
+                "investigate_kubernetes",
+                self._wrap_with_stage(
+                    compiled_kubernetes,
+                    "Kubernetesクラスタを調査中",
+                    output_keys=frozenset({"messages", "k8s_results"}),
+                ),
+            )
+            graph.add_edge("resolve_time_range", "investigate_kubernetes")
+            graph.add_edge("investigate_kubernetes", "evaluate_results")
+        else:
+            logger.warning("KubernetesAgent unavailable, skipping K8s investigation")
+
+        # 全Agentが使えない場合は直接評価へ
+        if compiled_metrics is None and compiled_logs is None and compiled_kubernetes is None:
             graph.add_edge("resolve_time_range", "evaluate_results")
         graph.add_conditional_edges(
             "evaluate_results",
@@ -1479,12 +1505,14 @@ class OrchestratorAgent:
         """
         self._update_stage(state, "調査結果を評価中")
 
-        # Metrics/Logs Agentの結果サマリを構築
+        # Metrics/Logs/Kubernetes Agentの結果サマリを構築
         results_summary = []
         for mr in state.get("metrics_results", []):
             results_summary.append(f"[メトリクス] {mr.summary}")
         for lr in state.get("logs_results", []):
             results_summary.append(f"[ログ] {lr.summary}")
+        for kr in state.get("k8s_results", []):
+            results_summary.append(f"[Kubernetes] {kr.summary}")
 
         results_text = "\n".join(results_summary) if results_summary else "結果なし"
 
@@ -1580,6 +1608,9 @@ class OrchestratorAgent:
         "loki_queries": "logql_queries",
         "instances": "target_instances",
         "targets": "target_instances",
+        "namespaces": "target_namespaces",
+        "pods": "target_pods",
+        "resource_kinds": "k8s_resource_kinds",
     }
 
     def _parse_plan(self, content: str) -> InvestigationPlan:

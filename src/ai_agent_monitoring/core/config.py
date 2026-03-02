@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     mcp_grafana_transport: str = ""  # 空の場合は mcp_transport を使用
     mcp_loki_transport: str = ""
     mcp_prometheus_transport: str = ""
+    mcp_kubernetes_url: str = "http://localhost:8083"
+    mcp_kubernetes_transport: str = ""
 
     # Notifications
     slack_webhook_url: str = ""

@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -80,6 +81,26 @@ class LogsResult(BaseModel):
     summary: str = ""
 
 
+class KubernetesResourceState(BaseModel):
+    """Kubernetesリソースの状態スナップショット."""
+
+    kind: str  # "Pod", "Deployment", "Node" 等
+    name: str
+    namespace: str = ""
+    status: str = ""  # "Running", "CrashLoopBackOff" 等
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class KubernetesResult(BaseModel):
+    """Kubernetesクラスタ分析結果."""
+
+    queries: list[str] = Field(default_factory=list)
+    resource_states: list[KubernetesResourceState] = Field(default_factory=list)
+    events: list[str] = Field(default_factory=list)
+    anomalies: list[str] = Field(default_factory=list)
+    summary: str = ""
+
+
 class RootCause(BaseModel):
     """特定された根本原因."""
 
@@ -115,6 +136,7 @@ class RCAReport(BaseModel):
     root_causes: list[RootCause] = Field(default_factory=list)
     metrics_summary: str = ""
     logs_summary: str = ""
+    k8s_summary: str = ""
     recommendations: list[str] = Field(default_factory=list)
     panel_snapshots: list[PanelSnapshot] = Field(default_factory=list)
     log_excerpts: list[LogExcerpt] = Field(default_factory=list)

@@ -43,13 +43,14 @@ def _make_mock_mcp():
     return mock_mcp
 
 
-def _make_mock_registry():
+def _make_mock_registry(kubernetes_healthy: bool = True):
     """モックToolRegistryを生成（全て健全）."""
     mock_mcp = _make_mock_mcp()
     registry = MagicMock(spec=ToolRegistry)
     registry.prometheus = MCPConnection(name="prometheus", client=mock_mcp, healthy=True)
     registry.loki = MCPConnection(name="loki", client=mock_mcp, healthy=True)
     registry.grafana = MCPConnection(name="grafana", client=mock_mcp, healthy=True)
+    registry.kubernetes = MCPConnection(name="kubernetes", client=mock_mcp, healthy=kubernetes_healthy)
     return registry
 
 
@@ -1888,6 +1889,7 @@ class TestOrchestratorRefreshHealth:
         prometheus_healthy: bool = True,
         loki_healthy: bool = True,
         grafana_healthy: bool = True,
+        kubernetes_healthy: bool = True,
     ) -> MagicMock:
         """指定した健全性でモックToolRegistryを生成."""
         mock_mcp = _make_mock_mcp()
@@ -1895,6 +1897,7 @@ class TestOrchestratorRefreshHealth:
         registry.prometheus = MCPConnection(name="prometheus", client=mock_mcp, healthy=prometheus_healthy)
         registry.loki = MCPConnection(name="loki", client=mock_mcp, healthy=loki_healthy)
         registry.grafana = MCPConnection(name="grafana", client=mock_mcp, healthy=grafana_healthy)
+        registry.kubernetes = MCPConnection(name="kubernetes", client=mock_mcp, healthy=kubernetes_healthy)
         return registry
 
     def test_all_healthy(self):
@@ -1907,10 +1910,11 @@ class TestOrchestratorRefreshHealth:
         new_registry = self._make_registry()
         result = agent.refresh_health(new_registry)
 
-        assert result == {"prometheus": True, "loki": True, "grafana": True}
+        assert result == {"prometheus": True, "loki": True, "grafana": True, "kubernetes": True}
         assert agent.metrics_agent is not None
         assert agent.logs_agent is not None
         assert agent.grafana_mcp is not None
+        assert agent.kubernetes_agent is not None
 
     def test_loki_down_logs_agent_none(self):
         """LokiダウンでGrafanaも無い場合、LogsAgentがNoneになる."""
@@ -1938,13 +1942,15 @@ class TestOrchestratorRefreshHealth:
             prometheus_healthy=False,
             loki_healthy=False,
             grafana_healthy=False,
+            kubernetes_healthy=False,
         )
         result = agent.refresh_health(down_registry)
 
-        assert result == {"prometheus": False, "loki": False, "grafana": False}
+        assert result == {"prometheus": False, "loki": False, "grafana": False, "kubernetes": False}
         assert agent.metrics_agent is None
         assert agent.logs_agent is None
         assert agent.grafana_mcp is None
+        assert agent.kubernetes_agent is None
         # グラフはcompileできる（直接evaluate_resultsに遷移）
         compiled = agent.compile()
         assert compiled is not None

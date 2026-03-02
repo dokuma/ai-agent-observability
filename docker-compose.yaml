@@ -213,6 +213,16 @@ services:
     networks:
       - monitoring
 
+  kubernetes-mcp:
+    build: ./deploy/kubernetes-mcp
+    ports:
+      - "9094:8080"
+    volumes:
+      - ${KUBECONFIG:-~/.kube/config}:/home/mcp/.kube/config:ro
+    command: ["--port", "8080", "--read-only", "--log-level", "3"]
+    networks:
+      - monitoring
+
   grafana-mcp:
     image: grafana/mcp-grafana:latest
     # build:

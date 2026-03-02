@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from ai_agent_monitoring.core.datasource import DatasourceInfo
 from ai_agent_monitoring.core.models import (
     Alert,
+    KubernetesResult,
     LogsResult,
     MetricsResult,
     RCAReport,
@@ -113,6 +114,11 @@ class InvestigationPlan(BaseModel):
     target_instances: list[str] = Field(default_factory=list)
     time_range: TimeRange | None = None
 
+    # Kubernetes調査フィールド
+    target_namespaces: list[str] = Field(default_factory=list)
+    target_pods: list[str] = Field(default_factory=list)
+    k8s_resource_kinds: list[str] = Field(default_factory=list)  # ["Deployment", "Service"] 等
+
 
 class AgentState(MessagesState):
     """Multi-Agent ワークフローの共有ステート.
@@ -135,6 +141,7 @@ class AgentState(MessagesState):
     # Annotated + reducer を使うフィールドはデフォルト値不要のため ignore 不要
     metrics_results: Annotated[list[MetricsResult], _merge_list]
     logs_results: Annotated[list[LogsResult], _merge_list]
+    k8s_results: Annotated[list[KubernetesResult], _merge_list]
 
     rca_report: RCAReport | None = None  # type: ignore[misc]
     investigation_complete: bool = False  # type: ignore[misc]

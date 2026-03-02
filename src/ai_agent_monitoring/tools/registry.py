@@ -9,6 +9,7 @@ from langchain_core.tools import BaseTool
 from ai_agent_monitoring.core.config import Settings
 from ai_agent_monitoring.tools.base import MCPClient
 from ai_agent_monitoring.tools.grafana import create_grafana_tools
+from ai_agent_monitoring.tools.kubernetes import create_kubernetes_tools
 from ai_agent_monitoring.tools.loki import create_loki_tools
 from ai_agent_monitoring.tools.prometheus import create_prometheus_tools
 from ai_agent_monitoring.tools.time import create_time_tools
@@ -36,10 +37,11 @@ class ToolRegistry:
     prometheus: MCPConnection
     loki: MCPConnection
     grafana: MCPConnection
+    kubernetes: MCPConnection
     _all_connections: list[MCPConnection] = field(init=False)
 
     def __post_init__(self) -> None:
-        self._all_connections = [self.prometheus, self.loki, self.grafana]
+        self._all_connections = [self.prometheus, self.loki, self.grafana, self.kubernetes]
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "ToolRegistry":
@@ -74,6 +76,16 @@ class ToolRegistry:
                 client=MCPClient(
                     settings.mcp_grafana_url,
                     transport=settings.mcp_grafana_transport or default_transport,
+                    use_tls=use_tls,
+                    verify_ssl=verify_ssl,
+                    ca_bundle=ca_bundle,
+                ),
+            ),
+            kubernetes=MCPConnection(
+                name="kubernetes",
+                client=MCPClient(
+                    settings.mcp_kubernetes_url,
+                    transport=settings.mcp_kubernetes_transport or default_transport,
                     use_tls=use_tls,
                     verify_ssl=verify_ssl,
                     ca_bundle=ca_bundle,
@@ -148,6 +160,11 @@ class ToolRegistry:
             tools += create_grafana_tools(self.grafana.client)
         else:
             logger.warning("Grafana MCP is unhealthy, skipping tools")
+
+        if not healthy_only or self.kubernetes.healthy:
+            tools += create_kubernetes_tools(self.kubernetes.client)
+        else:
+            logger.warning("Kubernetes MCP is unhealthy, skipping tools")
 
         return tools
 

@@ -550,8 +550,8 @@ class TestToolRegistry:
         # healthy_only=False で全ツールを生成
         tools = registry.create_all_tools(healthy_only=False)
 
-        # time(3) + prometheus(2) + loki(2) + grafana(14) = 21
-        assert len(tools) == 21
+        # time(3) + prometheus(2) + loki(2) + grafana(14) + kubernetes(8) = 29
+        assert len(tools) == 29
 
     def test_create_all_tools_healthy_only(self, settings):
         registry = ToolRegistry.from_settings(settings)
