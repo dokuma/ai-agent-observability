@@ -50,6 +50,7 @@ class ToolRegistry:
         verify_ssl = settings.mcp_verify_ssl
         ca_bundle = settings.mcp_ca_bundle
         default_transport = settings.mcp_transport
+        max_tool_result_chars = settings.max_tool_result_chars
         return cls(
             prometheus=MCPConnection(
                 name="prometheus",
@@ -59,6 +60,7 @@ class ToolRegistry:
                     use_tls=use_tls,
                     verify_ssl=verify_ssl,
                     ca_bundle=ca_bundle,
+                    max_tool_result_chars=max_tool_result_chars,
                 ),
             ),
             loki=MCPConnection(
@@ -69,6 +71,7 @@ class ToolRegistry:
                     use_tls=use_tls,
                     verify_ssl=verify_ssl,
                     ca_bundle=ca_bundle,
+                    max_tool_result_chars=max_tool_result_chars,
                 ),
             ),
             grafana=MCPConnection(
@@ -79,6 +82,7 @@ class ToolRegistry:
                     use_tls=use_tls,
                     verify_ssl=verify_ssl,
                     ca_bundle=ca_bundle,
+                    max_tool_result_chars=max_tool_result_chars,
                 ),
             ),
             kubernetes=MCPConnection(
@@ -89,6 +93,7 @@ class ToolRegistry:
                     use_tls=use_tls,
                     verify_ssl=verify_ssl,
                     ca_bundle=ca_bundle,
+                    max_tool_result_chars=max_tool_result_chars,
                 ),
             ),
         )

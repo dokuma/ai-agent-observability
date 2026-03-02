@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import ssl
 from collections.abc import AsyncGenerator
@@ -42,6 +43,22 @@ except ImportError:
 
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_MAX_TOOL_RESULT_CHARS = 8000
+
+
+def _truncate_tool_result(result: dict[str, Any], max_chars: int) -> dict[str, Any]:
+    """ツール結果が大きすぎる場合に切り詰める."""
+    serialized = json.dumps(result, ensure_ascii=False, default=str)
+    if len(serialized) <= max_chars:
+        return result
+    truncated = serialized[:max_chars]
+    return {
+        "content": [{"type": "text", "text": truncated}],
+        "_truncated": True,
+        "_original_chars": len(serialized),
+    }
+
 
 # リトライ対象とする例外タイプ
 _RETRYABLE_EXCEPTIONS = (
@@ -99,6 +116,7 @@ class MCPClient:
         use_tls: bool = False,
         verify_ssl: bool = True,
         ca_bundle: str = "",
+        max_tool_result_chars: int = _DEFAULT_MAX_TOOL_RESULT_CHARS,
     ):
         """MCPClientを初期化.
 
@@ -109,6 +127,7 @@ class MCPClient:
             use_tls: TLSを使用するかどうか（Trueの場合、httpをhttpsに変換）
             verify_ssl: SSL証明書を検証するかどうか
             ca_bundle: カスタムCA証明書パス（空の場合はシステムデフォルト）
+            max_tool_result_chars: ツール結果の最大文字数（超過分は切り詰め）
         """
         self.base_url = base_url.rstrip("/")
         if use_tls:
@@ -118,6 +137,7 @@ class MCPClient:
         self._use_tls = use_tls
         self._verify_ssl = verify_ssl
         self._ca_bundle = ca_bundle
+        self._max_tool_result_chars = max_tool_result_chars
         self._persistent_session: ClientSession | None = None
         self._session_lock = asyncio.Lock()
         self._connection_context: Any = None
@@ -336,7 +356,8 @@ class MCPClient:
         """
         async with self.session() as session:
             result = await session.call_tool(tool_name, arguments or {})
-            return self._extract_result(result)
+            extracted = self._extract_result(result)
+            return _truncate_tool_result(extracted, self._max_tool_result_chars)
 
     @_observe(name="mcp_call_tool_with_session", as_type="tool")
     async def call_tool_with_session(
@@ -356,7 +377,8 @@ class MCPClient:
             ツールの実行結果
         """
         result = await session.call_tool(tool_name, arguments or {})
-        return self._extract_result(result)
+        extracted = self._extract_result(result)
+        return _truncate_tool_result(extracted, self._max_tool_result_chars)
 
     async def list_tools(self) -> list[types.Tool]:
         """利用可能なツール一覧を取得."""
@@ -513,7 +535,8 @@ class BaseMCPTool:
         if self._current_session:
             # セッションが確立済みの場合は再利用
             result = await self._current_session.call_tool(tool_name, params)
-            return self.mcp_client._extract_result(result)
+            extracted = self.mcp_client._extract_result(result)
+            return _truncate_tool_result(extracted, self.mcp_client._max_tool_result_chars)
         else:
             # セッションがない場合は新規作成（後方互換性）
             return await self.mcp_client.call_tool(tool_name, params)

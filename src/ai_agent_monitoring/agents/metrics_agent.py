@@ -28,6 +28,8 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+_MAX_REACT_STEPS = 5
+
 
 class MetricsAgent:
     """Metrics Analysis Agent.
@@ -167,5 +169,9 @@ class MetricsAgent:
         """最後のメッセージにtool_callがあればToolを実行."""
         last = state["messages"][-1]
         if hasattr(last, "tool_calls") and last.tool_calls:
+            tool_msg_count = sum(1 for m in state["messages"] if m.type == "tool")
+            if tool_msg_count >= _MAX_REACT_STEPS:
+                logger.warning("ReAct loop limit reached (%d steps)", tool_msg_count)
+                return "done"
             return "tool_call"
         return "done"

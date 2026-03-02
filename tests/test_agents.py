@@ -1184,6 +1184,7 @@ class TestMetricsAgentShouldUseTool:
     def test_with_tool_calls(self):
         msg = MagicMock(spec=AIMessage)
         msg.tool_calls = [{"name": "query", "args": {}}]
+        msg.type = "ai"
         state = {"messages": [msg]}
         assert MetricsAgent._should_use_tool(state) == "tool_call"
 
@@ -1197,6 +1198,18 @@ class TestMetricsAgentShouldUseTool:
         msg = MagicMock()
         del msg.tool_calls  # tool_callsがないメッセージ
         state = {"messages": [msg]}
+        assert MetricsAgent._should_use_tool(state) == "done"
+
+    def test_react_loop_limit(self):
+        tool_msgs = []
+        for _ in range(5):
+            tm = MagicMock()
+            tm.type = "tool"
+            tool_msgs.append(tm)
+        msg = MagicMock(spec=AIMessage)
+        msg.tool_calls = [{"name": "query", "args": {}}]
+        msg.type = "ai"
+        state = {"messages": [*tool_msgs, msg]}
         assert MetricsAgent._should_use_tool(state) == "done"
 
 
@@ -1268,6 +1281,7 @@ class TestLogsAgentShouldUseTool:
     def test_with_tool_calls(self):
         msg = MagicMock(spec=AIMessage)
         msg.tool_calls = [{"name": "query", "args": {}}]
+        msg.type = "ai"
         state = {"messages": [msg]}
         assert LogsAgent._should_use_tool(state) == "tool_call"
 
@@ -1275,6 +1289,18 @@ class TestLogsAgentShouldUseTool:
         msg = MagicMock(spec=AIMessage)
         msg.tool_calls = []
         state = {"messages": [msg]}
+        assert LogsAgent._should_use_tool(state) == "done"
+
+    def test_react_loop_limit(self):
+        tool_msgs = []
+        for _ in range(5):
+            tm = MagicMock()
+            tm.type = "tool"
+            tool_msgs.append(tm)
+        msg = MagicMock(spec=AIMessage)
+        msg.tool_calls = [{"name": "query", "args": {}}]
+        msg.type = "ai"
+        state = {"messages": [*tool_msgs, msg]}
         assert LogsAgent._should_use_tool(state) == "done"
 
 

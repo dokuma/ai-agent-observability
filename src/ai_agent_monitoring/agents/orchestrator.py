@@ -251,7 +251,7 @@ class OrchestratorAgent:
                 self._wrap_with_stage(
                     compiled_metrics,
                     "メトリクスを調査中",
-                    output_keys=frozenset({"messages", "metrics_results"}),
+                    output_keys=frozenset({"metrics_results"}),
                 ),
             )
             graph.add_edge("resolve_time_range", "investigate_metrics")
@@ -265,7 +265,7 @@ class OrchestratorAgent:
                 self._wrap_with_stage(
                     compiled_logs,
                     "ログを調査中",
-                    output_keys=frozenset({"messages", "logs_results"}),
+                    output_keys=frozenset({"logs_results"}),
                 ),
             )
             graph.add_edge("resolve_time_range", "investigate_logs")
@@ -280,7 +280,7 @@ class OrchestratorAgent:
                 self._wrap_with_stage(
                     compiled_kubernetes,
                     "Kubernetesクラスタを調査中",
-                    output_keys=frozenset({"messages", "k8s_results"}),
+                    output_keys=frozenset({"k8s_results"}),
                 ),
             )
             graph.add_edge("resolve_time_range", "investigate_kubernetes")
