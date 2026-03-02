@@ -135,6 +135,31 @@ class ToolRegistry:
 
         return results
 
+    async def auto_detect_transports(self) -> dict[str, str | None]:
+        """healthy な MCP サーバーに対してトランスポート自動検出を実行.
+
+        HTTP ヘルスチェック通過後に、実際の MCP プロトコル接続を試行し、
+        設定トランスポートで失敗する場合は対向トランスポートへ自動切替する。
+
+        Returns:
+            各サーバーの検出結果（トランスポート名 or None）
+        """
+        results: dict[str, str | None] = {}
+        for conn in self._all_connections:
+            if not conn.healthy:
+                results[conn.name] = None
+                continue
+            detected = await conn.client.detect_working_transport()
+            if detected is None:
+                # プロトコルレベルで接続不可 → unhealthy に降格
+                conn.healthy = False
+                logger.warning(
+                    "MCP Server '%s' demoted to unhealthy: no working transport",
+                    conn.name,
+                )
+            results[conn.name] = detected
+        return results
+
     def create_all_tools(self, healthy_only: bool = True) -> list[BaseTool]:
         """全MCP Serverから利用可能なLangChain Toolを一括生成.
 

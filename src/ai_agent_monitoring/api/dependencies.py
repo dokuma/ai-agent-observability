@@ -108,6 +108,12 @@ class AppState:
         health = await self.registry.health_check()
         logger.info("MCP health check: %s", health)
 
+        # MCP プロトコルレベルのトランスポート自動検出
+        # HTTP ヘルスチェック通過後に実際の MCP 接続を試行し、
+        # SSE/Streamable HTTP の互換性問題を自動的に解決する
+        transports = await self.registry.auto_detect_transports()
+        logger.info("MCP transport detection: %s", transports)
+
         # LLM
         # カスタムヘッダーは event hook で上書き適用する。
         # ChatOpenAI の default_headers に渡すと既存ヘッダー（content-type 等）

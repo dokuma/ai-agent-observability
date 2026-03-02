@@ -270,6 +270,7 @@ class TestLLMCustomHeadersInjection:
 
         mock_registry = MagicMock()
         mock_registry.health_check = AsyncMock(return_value={"prometheus": True, "loki": True, "grafana": True})
+        mock_registry.auto_detect_transports = AsyncMock(return_value={})
         mock_registry.prometheus = MagicMock()
         mock_registry.prometheus.client = MagicMock()
         mock_registry.loki = MagicMock()
@@ -308,6 +309,7 @@ class TestLLMCustomHeadersInjection:
 
         mock_registry = MagicMock()
         mock_registry.health_check = AsyncMock(return_value={"prometheus": True, "loki": True, "grafana": True})
+        mock_registry.auto_detect_transports = AsyncMock(return_value={})
         mock_registry.prometheus = MagicMock()
         mock_registry.prometheus.client = MagicMock()
         mock_registry.loki = MagicMock()

@@ -5,7 +5,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from mcp import types
 
-from ai_agent_monitoring.tools.base import BaseMCPTool, MCPClient, MCPSessionManager
+from ai_agent_monitoring.tools.base import (
+    BaseMCPTool,
+    MCPClient,
+    MCPConnectionError,
+    MCPSessionManager,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -335,3 +340,82 @@ class TestMCPSessionManager:
         manager = MCPSessionManager()
         async with manager.connect_all() as mgr:
             assert mgr is manager
+
+
+# ---------------------------------------------------------------------------
+# MCPClient.detect_working_transport
+# ---------------------------------------------------------------------------
+class TestDetectWorkingTransport:
+    """MCPClient.detect_working_transport のテスト."""
+
+    @pytest.mark.asyncio
+    async def test_configured_transport_works(self):
+        """設定トランスポートが正常動作する場合、そのまま返す."""
+        client = MCPClient("http://localhost:8080", transport="sse")
+
+        mock_session = AsyncMock()
+        mock_session.list_tools = AsyncMock(return_value=MagicMock(tools=[MagicMock()]))
+
+        with patch.object(client, "session") as mock_cm:
+            mock_cm.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_cm.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            result = await client.detect_working_transport()
+
+        assert result == "sse"
+        assert client._transport == "sse"
+        assert client._transport_verified is True
+
+    @pytest.mark.asyncio
+    async def test_fallback_to_streamable_http(self):
+        """SSE が失敗し streamable_http にフォールバックする."""
+        client = MCPClient("http://localhost:8080", transport="sse")
+        call_count = 0
+
+        mock_session = AsyncMock()
+        mock_session.list_tools = AsyncMock(return_value=MagicMock(tools=[MagicMock()]))
+
+        async def _mock_session_enter(*_args):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise MCPConnectionError("SSE failed")
+            return mock_session
+
+        with patch.object(client, "session") as mock_cm:
+            mock_cm.return_value.__aenter__ = _mock_session_enter
+            mock_cm.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            result = await client.detect_working_transport()
+
+        assert result == "streamable_http"
+        assert client._transport == "streamable_http"
+        assert client._transport_verified is True
+
+    @pytest.mark.asyncio
+    async def test_both_transports_fail(self):
+        """両方のトランスポートが失敗した場合、None を返し元に戻す."""
+        client = MCPClient("http://localhost:8080", transport="sse")
+
+        with patch.object(client, "session") as mock_cm:
+            mock_cm.return_value.__aenter__ = AsyncMock(side_effect=MCPConnectionError("fail"))
+            mock_cm.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            result = await client.detect_working_transport()
+
+        assert result is None
+        assert client._transport == "sse"  # 元に戻る
+        assert client._transport_verified is False
+
+    @pytest.mark.asyncio
+    async def test_already_verified_skips_detection(self):
+        """既に検証済みの場合、再検出をスキップする."""
+        client = MCPClient("http://localhost:8080", transport="streamable_http")
+        client._transport_verified = True
+
+        # session() が呼ばれないことを確認
+        with patch.object(client, "session") as mock_cm:
+            result = await client.detect_working_transport()
+            mock_cm.assert_not_called()
+
+        assert result == "streamable_http"

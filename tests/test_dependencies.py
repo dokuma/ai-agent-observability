@@ -21,6 +21,14 @@ class TestAppStateInitialize:
                 "grafana": True,
             }
         )
+        mock_registry.auto_detect_transports = AsyncMock(
+            return_value={
+                "prometheus": "streamable_http",
+                "loki": "sse",
+                "grafana": "sse",
+                "kubernetes": None,
+            }
+        )
         mock_registry.prometheus = MagicMock()
         mock_registry.prometheus.client = MagicMock()
         mock_registry.loki = MagicMock()

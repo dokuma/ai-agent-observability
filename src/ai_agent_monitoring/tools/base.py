@@ -7,9 +7,10 @@ import logging
 import ssl
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 import httpx
+from httpcore import RemoteProtocolError
 from mcp import types
 from mcp.client.session import ClientSession
 from mcp.client.sse import sse_client
@@ -83,6 +84,12 @@ class MCPClient:
     セッションを再利用すること。
     """
 
+    # 対向トランスポート（フォールバック用）
+    _FALLBACK_TRANSPORT: ClassVar[dict[str, str]] = {
+        "sse": "streamable_http",
+        "streamable_http": "sse",
+    }
+
     def __init__(
         self,
         base_url: str,
@@ -114,6 +121,7 @@ class MCPClient:
         self._persistent_session: ClientSession | None = None
         self._session_lock = asyncio.Lock()
         self._connection_context: Any = None
+        self._transport_verified: bool = False
 
     @property
     def endpoint_url(self) -> str:
@@ -179,12 +187,22 @@ class MCPClient:
             for exc in leaf_exceptions:
                 if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
                     raise MCPTimeoutError(f"MCP server connection timed out: {url}") from exc
+                if isinstance(exc, RemoteProtocolError):
+                    raise MCPConnectionError(f"MCP server closed connection unexpectedly: {url}: {exc}") from exc
                 if isinstance(exc, (ConnectionError, OSError)):
                     raise MCPConnectionError(f"MCP server connection failed: {url}: {exc}") from exc
             raise MCPConnectionError(f"MCP server error: {url}: {error_details}") from eg
         except TimeoutError as e:
             logger.error("MCP connection timed out: %s (url=%s)", e, url)
             raise MCPTimeoutError(f"MCP server connection timed out: {url}") from e
+        except RemoteProtocolError as e:
+            logger.error(
+                "MCP server closed connection unexpectedly (url=%s, transport=%s): %s",
+                url,
+                self._transport,
+                e,
+            )
+            raise MCPConnectionError(f"MCP server closed connection unexpectedly: {url}: {e}") from e
         except (ConnectionError, OSError) as e:
             logger.error("MCP connection failed: %s: %s (url=%s)", type(e).__name__, e, url)
             raise MCPConnectionError(f"MCP server connection failed: {url}: {e}") from e
@@ -345,6 +363,53 @@ class MCPClient:
         async with self.session() as session:
             result = await session.list_tools()
             return list(result.tools)
+
+    async def detect_working_transport(self) -> str | None:
+        """動作するトランスポートを検出.
+
+        設定済みトランスポートで MCP セッション初期化を試行し、
+        失敗した場合は対向トランスポートへフォールバックする。
+
+        Returns:
+            検出されたトランスポート名、または両方失敗した場合は None
+        """
+        if self._transport_verified:
+            return self._transport
+
+        original = self._transport
+        transports_to_try = [original]
+        fallback = self._FALLBACK_TRANSPORT.get(original)
+        if fallback:
+            transports_to_try.append(fallback)
+
+        for transport in transports_to_try:
+            self._transport = transport
+            try:
+                async with self.session() as session:
+                    await session.list_tools()
+                self._transport_verified = True
+                if transport != original:
+                    logger.warning(
+                        "Transport fallback: %s → %s (url=%s)",
+                        original,
+                        transport,
+                        self.base_url,
+                    )
+                else:
+                    logger.info("Transport verified: %s (url=%s)", transport, self.base_url)
+                return transport
+            except (MCPConnectionError, MCPTimeoutError) as e:
+                logger.warning("Transport '%s' failed for %s: %s", transport, self.base_url, e)
+                continue
+
+        # 両方失敗 — 元のトランスポートに戻す
+        self._transport = original
+        logger.error(
+            "No working transport found for %s (tried: %s)",
+            self.base_url,
+            ", ".join(transports_to_try),
+        )
+        return None
 
     def _extract_result(self, result: types.CallToolResult) -> dict[str, Any]:
         """CallToolResultからデータを抽出.
