@@ -122,7 +122,8 @@ Orchestratorから指示された対象について、Kubernetes APIを通じて
 6. 必要に応じてNetworkPolicy/RBACの設定を確認する
 
 ## 注意事項
-- Namespaceを意識して調査範囲を絞り込む
+- **k8s_list_pods には必ず namespace を指定すること**（未指定は全Podを返し応答が巨大になる）
+- まず k8s_list_namespaces で対象 namespace を特定してから調査する
 - イベントのWarning/Errorを優先的に確認する
 - リソース使用状況（requests/limits）の不整合に注目する
 - k8s_get_resource で汎用リソースを取得する際、api_version は自動推定される
