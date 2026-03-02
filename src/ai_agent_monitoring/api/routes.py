@@ -53,6 +53,18 @@ async def health_check() -> HealthResponse:
     return HealthResponse(status=status, mcp_servers=mcp_status)
 
 
+@router.get("/health/mcp-diagnose")
+async def mcp_diagnose() -> dict[str, Any]:
+    """MCPプロトコルレベルの診断を実行.
+
+    HTTPヘルスチェックに加えて、実際のMCPセッション初期化を試行し、
+    プロトコルレベルの互換性問題を検出する。
+    """
+    if not app_state.registry:
+        return {"error": "Registry not initialized"}
+    return await app_state.registry.diagnose_mcp()
+
+
 # ---- AlertManager Webhook ----
 
 

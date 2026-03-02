@@ -286,7 +286,7 @@ kubernetes-mcp:
 
 ```bash
 MCP_KUBERNETES_URL=http://kubernetes-mcp:8080
-MCP_KUBERNETES_TRANSPORT=streamable_http
+MCP_KUBERNETES_TRANSPORT=sse
 ```
 
 ## セキュリティに関する注意事項
@@ -335,4 +335,46 @@ kubectl logs -n ai-monitoring deployment/kubernetes-mcp
 # 3. Agent のヘルスチェックで kubernetes MCP が接続済みか確認
 curl http://<agent-url>/api/v1/health
 # → {"mcp_servers": {"prometheus": true, "loki": true, "grafana": true, "kubernetes": true}}
+
+# 4. MCP プロトコルレベルの診断（セッション初期化のテスト）
+curl http://<agent-url>/api/v1/health/mcp-diagnose
+# → {"kubernetes": {"transport": "sse", "status": "ok", "details": "Connected, 8 tools available"}}
 ```
+
+## トラブルシューティング
+
+### MCP トランスポートの互換性
+
+`kubernetes-mcp-server` は Go SDK (`modelcontextprotocol/go-sdk`) を使用しており、
+Python MCP SDK との間でプロトコルの互換性に制約がある。
+
+**推奨トランスポート: SSE**
+
+```bash
+MCP_KUBERNETES_TRANSPORT=sse
+```
+
+Streamable HTTP (`/mcp`) は Go SDK のミドルウェア（RequestMiddleware, AuthorizationMiddleware）が
+ResponseWriter をラッピングするため、プロトコルレベルでの接続失敗が発生する場合がある。
+
+### 接続エラーの診断
+
+| エラー | 原因 | 対策 |
+|---|---|---|
+| `McpError: Connection closed` | SSE ストリームが初期化中に切断された | サーバーログを確認、kubeconfig の有効性を確認 |
+| `RemoteProtocolError: Server disconnected` | Streamable HTTP ハンドラーがリクエストを処理できなかった | `MCP_KUBERNETES_TRANSPORT=sse` に変更 |
+| `MCPConnectionError: connection refused` | サーバーが起動していない | `kubectl logs` / `docker logs` で起動ログを確認 |
+| `/healthz` は OK だが MCP 接続失敗 | HTTP は正常だがプロトコルハンドシェイク失敗 | `mcp-diagnose` エンドポイントで詳細診断 |
+
+### デバッグログの有効化
+
+```bash
+# .env に追加
+LOG_LEVEL=DEBUG
+```
+
+`LOG_LEVEL=DEBUG` を設定すると、MCP 接続の詳細ログが出力される:
+- SSE セッション作成時の session_id
+- MCP initialize リクエスト送信
+- サーバー情報（name, version）
+- エラー発生時の詳細なスタックトレース

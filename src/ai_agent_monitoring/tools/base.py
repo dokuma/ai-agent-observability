@@ -14,6 +14,7 @@ from mcp import types
 from mcp.client.session import ClientSession
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamable_http_client
+from mcp.shared.exceptions import McpError
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -162,6 +163,14 @@ class MCPClient:
             else:
                 async with self._connect_streamable_http() as session:
                     yield session
+        except McpError as e:
+            logger.error(
+                "MCP protocol error (url=%s, transport=%s): %s",
+                url,
+                self._transport,
+                e,
+            )
+            raise MCPConnectionError(f"MCP protocol error: {url}: {e}") from e
         except ExceptionGroup as eg:
             # MCP SDK内部のTaskGroupから発生したExceptionGroupを再帰的に展開
             leaf_exceptions = _flatten_exception_group(eg)
@@ -184,6 +193,10 @@ class MCPClient:
     async def _connect_sse(self) -> AsyncGenerator[ClientSession, None]:
         """SSEトランスポートで接続."""
         verify = self._build_ssl_verify()
+        url = self.endpoint_url
+
+        def _on_session_created(session_id: str) -> None:
+            logger.debug("SSE session created: session_id=%s url=%s", session_id, url)
 
         def _httpx_client_factory(
             headers: dict[str, str] | None = None,
@@ -199,19 +212,22 @@ class MCPClient:
             )
 
         async with sse_client(
-            url=self.endpoint_url,
+            url=url,
             timeout=self.timeout,
             httpx_client_factory=_httpx_client_factory,
+            on_session_created=_on_session_created,
         ) as (read_stream, write_stream):
             async with ClientSession(
                 read_stream=read_stream,
                 write_stream=write_stream,
             ) as session:
+                logger.debug("Sending MCP initialize request (SSE): url=%s", url)
                 init_result = await session.initialize()
-                logger.debug(
-                    "MCP session initialized (SSE): server=%s version=%s",
+                logger.info(
+                    "MCP session initialized (SSE): server=%s version=%s url=%s",
                     init_result.serverInfo.name,
                     init_result.serverInfo.version,
+                    url,
                 )
                 yield session
 
@@ -219,6 +235,7 @@ class MCPClient:
     async def _connect_streamable_http(self) -> AsyncGenerator[ClientSession, None]:
         """Streamable HTTPトランスポートで接続."""
         verify = self._build_ssl_verify()
+        url = self.endpoint_url
 
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(self.timeout),
@@ -226,18 +243,20 @@ class MCPClient:
             follow_redirects=True,
         ) as http_client:
             async with streamable_http_client(
-                url=self.endpoint_url,
+                url=url,
                 http_client=http_client,
             ) as (read_stream, write_stream, _):
                 async with ClientSession(
                     read_stream=read_stream,
                     write_stream=write_stream,
                 ) as session:
+                    logger.debug("Sending MCP initialize request (Streamable HTTP): url=%s", url)
                     init_result = await session.initialize()
-                    logger.debug(
-                        "MCP session initialized (Streamable HTTP): server=%s version=%s",
+                    logger.info(
+                        "MCP session initialized (Streamable HTTP): server=%s version=%s url=%s",
                         init_result.serverInfo.name,
                         init_result.serverInfo.version,
+                        url,
                     )
                     yield session
 

@@ -429,7 +429,7 @@ LLM がチャット中に Prometheus / Loki / Grafana のツールを直接呼�
 | Prometheus MCP | `http://prometheus-mcp:9090` | MCP (Streamable HTTP) |
 | Loki MCP | `http://loki-mcp:8080` | MCP (Streamable HTTP) |
 | Grafana MCP | `http://grafana-mcp:8080` | MCP (Streamable HTTP) |
-| Kubernetes MCP | `http://kubernetes-mcp:8080` | MCP (Streamable HTTP) |
+| Kubernetes MCP | `http://kubernetes-mcp:8080` | MCP (SSE) |
 
 > **注意:** この方式は Orchestrator Agent を経由せず、LLM が直接各ツールを呼ぶ。
 > 自律的な調査ワークフロー (計画→調査→RCA) が不要な場合に適している。

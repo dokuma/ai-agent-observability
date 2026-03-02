@@ -48,6 +48,8 @@ services:
         condition: service_started
       grafana-mcp:
         condition: service_started
+      kubernetes-mcp:
+        condition: service_healthy
     networks:
       - monitoring
 
@@ -220,6 +222,11 @@ services:
     volumes:
       - ${KUBECONFIG:-~/.kube/config}:/home/mcp/.kube/config:ro
     command: ["--port", "8080", "--read-only", "--log-level", "3"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
     networks:
       - monitoring
 

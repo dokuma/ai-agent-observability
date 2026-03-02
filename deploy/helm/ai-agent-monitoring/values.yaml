@@ -244,7 +244,7 @@ config:
   mcpGrafanaTransport: ""                      # 空の場合は mcpTransport を使用
   mcpPrometheusTransport: "streamable_http"    # prometheus-mcp の "http" transport に対応
   mcpLokiTransport: ""
-  mcpKubernetesTransport: ""
+  mcpKubernetesTransport: "sse"               # Go SDK は SSE を推奨（Streamable HTTP は互換性問題あり）
   # ログレベル（DEBUG, INFO, WARNING, ERROR）
   logLevel: "INFO"
   # OpenAI SDK デバッグログ（"debug" で有効、空で無効）

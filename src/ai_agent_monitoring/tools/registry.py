@@ -224,6 +224,35 @@ class ToolRegistry:
 
         return tools
 
+    async def diagnose_mcp(self) -> dict[str, dict[str, str]]:
+        """全MCP ServerのMCPプロトコルレベル診断を実行.
+
+        HTTPヘルスチェックに加えて、実際のMCPセッション初期化を試行し、
+        プロトコルレベルの互換性問題を検出する。
+
+        Returns:
+            各サーバーの診断結果（"status", "details" を含む辞書）
+        """
+        results: dict[str, dict[str, str]] = {}
+        for conn in self._all_connections:
+            diag: dict[str, str] = {"transport": conn.client._transport}
+            try:
+                async with conn.client.session() as session:
+                    tools = await session.list_tools()
+                    diag["status"] = "ok"
+                    diag["details"] = f"Connected, {len(tools.tools)} tools available"
+            except Exception as e:
+                diag["status"] = "error"
+                diag["details"] = f"{type(e).__name__}: {e}"
+                logger.warning(
+                    "MCP diagnose failed for '%s': %s: %s",
+                    conn.name,
+                    type(e).__name__,
+                    e,
+                )
+            results[conn.name] = diag
+        return results
+
     def get_healthy_connections(self) -> list[MCPConnection]:
         """ヘルスチェック済みで正常な接続のみ返す."""
         return [conn for conn in self._all_connections if conn.healthy]
