@@ -54,19 +54,15 @@ class KubernetesMCPTool(BaseMCPTool):
     Pod/Event/Node/汎用リソースの情報を取得する。
     """
 
-    async def list_pods(self, namespace: str = "") -> dict[str, Any]:
-        """Pod一覧を取得.
+    async def list_pods(self, namespace: str) -> dict[str, Any]:
+        """指定 namespace の Pod 一覧を取得.
 
-        kubernetes-mcp-server は pods_list（全namespace）と
-        pods_list_in_namespace（namespace指定）の2つのツールを持つ。
-        namespace 指定時は pods_list_in_namespace を使用し、
-        レスポンスサイズを抑制する。
+        kubernetes-mcp-server の pods_list_in_namespace を使用。
+        全 namespace 一括取得（pods_list）はレスポンスが巨大になり
+        SSE ストリームが切断されるため使用しない。
         """
-        if namespace:
-            logger.info("K8s list pods in namespace: %s", namespace)
-            return await self._call_tool("pods_list_in_namespace", {"namespace": namespace})
-        logger.info("K8s list pods: all namespaces")
-        return await self._call_tool("pods_list", {})
+        logger.info("K8s list pods in namespace: %s", namespace)
+        return await self._call_tool("pods_list_in_namespace", {"namespace": namespace})
 
     async def get_pod(self, name: str, namespace: str = "default") -> dict[str, Any]:
         """Pod詳細を取得."""
@@ -159,12 +155,8 @@ def create_kubernetes_tools(
     k8s = k8s_tool or KubernetesMCPTool(mcp_client)
 
     @tool
-    async def k8s_list_pods(namespace: str = "") -> dict[str, Any]:
-        """Kubernetes Pod一覧を取得します。
-
-        namespace指定を強く推奨します。
-        未指定時は全namespaceの全Podを返すため応答が巨大になります。
-        """
+    async def k8s_list_pods(namespace: str) -> dict[str, Any]:
+        """指定namespaceのPod一覧を取得します。namespaceは必須です。"""
         return await k8s.list_pods(namespace)
 
     @tool
