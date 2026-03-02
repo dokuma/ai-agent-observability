@@ -93,11 +93,14 @@ class ToolRegistry:
             ),
         )
 
+    # /healthz エンドポイントを持つ MCP サーバ（200 を期待）
+    _HEALTHZ_SERVERS = frozenset({"grafana", "kubernetes"})
+
     async def health_check(self) -> dict[str, bool]:
         """全MCP Serverのヘルスチェックを実行.
 
         各MCPサーバーのヘルスチェック方法:
-        - grafana: GET /healthz (専用ヘルスエンドポイント、200を期待)
+        - grafana/kubernetes: GET /healthz (専用ヘルスエンドポイント、200を期待)
         - prometheus/loki: GET <base_url> (ルートパス) で応答確認
           プロトコルエンドポイント (/sse, /mcp) はヘルスチェックに不適切:
           - /sse: SSEストリーム接続が開始されハングする
@@ -108,7 +111,7 @@ class ToolRegistry:
         """
         results: dict[str, bool] = {}
         for conn in self._all_connections:
-            if conn.name == "grafana":
+            if conn.name in self._HEALTHZ_SERVERS:
                 url = f"{conn.client.base_url}/healthz"
             else:
                 # プロトコルエンドポイントではなくベースURLを使用
@@ -116,7 +119,7 @@ class ToolRegistry:
             try:
                 async with httpx.AsyncClient(timeout=5.0) as client:
                     response = await client.get(url)
-                    if conn.name == "grafana":
+                    if conn.name in self._HEALTHZ_SERVERS:
                         conn.healthy = response.status_code == 200
                     else:
                         # HTTP応答があればサーバー稼働中（5xx以外）
