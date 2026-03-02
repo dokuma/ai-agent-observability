@@ -159,6 +159,54 @@ grafana-mcp:
       type: RuntimeDefault
 
 # ===========================================================
+# kubernetes-mcp-server 依存チャート上書き
+# ===========================================================
+kubernetes-mcp-server:
+  enabled: true
+  # 親チャートの ServiceAccount を共有（OpenShift SCC 対応）
+  serviceAccount:
+    create: false
+    name: "ai-agent-monitoring"
+  # RBAC — 読み取り専用アクセス
+  rbac:
+    create: true
+    extraClusterRoleBindings:
+      # 組み込みの view ClusterRole（Pod, Deployment, Service, ConfigMap, Event 等の読み取り）
+      - name: view
+        roleRef:
+          name: view
+          external: true
+  # read_only モードで起動
+  config:
+    port: 8080
+    read_only: true
+    log_level: 3
+  service:
+    type: ClusterIP
+    port: 8080
+  # クラスタ内アクセスのみ（Ingress不要）
+  ingress:
+    enabled: false
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+  # OpenShift restricted SCC 準拠
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: [ALL]
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+
+# ===========================================================
 # 外部サービス接続先
 # ===========================================================
 externalServices:
@@ -189,6 +237,7 @@ config:
   mcpGrafanaTransport: ""                      # 空の場合は mcpTransport を使用
   mcpPrometheusTransport: "streamable_http"    # prometheus-mcp の "http" transport に対応
   mcpLokiTransport: ""
+  mcpKubernetesTransport: ""
   # ログレベル（DEBUG, INFO, WARNING, ERROR）
   logLevel: "INFO"
   # OpenAI SDK デバッグログ（"debug" で有効、空で無効）

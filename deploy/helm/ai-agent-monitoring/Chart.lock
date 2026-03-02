@@ -2,5 +2,8 @@ dependencies:
 - name: grafana-mcp
   repository: https://grafana.github.io/helm-charts
   version: 0.3.1
-digest: sha256:fb7e4de3f78a296541ccfd8ffbe57dcb79c6f9517eac657b0352198487a0cd17
-generated: "2026-02-12T18:04:40.681777+09:00"
+- name: kubernetes-mcp-server
+  repository: oci://ghcr.io/containers/charts
+  version: 0.1.0
+digest: sha256:c2f611d86770dcc7a3bfb1ede3efcee92d0f63c3fd1da2e17a8e3ce90bc8bce5
+generated: "2026-03-02T10:59:34.842086+09:00"

@@ -9,3 +9,7 @@ dependencies:
     version: "0.3.1"
     repository: "https://grafana.github.io/helm-charts"
     condition: grafana-mcp.enabled
+  - name: kubernetes-mcp-server
+    version: "0.1.0"
+    repository: "oci://ghcr.io/containers/charts"
+    condition: kubernetes-mcp-server.enabled
