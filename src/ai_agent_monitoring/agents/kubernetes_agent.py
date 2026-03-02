@@ -90,8 +90,10 @@ class KubernetesAgent:
         """
         if self._k8s_tool:
             async with self._k8s_tool.session_context():
-                return await self._tool_node.ainvoke(state)
-        return await self._tool_node.ainvoke(state)
+                result: dict[str, Any] = await self._tool_node.ainvoke(state)
+                return result
+        result = await self._tool_node.ainvoke(state)
+        return result
 
     @_observe(name="kubernetes_agent_reason", as_type="span")
     async def _reason(self, state: AgentState) -> dict[str, Any]:
