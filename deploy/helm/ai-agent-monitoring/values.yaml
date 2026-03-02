@@ -163,6 +163,13 @@ grafana-mcp:
 # ===========================================================
 kubernetes-mcp-server:
   enabled: true
+  image:
+    # デフォルト: quay.io/containers/kubernetes_mcp_server:latest
+    # OpenShift 内部レジストリ使用時は global.imageRegistry/global.imageNamespace を参照して書き換える
+    registry: "quay.io"
+    repository: "containers/kubernetes_mcp_server"
+    version: "latest"
+    pullPolicy: IfNotPresent
   # 親チャートの ServiceAccount を共有（OpenShift SCC 対応）
   serviceAccount:
     create: false
@@ -178,7 +185,7 @@ kubernetes-mcp-server:
           external: true
   # read_only モードで起動
   config:
-    port: 8080
+    port: "8080"
     read_only: true
     log_level: 3
   service:
