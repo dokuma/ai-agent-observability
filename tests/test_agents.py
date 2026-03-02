@@ -12,6 +12,7 @@ from ai_agent_monitoring.agents.logs_agent import LogsAgent
 from ai_agent_monitoring.agents.metrics_agent import MetricsAgent
 from ai_agent_monitoring.agents.orchestrator import OrchestratorAgent
 from ai_agent_monitoring.agents.rca_agent import RCAAgent
+from ai_agent_monitoring.core.datasource import DatasourceInfo, DatasourcePreferenceStore
 from ai_agent_monitoring.core.models import (
     Alert,
     LogEntry,
@@ -1966,3 +1967,172 @@ class TestOrchestratorRefreshHealth:
         assert agent.metrics_agent is None
         # グラフが再構築された（異なるオブジェクト）
         assert agent.graph is not graph_before
+
+
+class TestDiscoverDatasources:
+    """_discover_datasources のインテリジェント選択テスト."""
+
+    @pytest.mark.asyncio
+    async def test_single_ds_auto_selected(self):
+        """単一データソースは自動選択される."""
+        agent, _ = _make_orchestrator()
+        grafana = AsyncMock()
+        grafana.list_datasources = AsyncMock(
+            return_value={
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps(
+                            [
+                                {"uid": "prom-1", "name": "Prometheus", "type": "prometheus"},
+                                {"uid": "loki-1", "name": "Loki", "type": "loki"},
+                            ]
+                        ),
+                    }
+                ]
+            }
+        )
+
+        env = EnvironmentContext()
+        await agent._discover_datasources(grafana, env)
+
+        assert env.prometheus_datasource_uid == "prom-1"
+        assert env.loki_datasource_uid == "loki-1"
+        assert len(env.prometheus_datasources) == 1
+        assert len(env.loki_datasources) == 1
+
+    @pytest.mark.asyncio
+    async def test_multiple_ds_with_preference_auto_selected(self, tmp_path):
+        """複数DS + プリファレンスあり → 自動選択."""
+        agent, _ = _make_orchestrator()
+        store = DatasourcePreferenceStore(tmp_path / "prefs.json")
+        store.save("prometheus", "prom-2")
+        agent.ds_preference_store = store
+
+        grafana = AsyncMock()
+        grafana.list_datasources = AsyncMock(
+            return_value={
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps(
+                            [
+                                {"uid": "prom-1", "name": "Prometheus 1", "type": "prometheus"},
+                                {"uid": "prom-2", "name": "Prometheus 2", "type": "prometheus"},
+                                {"uid": "loki-1", "name": "Loki", "type": "loki"},
+                            ]
+                        ),
+                    }
+                ]
+            }
+        )
+
+        env = EnvironmentContext()
+        await agent._discover_datasources(grafana, env)
+
+        assert env.prometheus_datasource_uid == "prom-2"
+        assert env.loki_datasource_uid == "loki-1"
+
+    @pytest.mark.asyncio
+    async def test_multiple_ds_with_default_auto_selected(self):
+        """複数DS + isDefault → 自動選択."""
+        agent, _ = _make_orchestrator()
+
+        grafana = AsyncMock()
+        grafana.list_datasources = AsyncMock(
+            return_value={
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps(
+                            [
+                                {"uid": "prom-1", "name": "Prometheus 1", "type": "prometheus", "isDefault": False},
+                                {"uid": "prom-2", "name": "Prometheus 2", "type": "prometheus", "isDefault": True},
+                            ]
+                        ),
+                    }
+                ]
+            }
+        )
+
+        env = EnvironmentContext()
+        await agent._discover_datasources(grafana, env)
+
+        assert env.prometheus_datasource_uid == "prom-2"
+
+    @pytest.mark.asyncio
+    async def test_multiple_ds_no_preference_no_default_interrupts(self):
+        """複数DS + プリファレンスなし + isDefaultなし → interrupt呼び出し."""
+        agent, _ = _make_orchestrator()
+
+        grafana = AsyncMock()
+        grafana.list_datasources = AsyncMock(
+            return_value={
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps(
+                            [
+                                {"uid": "prom-1", "name": "Prometheus 1", "type": "prometheus"},
+                                {"uid": "prom-2", "name": "Prometheus 2", "type": "prometheus"},
+                            ]
+                        ),
+                    }
+                ]
+            }
+        )
+
+        env = EnvironmentContext()
+        with patch("ai_agent_monitoring.agents.orchestrator.interrupt") as mock_interrupt:
+            mock_interrupt.return_value = "prom-1"
+            await agent._discover_datasources(grafana, env)
+
+            mock_interrupt.assert_called_once()
+            call_args = mock_interrupt.call_args[0][0]
+            assert call_args["type"] == "datasource_selection"
+            assert call_args["datasource_type"] == "prometheus"
+            assert len(call_args["options"]) == 2
+
+    def test_resolve_user_choice_uid(self):
+        """UIDでの選択解決."""
+        agent, _ = _make_orchestrator()
+        candidates = [
+            DatasourceInfo(uid="prom-1", name="DS 1", type="prometheus"),
+            DatasourceInfo(uid="prom-2", name="DS 2", type="prometheus"),
+        ]
+        assert agent._resolve_user_choice("prom-2", candidates) == "prom-2"
+
+    def test_resolve_user_choice_number(self):
+        """番号での選択解決."""
+        agent, _ = _make_orchestrator()
+        candidates = [
+            DatasourceInfo(uid="prom-1", name="DS 1", type="prometheus"),
+            DatasourceInfo(uid="prom-2", name="DS 2", type="prometheus"),
+        ]
+        assert agent._resolve_user_choice("2", candidates) == "prom-2"
+
+    def test_resolve_user_choice_name(self):
+        """名前での選択解決."""
+        agent, _ = _make_orchestrator()
+        candidates = [
+            DatasourceInfo(uid="prom-1", name="DS Alpha", type="prometheus"),
+            DatasourceInfo(uid="prom-2", name="DS Beta", type="prometheus"),
+        ]
+        assert agent._resolve_user_choice("DS Beta", candidates) == "prom-2"
+
+    def test_resolve_user_choice_dict(self):
+        """dictでの選択解決."""
+        agent, _ = _make_orchestrator()
+        candidates = [
+            DatasourceInfo(uid="prom-1", name="DS 1", type="prometheus"),
+        ]
+        assert agent._resolve_user_choice({"uid": "prom-1"}, candidates) == "prom-1"
+
+    def test_resolve_user_choice_fallback(self):
+        """解決不能な場合は先頭にフォールバック."""
+        agent, _ = _make_orchestrator()
+        candidates = [
+            DatasourceInfo(uid="prom-1", name="DS 1", type="prometheus"),
+            DatasourceInfo(uid="prom-2", name="DS 2", type="prometheus"),
+        ]
+        assert agent._resolve_user_choice("nonexistent", candidates) == "prom-1"

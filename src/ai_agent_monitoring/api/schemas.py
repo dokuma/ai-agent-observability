@@ -1,6 +1,7 @@
 """API リクエスト/レスポンススキーマ."""
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -58,7 +59,7 @@ class InvestigationStatus(BaseModel):
     """調査の進捗状態."""
 
     investigation_id: str
-    status: str  # "running" | "completed" | "failed"
+    status: str  # "running" | "completed" | "failed" | "waiting_for_input"
     trigger_type: str
     iteration_count: int = 0
     current_stage: str = ""  # 現在のステージ（例: "環境発見中", "メトリクス調査中"）
@@ -66,6 +67,7 @@ class InvestigationStatus(BaseModel):
     created_at: datetime
     completed_at: datetime | None = None
     mcp_status: dict[str, bool] = Field(default_factory=dict)
+    pending_input: dict[str, Any] | None = None  # interrupt時のユーザ入力要求
 
 
 # ---- RCAレポート ----
@@ -85,6 +87,12 @@ class RCAReportResponse(BaseModel):
 
 
 # ---- ヘルスチェック ----
+
+
+class UserInputRequest(BaseModel):
+    """ユーザ入力リクエスト（interrupt resume用）."""
+
+    value: Any
 
 
 class HealthResponse(BaseModel):

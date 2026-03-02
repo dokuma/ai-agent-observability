@@ -3,8 +3,10 @@
 import asyncio
 import logging
 from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
+from langgraph.types import Command
 from openai import RateLimitError
 
 from ai_agent_monitoring.api.dependencies import app_state
@@ -13,6 +15,7 @@ from ai_agent_monitoring.api.schemas import (
     HealthResponse,
     InvestigationStatus,
     RCAReportResponse,
+    UserInputRequest,
     UserQueryRequest,
     UserQueryResponse,
 )
@@ -130,6 +133,51 @@ async def get_investigation_status(investigation_id: str) -> InvestigationStatus
         created_at=record.created_at,
         completed_at=record.completed_at,
         mcp_status=record.mcp_status,
+        pending_input=record.pending_input,
+    )
+
+
+# ---- ユーザ入力（interrupt resume） ----
+
+
+@router.post("/investigations/{investigation_id}/input")
+async def submit_user_input(
+    investigation_id: str,
+    request: UserInputRequest,
+    background_tasks: BackgroundTasks,
+) -> UserQueryResponse:
+    """interrupt中の調査に対してユーザ入力を送信し再開."""
+    record = app_state.get_investigation(investigation_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Investigation not found")
+    if record.status != "waiting_for_input":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Investigation is not waiting for input (status={record.status})",
+        )
+    if not record.compiled_graph or not record.graph_config:
+        raise HTTPException(
+            status_code=500,
+            detail="Resume state not available",
+        )
+
+    # running に戻す
+    record.status = "running"
+    record.pending_input = None
+    record.current_stage = "ユーザ入力を受理、調査を再開中"
+
+    background_tasks.add_task(
+        _resume_investigation,
+        investigation_id,
+        record.compiled_graph,
+        record.graph_config,
+        request.value,
+    )
+
+    return UserQueryResponse(
+        investigation_id=investigation_id,
+        status="running",
+        message="ユーザ入力を受理しました。調査を再開します。",
     )
 
 
@@ -188,41 +236,43 @@ async def _refresh_orchestrator_health(inv_id: str) -> dict[str, bool]:
         return mcp_status
 
 
-async def _run_alert_investigation(inv_id: str, alert: Alert) -> None:
-    """アラート起動の調査をバックグラウンドで実行."""
-    if not app_state.orchestrator:
-        app_state.fail_investigation(inv_id, "Orchestrator not initialized")
-        return
+def _check_interrupt(result: dict[str, Any], inv_id: str, compiled: Any, config: dict[str, Any]) -> bool:
+    """invoke結果にinterruptが含まれているかチェックし、含まれていればwaiting_for_inputに遷移.
 
-    # 調査開始前にMCPヘルスチェックを再実行
-    await _refresh_orchestrator_health(inv_id)
+    Returns:
+        True if interrupt was found and handled, False otherwise.
+    """
+    if "__interrupt__" in result:
+        interrupts = result["__interrupt__"]
+        interrupt_value = interrupts[0].value if interrupts else {}
+        app_state.set_waiting_for_input(
+            inv_id,
+            pending_input=interrupt_value,
+            compiled_graph=compiled,
+            config=config,
+        )
+        return True
+    return False
 
+
+async def _run_investigation_loop(
+    inv_id: str,
+    compiled: Any,
+    config: dict[str, Any],
+    initial_state: dict[str, Any],
+) -> None:
+    """調査をタイムアウト付きで実行し、interrupt/完了/エラーを処理する共通関数."""
     timeout = app_state.settings.investigation_timeout_seconds
 
     try:
-        logger.info("Starting alert investigation: %s (%s)", inv_id, alert.alert_name)
-        compiled = app_state.orchestrator.compile()
-        config = build_runnable_config(
-            settings=app_state.settings,
-            investigation_id=inv_id,
-            trigger_type="alert",
-            extra_tags=[alert.alert_name, alert.severity],
-        )
-
-        # タイムアウト付きで実行
-        task = asyncio.create_task(
-            compiled.ainvoke(
-                {
-                    "investigation_id": inv_id,
-                    "trigger_type": TriggerType.ALERT,
-                    "alert": alert,
-                    "messages": [],
-                },
-                config=config,
-            )
-        )
+        task = asyncio.create_task(compiled.ainvoke(initial_state, config=config))
         try:
             result = await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+
+            # interrupt チェック
+            if _check_interrupt(result, inv_id, compiled, config):
+                return
+
             rca_report = result.get("rca_report")
             app_state.complete_investigation(inv_id, rca_report=rca_report)
             logger.info("Investigation completed: %s", inv_id)
@@ -248,6 +298,37 @@ async def _run_alert_investigation(inv_id: str, alert: Alert) -> None:
         app_state.fail_investigation(inv_id, str(e))
 
 
+async def _run_alert_investigation(inv_id: str, alert: Alert) -> None:
+    """アラート起動の調査をバックグラウンドで実行."""
+    if not app_state.orchestrator:
+        app_state.fail_investigation(inv_id, "Orchestrator not initialized")
+        return
+
+    # 調査開始前にMCPヘルスチェックを再実行
+    await _refresh_orchestrator_health(inv_id)
+
+    logger.info("Starting alert investigation: %s (%s)", inv_id, alert.alert_name)
+    compiled = app_state.orchestrator.compile(checkpointer=app_state.checkpointer)
+    config = build_runnable_config(
+        settings=app_state.settings,
+        investigation_id=inv_id,
+        trigger_type="alert",
+        extra_tags=[alert.alert_name, alert.severity],
+    )
+
+    await _run_investigation_loop(
+        inv_id,
+        compiled,
+        config,
+        {
+            "investigation_id": inv_id,
+            "trigger_type": TriggerType.ALERT,
+            "alert": alert,
+            "messages": [],
+        },
+    )
+
+
 async def _run_user_query_investigation(inv_id: str, user_query: UserQuery) -> None:
     """ユーザクエリ起動の調査をバックグラウンドで実行."""
     if not app_state.orchestrator:
@@ -257,51 +338,66 @@ async def _run_user_query_investigation(inv_id: str, user_query: UserQuery) -> N
     # 調査開始前にMCPヘルスチェックを再実行
     await _refresh_orchestrator_health(inv_id)
 
+    logger.info("Starting user query investigation: %s", inv_id)
+    compiled = app_state.orchestrator.compile(checkpointer=app_state.checkpointer)
+    config = build_runnable_config(
+        settings=app_state.settings,
+        investigation_id=inv_id,
+        trigger_type="user_query",
+    )
+
+    await _run_investigation_loop(
+        inv_id,
+        compiled,
+        config,
+        {
+            "investigation_id": inv_id,
+            "trigger_type": TriggerType.USER_QUERY,
+            "user_query": user_query,
+            "messages": [],
+        },
+    )
+
+
+async def _resume_investigation(
+    inv_id: str,
+    compiled: Any,
+    config: dict[str, Any],
+    user_input: Any,
+) -> None:
+    """interrupt後の調査をCommand(resume=)で再開."""
     timeout = app_state.settings.investigation_timeout_seconds
 
     try:
-        logger.info("Starting user query investigation: %s", inv_id)
-        compiled = app_state.orchestrator.compile()
-        config = build_runnable_config(
-            settings=app_state.settings,
-            investigation_id=inv_id,
-            trigger_type="user_query",
-        )
-
-        # タイムアウト付きで実行
-        task = asyncio.create_task(
-            compiled.ainvoke(
-                {
-                    "investigation_id": inv_id,
-                    "trigger_type": TriggerType.USER_QUERY,
-                    "user_query": user_query,
-                    "messages": [],
-                },
-                config=config,
-            )
-        )
+        logger.info("Resuming investigation: %s", inv_id)
+        task = asyncio.create_task(compiled.ainvoke(Command(resume=user_input), config=config))
         try:
             result = await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+
+            # 再度 interrupt チェック（prometheus選択後にloki選択が必要な場合）
+            if _check_interrupt(result, inv_id, compiled, config):
+                return
+
             rca_report = result.get("rca_report")
             app_state.complete_investigation(inv_id, rca_report=rca_report)
-            logger.info("Investigation completed: %s", inv_id)
+            logger.info("Investigation completed after resume: %s", inv_id)
         except TimeoutError:
-            logger.warning("Investigation timed out after %ds: %s", timeout, inv_id)
+            logger.warning("Investigation timed out after resume %ds: %s", timeout, inv_id)
             task.cancel()
             try:
                 await task
             except asyncio.CancelledError:
-                logger.info("Investigation task cancelled: %s", inv_id)
+                logger.info("Investigation task cancelled after resume: %s", inv_id)
             app_state.fail_investigation(inv_id, f"調査がタイムアウトしました ({timeout}秒)")
     except asyncio.CancelledError:
-        logger.info("Investigation cancelled: %s", inv_id)
+        logger.info("Investigation cancelled after resume: %s", inv_id)
         app_state.fail_investigation(inv_id, "調査がキャンセルされました")
     except RateLimitError as e:
-        logger.warning("Investigation rate-limited: %s - %s", inv_id, e)
+        logger.warning("Investigation rate-limited after resume: %s - %s", inv_id, e)
         app_state.fail_investigation(
             inv_id,
             "LLM APIのレートリミットにより調査を中断しました。しばらく待ってから再試行してください。",
         )
     except Exception as e:
-        logger.exception("Investigation failed: %s", inv_id)
+        logger.exception("Investigation failed after resume: %s", inv_id)
         app_state.fail_investigation(inv_id, str(e))

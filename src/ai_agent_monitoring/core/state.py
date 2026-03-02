@@ -6,6 +6,7 @@ from typing import Annotated, Any
 from langgraph.graph import MessagesState
 from pydantic import BaseModel, Field
 
+from ai_agent_monitoring.core.datasource import DatasourceInfo
 from ai_agent_monitoring.core.models import (
     Alert,
     LogsResult,
@@ -58,6 +59,10 @@ class EnvironmentContext(BaseModel):
     # データソース情報
     prometheus_datasource_uid: str = ""
     loki_datasource_uid: str = ""
+
+    # 全候補（エラーリカバリ・代替データソース情報用）
+    prometheus_datasources: list[DatasourceInfo] = Field(default_factory=list)
+    loki_datasources: list[DatasourceInfo] = Field(default_factory=list)
 
     # 利用可能なメトリクスとラベル
     available_metrics: list[str] = Field(default_factory=list)

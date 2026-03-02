@@ -67,6 +67,9 @@ class Settings(BaseSettings):
     mcp_verify_ssl: bool = True
     mcp_ca_bundle: str = ""  # カスタムCA証明書パス（空の場合はシステムデフォルト）
 
+    # Datasource preferences
+    datasource_preferences_path: str = "data/datasource_preferences.json"
+
     # CORS
     cors_allowed_origins: list[str] = ["http://localhost:3000"]
 

@@ -134,4 +134,8 @@ def build_runnable_config(
         run_uuid = uuid.uuid5(namespace, investigation_id)
         config["run_id"] = run_uuid
 
+        # checkpointerが状態を分離するために thread_id が必須
+        config.setdefault("configurable", {})
+        config["configurable"]["thread_id"] = investigation_id
+
     return config

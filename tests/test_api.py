@@ -266,3 +266,73 @@ class TestInvestigationTimeout:
         record = app_state.get_investigation(inv_id)
         assert record.status == "failed"
         assert "タイムアウト" in record.error
+
+
+class TestUserInput:
+    """ユーザ入力（interrupt resume）エンドポイントのテスト."""
+
+    def test_submit_input_not_found(self, client):
+        """存在しない調査IDでは404."""
+        response = client.post(
+            "/api/v1/investigations/nonexistent/input",
+            json={"value": "prom-1"},
+        )
+        assert response.status_code == 404
+
+    def test_submit_input_not_waiting(self, client):
+        """waiting_for_inputでない場合は409."""
+        inv_id = app_state.create_investigation("user_query")
+        response = client.post(
+            f"/api/v1/investigations/{inv_id}/input",
+            json={"value": "prom-1"},
+        )
+        assert response.status_code == 409
+
+    def test_submit_input_success(self, client):
+        """正常なresume."""
+        inv_id = app_state.create_investigation("user_query")
+
+        # waiting_for_input に設定
+        mock_compiled = MagicMock()
+        mock_compiled.ainvoke = AsyncMock(return_value={"rca_report": None})
+        mock_config = {"configurable": {"thread_id": inv_id}}
+        app_state.set_waiting_for_input(
+            inv_id,
+            pending_input={"type": "datasource_selection", "datasource_type": "prometheus"},
+            compiled_graph=mock_compiled,
+            config=mock_config,
+        )
+
+        response = client.post(
+            f"/api/v1/investigations/{inv_id}/input",
+            json={"value": "prom-1"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "running"
+        assert data["investigation_id"] == inv_id
+
+    def test_status_includes_pending_input(self, client):
+        """waiting_for_input時にpending_inputがステータスに含まれる."""
+        inv_id = app_state.create_investigation("user_query")
+
+        mock_compiled = MagicMock()
+        mock_config = {"configurable": {"thread_id": inv_id}}
+        pending = {
+            "type": "datasource_selection",
+            "datasource_type": "prometheus",
+            "options": [{"uid": "prom-1", "name": "Prometheus 1"}],
+        }
+        app_state.set_waiting_for_input(
+            inv_id,
+            pending_input=pending,
+            compiled_graph=mock_compiled,
+            config=mock_config,
+        )
+
+        response = client.get(f"/api/v1/investigations/{inv_id}")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "waiting_for_input"
+        assert data["pending_input"] is not None
+        assert data["pending_input"]["type"] == "datasource_selection"

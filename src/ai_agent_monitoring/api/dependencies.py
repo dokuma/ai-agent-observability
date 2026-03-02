@@ -4,14 +4,18 @@ import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import httpx
 from langchain_openai import ChatOpenAI
+from langgraph.checkpoint.memory import MemorySaver
 from pydantic import SecretStr
 
 from ai_agent_monitoring.agents.orchestrator import OrchestratorAgent
 from ai_agent_monitoring.core.config import Settings
+from ai_agent_monitoring.core.datasource import DatasourcePreferenceStore
 from ai_agent_monitoring.core.llm_retry import RateLimitRetryWrapper
 from ai_agent_monitoring.core.models import RCAReport
 from ai_agent_monitoring.tools.registry import ToolRegistry
@@ -68,7 +72,7 @@ class InvestigationRecord:
     """調査の実行記録."""
 
     investigation_id: str
-    status: str  # "running" | "completed" | "failed"
+    status: str  # "running" | "completed" | "failed" | "waiting_for_input"
     trigger_type: str
     iteration_count: int = 0
     current_stage: str = ""  # 現在のステージ（例: "環境発見中", "メトリクス調査中"）
@@ -77,6 +81,10 @@ class InvestigationRecord:
     error: str = ""
     rca_report: RCAReport | None = None
     mcp_status: dict[str, bool] = field(default_factory=dict)
+    # interrupt/resume 用
+    pending_input: dict[str, Any] | None = None
+    compiled_graph: Any = None
+    graph_config: dict[str, Any] | None = None
 
 
 class AppState:
@@ -90,6 +98,8 @@ class AppState:
         self.registry: ToolRegistry | None = None
         self.orchestrator: OrchestratorAgent | None = None
         self.investigations: dict[str, InvestigationRecord] = {}
+        self.checkpointer = MemorySaver()
+        self.ds_preference_store: DatasourcePreferenceStore | None = None
 
     async def initialize(self) -> None:
         """アプリケーション起動時の初期化."""
@@ -175,12 +185,16 @@ class AppState:
                 internal is http_async_client,
             )
 
+        # データソースプリファレンスストア
+        self.ds_preference_store = DatasourcePreferenceStore(Path(self.settings.datasource_preferences_path))
+
         # Orchestrator（registryを渡してhealthy状態を考慮）
         self.orchestrator = OrchestratorAgent(
             llm=llm,
             registry=self.registry,
             settings=self.settings,
             stage_update_callback=self.update_investigation_stage,
+            ds_preference_store=self.ds_preference_store,
         )
         logger.info("Orchestrator Agent initialized")
 
@@ -217,6 +231,23 @@ class AppState:
             record.status = "failed"
             record.completed_at = datetime.now()
             record.error = error
+
+    def set_waiting_for_input(
+        self,
+        inv_id: str,
+        pending_input: dict[str, Any],
+        compiled_graph: Any,
+        config: dict[str, Any],
+    ) -> None:
+        """調査をユーザ入力待ちにする."""
+        record = self.investigations.get(inv_id)
+        if record:
+            record.status = "waiting_for_input"
+            record.pending_input = pending_input
+            record.compiled_graph = compiled_graph
+            record.graph_config = config
+            record.current_stage = "ユーザ入力を待機中"
+            logger.info("Investigation %s waiting for input: %s", inv_id, pending_input.get("type"))
 
     def update_investigation_stage(self, inv_id: str, stage: str, iteration_count: int | None = None) -> None:
         """調査の現在ステージを更新."""

@@ -18,6 +18,12 @@ from ai_agent_monitoring.agents.metrics_agent import MetricsAgent
 from ai_agent_monitoring.agents.prompts import ORCHESTRATOR_SYSTEM_PROMPT
 from ai_agent_monitoring.agents.rca_agent import RCAAgent
 from ai_agent_monitoring.core.config import Settings
+from ai_agent_monitoring.core.datasource import (
+    DatasourceInfo,
+    DatasourcePreferenceStore,
+    parse_datasource_list,
+    select_datasource,
+)
 from ai_agent_monitoring.core.models import TriggerType
 from ai_agent_monitoring.core.sanitizer import sanitize_user_input
 from ai_agent_monitoring.core.state import (
@@ -78,11 +84,13 @@ class OrchestratorAgent:
         registry: ToolRegistry,
         settings: Settings | None = None,
         stage_update_callback: StageUpdateCallback | None = None,
+        ds_preference_store: DatasourcePreferenceStore | None = None,
     ) -> None:
         self.llm = llm
         self.settings = settings or Settings()
         self.registry = registry
         self._stage_callback = stage_update_callback
+        self.ds_preference_store = ds_preference_store
 
         # 時刻ツールは常に利用可能
         self.time_tools = create_time_tools()
@@ -278,9 +286,9 @@ class OrchestratorAgent:
 
         return graph
 
-    def compile(self) -> Any:
+    def compile(self, checkpointer: Any = None) -> Any:
         """グラフをコンパイルして実行可能にする."""
-        return self.graph.compile()
+        return self.graph.compile(checkpointer=checkpointer)
 
     # ---- ノード関数 ----
 
@@ -411,20 +419,126 @@ class OrchestratorAgent:
         grafana: GrafanaMCPTool,
         env: EnvironmentContext,
     ) -> None:
-        """データソース一覧を取得."""
+        """データソース一覧を取得し、インテリジェントに選択.
+
+        複数の同種データソースが存在する場合:
+        1. プリファレンスに一致するものを自動選択
+        2. isDefaultフラグを持つものを自動選択
+        3. 判断不可の場合はinterrupt()でユーザに問い合わせ
+        """
         try:
             datasources_result = await grafana.list_datasources()
             datasources = self._extract_content_text(datasources_result)
 
-            for ds in self._parse_datasources(datasources):
-                if ds.get("type") == "prometheus" and not env.prometheus_datasource_uid:
-                    env.prometheus_datasource_uid = ds.get("uid", "")
-                    logger.info("Found Prometheus datasource: %s", env.prometheus_datasource_uid)
-                elif ds.get("type") == "loki" and not env.loki_datasource_uid:
-                    env.loki_datasource_uid = ds.get("uid", "")
-                    logger.info("Found Loki datasource: %s", env.loki_datasource_uid)
+            all_ds = parse_datasource_list(self._parse_datasources(datasources))
+
+            # タイプ別に分類
+            prometheus_candidates = [ds for ds in all_ds if ds.type == "prometheus"]
+            loki_candidates = [ds for ds in all_ds if ds.type == "loki"]
+
+            # 全候補をEnvironmentContextに保存（エラーリカバリ用）
+            env.prometheus_datasources = prometheus_candidates
+            env.loki_datasources = loki_candidates
+
+            # 各タイプの選択
+            env.prometheus_datasource_uid = self._select_or_ask("prometheus", prometheus_candidates)
+            env.loki_datasource_uid = self._select_or_ask("loki", loki_candidates)
+
         except Exception as e:
             logger.warning("Failed to list datasources: %s: %s", type(e).__name__, e)
+
+    def _select_or_ask(
+        self,
+        ds_type: str,
+        candidates: list[DatasourceInfo],
+    ) -> str:
+        """データソースを選択、または判断不可の場合はinterruptでユーザに問い合わせ."""
+        if not candidates:
+            return ""
+
+        if len(candidates) == 1:
+            logger.info("Auto-selected %s datasource: %s", ds_type, candidates[0].uid)
+            return candidates[0].uid
+
+        # 複数候補あり — プリファレンスまたはisDefaultで自動選択を試みる
+        preferred_uid = ""
+        if self.ds_preference_store:
+            preferred_uid = self.ds_preference_store.get_preferred_uid(ds_type)
+
+        selected = select_datasource(candidates, preferred_uid)
+        if selected and (preferred_uid and selected.uid == preferred_uid):
+            logger.info("Auto-selected %s datasource from preference: %s", ds_type, selected.uid)
+            return selected.uid
+
+        if selected and selected.is_default:
+            logger.info("Auto-selected %s datasource (isDefault): %s", ds_type, selected.uid)
+            return selected.uid
+
+        # 判断不可 — interrupt でユーザに問い合わせ
+        logger.info("Multiple %s datasources found, requesting user selection", ds_type)
+        user_choice = interrupt(
+            {
+                "type": "datasource_selection",
+                "datasource_type": ds_type,
+                "message": f"複数の{ds_type}データソースが見つかりました。使用するデータソースを選択してください:",
+                "options": [
+                    {
+                        "uid": ds.uid,
+                        "name": ds.name,
+                        "is_default": ds.is_default,
+                    }
+                    for ds in candidates
+                ],
+            }
+        )
+
+        resolved_uid = self._resolve_user_choice(user_choice, candidates)
+        # プリファレンスに保存
+        if self.ds_preference_store and resolved_uid:
+            self.ds_preference_store.save(ds_type, resolved_uid)
+        return resolved_uid
+
+    def _resolve_user_choice(
+        self,
+        user_choice: Any,
+        candidates: list[DatasourceInfo],
+    ) -> str:
+        """ユーザの選択をUIDに解決.
+
+        UID文字列、番号(1-indexed)、名前、dict のいずれにも対応。
+        """
+        if not candidates:
+            return ""
+
+        # dict の場合: uid キーを使用
+        if isinstance(user_choice, dict):
+            uid = user_choice.get("uid", "")
+            if uid:
+                return str(uid)
+
+        choice = str(user_choice).strip()
+
+        # UID直接指定
+        for ds in candidates:
+            if ds.uid == choice:
+                return ds.uid
+
+        # 番号指定 (1-indexed)
+        try:
+            idx = int(choice)
+            if 1 <= idx <= len(candidates):
+                return candidates[idx - 1].uid
+        except ValueError:
+            pass
+
+        # 名前指定
+        for ds in candidates:
+            if ds.name.lower() == choice.lower():
+                return ds.uid
+
+        # フォールバック: 先頭
+        logger.warning("Could not resolve user choice '%s', using first candidate", user_choice)
+        return candidates[0].uid
 
     async def _discover_prometheus_info(
         self,
