@@ -44,13 +44,15 @@ class TestKubernetesAgentInit:
     def test_init_with_mcp(self):
         """MCPクライアントありの場合、ツールが生成される."""
         agent, llm = _make_kubernetes_agent(with_mcp=True)
-        assert len(agent.tools) == 8
+        assert len(agent.tools) == 7
+        assert agent._k8s_tool is not None
         llm.bind_tools.assert_called_once()
 
     def test_init_without_mcp(self):
         """MCPクライアントなしの場合、ツールは空."""
         agent, _llm = _make_kubernetes_agent(with_mcp=False)
         assert len(agent.tools) == 0
+        assert agent._k8s_tool is None
 
     def test_compile(self):
         """コンパイルが正常に完了する."""

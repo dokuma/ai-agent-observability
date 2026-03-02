@@ -11,7 +11,7 @@ from ai_agent_monitoring.agents.prompts import KUBERNETES_AGENT_SYSTEM_PROMPT
 from ai_agent_monitoring.core.models import KubernetesResult
 from ai_agent_monitoring.core.state import AgentState
 from ai_agent_monitoring.tools.base import MCPClient
-from ai_agent_monitoring.tools.kubernetes import create_kubernetes_tools
+from ai_agent_monitoring.tools.kubernetes import KubernetesMCPTool, create_kubernetes_tools
 
 # Langfuse observe デコレータ（未インストール時はno-op）
 try:
@@ -33,6 +33,9 @@ class KubernetesAgent:
 
     Orchestrator から委任された K8s クラスタ調査を実行し、
     Pod状態・イベント・リソース使用状況の異常を分析する。
+
+    SSE 接続チャーンを防ぐため、ToolNode 実行時に
+    KubernetesMCPTool のセッションを再利用する。
     """
 
     def __init__(
@@ -41,8 +44,10 @@ class KubernetesAgent:
         kubernetes_mcp: MCPClient | None = None,
     ) -> None:
         self.tools: list[Any] = []
+        self._k8s_tool: KubernetesMCPTool | None = None
 
         if kubernetes_mcp:
+            self._k8s_tool = KubernetesMCPTool(kubernetes_mcp)
             self.tools = create_kubernetes_tools(kubernetes_mcp)
             logger.info("KubernetesAgent: Using Kubernetes MCP")
 
@@ -50,13 +55,14 @@ class KubernetesAgent:
             logger.warning("KubernetesAgent: No MCP tools available!")
 
         self.llm = llm.bind_tools(self.tools) if self.tools else llm
+        self._tool_node = ToolNode(self.tools)
         self.graph = self._build_graph()
 
     def _build_graph(self) -> StateGraph[AgentState]:
         graph = StateGraph(AgentState)
 
         graph.add_node("reason", self._reason)
-        graph.add_node("tools", ToolNode(self.tools))
+        graph.add_node("tools", self._tools_with_session)
         graph.add_node("summarize", self._summarize)
 
         graph.set_entry_point("reason")
@@ -73,6 +79,19 @@ class KubernetesAgent:
     def compile(self) -> Any:
         """グラフをコンパイル."""
         return self.graph.compile()
+
+    async def _tools_with_session(self, state: AgentState) -> dict[str, Any]:
+        """セッションを再利用して ToolNode を実行.
+
+        各ツール呼び出しで新しい SSE 接続を作成する代わりに、
+        KubernetesMCPTool のセッションコンテキスト内で ToolNode を実行し、
+        同一の MCP セッションを再利用する。これにより Go サーバーへの
+        急速な接続/切断チャーンを防ぐ。
+        """
+        if self._k8s_tool:
+            async with self._k8s_tool.session_context():
+                return await self._tool_node.ainvoke(state)
+        return await self._tool_node.ainvoke(state)
 
     @_observe(name="kubernetes_agent_reason", as_type="span")
     async def _reason(self, state: AgentState) -> dict[str, Any]:

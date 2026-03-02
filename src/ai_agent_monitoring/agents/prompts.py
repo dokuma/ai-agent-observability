@@ -117,7 +117,7 @@ Orchestratorから指示された対象について、Kubernetes APIを通じて
 1. まずイベント（Warning/Error）を確認し、直近の異常を把握する
 2. Pod状態を確認する（CrashLoopBackOff, OOMKilled, Pending, ImagePullBackOff等）
 3. 異常なPodが見つかった場合、そのログを取得する
-4. Nodeのリソース状況を確認する（CPU/メモリの逼迫）
+4. Podのリソース使用状況を確認する（CPU/メモリの逼迫）
 5. 必要に応じてDeployment/Service/PVC等の設定を確認する
 6. 必要に応じてNetworkPolicy/RBACの設定を確認する
 
@@ -125,6 +125,7 @@ Orchestratorから指示された対象について、Kubernetes APIを通じて
 - Namespaceを意識して調査範囲を絞り込む
 - イベントのWarning/Errorを優先的に確認する
 - リソース使用状況（requests/limits）の不整合に注目する
+- k8s_get_resource で汎用リソースを取得する際、api_version は自動推定される
 """
 
 RCA_AGENT_SYSTEM_PROMPT = """\

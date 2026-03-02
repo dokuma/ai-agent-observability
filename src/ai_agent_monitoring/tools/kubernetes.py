@@ -9,6 +9,43 @@ from ai_agent_monitoring.tools.base import BaseMCPTool, MCPClient
 
 logger = logging.getLogger(__name__)
 
+# よく使う kind → apiVersion のマッピング
+_KIND_API_VERSION: dict[str, str] = {
+    "Pod": "v1",
+    "Service": "v1",
+    "ConfigMap": "v1",
+    "Secret": "v1",
+    "PersistentVolumeClaim": "v1",
+    "Namespace": "v1",
+    "Node": "v1",
+    "Event": "v1",
+    "ServiceAccount": "v1",
+    "Deployment": "apps/v1",
+    "ReplicaSet": "apps/v1",
+    "StatefulSet": "apps/v1",
+    "DaemonSet": "apps/v1",
+    "Ingress": "networking.k8s.io/v1",
+    "NetworkPolicy": "networking.k8s.io/v1",
+    "Role": "rbac.authorization.k8s.io/v1",
+    "RoleBinding": "rbac.authorization.k8s.io/v1",
+    "ClusterRole": "rbac.authorization.k8s.io/v1",
+    "ClusterRoleBinding": "rbac.authorization.k8s.io/v1",
+    "CronJob": "batch/v1",
+    "Job": "batch/v1",
+    "HorizontalPodAutoscaler": "autoscaling/v2",
+}
+
+
+def _resolve_api_version(kind: str, api_version: str = "") -> str:
+    """kind から apiVersion を推定（明示指定があればそちらを優先）."""
+    if api_version:
+        return api_version
+    resolved = _KIND_API_VERSION.get(kind, "")
+    if not resolved:
+        logger.warning("Unknown apiVersion for kind '%s', defaulting to 'v1'", kind)
+        resolved = "v1"
+    return resolved
+
 
 class KubernetesMCPTool(BaseMCPTool):
     """Kubernetes MCP Server 経由のクラスタリソース取得ツール群.
@@ -80,19 +117,25 @@ class KubernetesMCPTool(BaseMCPTool):
         kind: str,
         name: str = "",
         namespace: str = "",
+        api_version: str = "",
     ) -> dict[str, Any]:
-        """汎用リソース取得（Deployment, Service, PVC, NetworkPolicy, RBAC等）."""
-        params: dict[str, Any] = {"kind": kind}
+        """汎用リソース取得（Deployment, Service, PVC, NetworkPolicy, RBAC等）.
+
+        kubernetes-mcp-server の resources_list / resources_get は
+        apiVersion を必須パラメータとして要求する。
+        """
+        resolved_api_version = _resolve_api_version(kind, api_version)
+        params: dict[str, Any] = {"kind": kind, "apiVersion": resolved_api_version}
         if name:
             params["name"] = name
         if namespace:
             params["namespace"] = namespace
 
         if name:
-            logger.info("K8s get resource: %s %s/%s", kind, namespace or "(cluster)", name)
+            logger.info("K8s get resource: %s/%s %s/%s", resolved_api_version, kind, namespace or "(cluster)", name)
             return await self._call_tool("resources_get", params)
         else:
-            logger.info("K8s list resources: %s namespace=%s", kind, namespace or "(all)")
+            logger.info("K8s list resources: %s/%s namespace=%s", resolved_api_version, kind, namespace or "(all)")
             return await self._call_tool("resources_list", params)
 
 
@@ -131,11 +174,6 @@ def create_kubernetes_tools(mcp_client: MCPClient) -> list[BaseTool]:
         return await k8s.list_namespaces()
 
     @tool
-    async def k8s_get_nodes_top() -> dict[str, Any]:
-        """各NodeのCPU/メモリ使用状況を取得します。"""
-        return await k8s.get_nodes_top()
-
-    @tool
     async def k8s_get_pods_top(namespace: str = "") -> dict[str, Any]:
         """各PodのCPU/メモリ使用状況を取得します。"""
         return await k8s.get_pods_top(namespace)
@@ -145,9 +183,16 @@ def create_kubernetes_tools(mcp_client: MCPClient) -> list[BaseTool]:
         kind: str,
         name: str = "",
         namespace: str = "",
+        api_version: str = "",
     ) -> dict[str, Any]:
-        """汎用Kubernetesリソースを取得します。kindにDeployment,Service,PVC,NetworkPolicy等を指定します。nameを省略するとリスト取得になります。"""
-        return await k8s.get_resource(kind, name, namespace)
+        """汎用Kubernetesリソースを取得します。
+
+        kindにDeployment,Service,PVC,NetworkPolicy等を指定します。
+        nameを省略するとリスト取得になります。
+        api_versionは自動推定されますが、明示指定も可能です
+        (例: apps/v1, networking.k8s.io/v1)。
+        """
+        return await k8s.get_resource(kind, name, namespace, api_version)
 
     return [
         k8s_list_pods,
@@ -155,7 +200,6 @@ def create_kubernetes_tools(mcp_client: MCPClient) -> list[BaseTool]:
         k8s_get_pod_logs,
         k8s_list_events,
         k8s_list_namespaces,
-        k8s_get_nodes_top,
         k8s_get_pods_top,
         k8s_get_resource,
     ]
