@@ -28,6 +28,8 @@
 | `MCP_GRAFANA_URL` | `http://localhost:8080` | Grafana MCP |
 | `MCP_LOKI_URL` | `http://localhost:8081` | Loki MCP |
 | `MCP_PROMETHEUS_URL` | `http://localhost:8082` | Prometheus MCP |
+| `MCP_KUBERNETES_URL` | `http://localhost:8083` | Kubernetes MCP |
+| `MCP_KUBERNETES_TRANSPORT` | (空) | Kubernetes MCP トランスポート (`streamable_http` / `sse`) |
 
 ### Agent 動作制御
 
@@ -65,6 +67,8 @@ LLM_MODEL=qwen2.5:0.5b
 MCP_PROMETHEUS_URL=http://prometheus-mcp:9090
 MCP_LOKI_URL=http://loki-mcp:8080
 MCP_GRAFANA_URL=http://grafana-mcp:8080
+MCP_KUBERNETES_URL=http://kubernetes-mcp:8080
+MCP_KUBERNETES_TRANSPORT=streamable_http
 
 # Monitoring
 PROMETHEUS_URL=http://prometheus:9090

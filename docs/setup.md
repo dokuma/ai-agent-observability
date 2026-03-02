@@ -71,6 +71,7 @@ make integration-clean
 | Prometheus MCP | 9091 | MCP サーバ |
 | Loki MCP | 9092 | MCP サーバ |
 | Grafana MCP | 9093 | MCP サーバ |
+| Kubernetes MCP | 9094 | MCP サーバ (K8s API) |
 
 ## Langfuse 初期設定
 
