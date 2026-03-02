@@ -363,8 +363,89 @@ ResponseWriter をラッピングするため、プロトコルレベルでの�
 |---|---|---|
 | `McpError: Connection closed` | SSE ストリームが初期化中に切断された | サーバーログを確認、kubeconfig の有効性を確認 |
 | `RemoteProtocolError: Server disconnected` | Streamable HTTP ハンドラーがリクエストを処理できなかった | `MCP_KUBERNETES_TRANSPORT=sse` に変更 |
+| `RemoteProtocolError: peer closed connection without sending complete message body (incomplete chunked read)` | SSE レスポンスが大きすぎて chunked transfer が途中で切断された | 下記「SSE レスポンスサイズと接続安定性」を参照 |
 | `MCPConnectionError: connection refused` | サーバーが起動していない | `kubectl logs` / `docker logs` で起動ログを確認 |
 | `/healthz` は OK だが MCP 接続失敗 | HTTP は正常だがプロトコルハンドシェイク失敗 | `mcp-diagnose` エンドポイントで詳細診断 |
+
+### SSE レスポンスサイズと接続安定性
+
+#### 背景
+
+SSE (Server-Sent Events) トランスポートは HTTP の chunked transfer encoding を使用する
+長寿命接続であり、プロトコルレベルでのレスポンスサイズ制限は定義されていない。
+しかし実運用において、**レスポンスが大きいツール呼び出しで SSE ストリームが途中で切断される**
+事象が確認された。
+
+#### 発見の経緯
+
+kubernetes-mcp-server (Go SDK) に対して複数のツールを呼び出した際、
+以下のパターンが観測された:
+
+| ツール | 結果 | レスポンスサイズ |
+|---|---|---|
+| `events_list` | 成功 | 小〜中（イベント一覧） |
+| `pods_top` | 成功 | 小（メトリクスデータ） |
+| `pods_list`（全 namespace） | **失敗** | **大**（クラスタ全 Pod の完全な仕様） |
+
+失敗時のエラー:
+```
+httpcore.RemoteProtocolError: peer closed connection without sending complete message body (incomplete chunked read)
+```
+
+同一 SSE セッション内で小さなレスポンスは正常に返却され、
+大きなレスポンスでのみ切断が発生したことから、
+**レスポンスサイズが SSE 接続の安定性に直接影響する**ことが判明した。
+
+#### 原因の詳細
+
+SSE トランスポートでは、MCP ツールの結果は1つの SSE イベントとして送信される。
+Go MCP SDK の `writeEvent()` は結果の JSON 全体を単一の `fmt.Fprintf` + `Flush()` で
+書き出すため、大きなレスポンスでは以下の問題が発生しうる:
+
+1. **Go HTTP サーバーのバッファ**: `net/http` は 4KB の書き込みバッファを持ち、
+   大きなデータは複数回のバッファフラッシュが必要になる。
+   `WriteTimeout` 設定時はフラッシュ中にタイムアウトする可能性がある。
+
+2. **ミドルウェアの ResponseWriter ラッピング**: kubernetes-mcp-server の
+   `RequestMiddleware` は `loggingResponseWriter` で ResponseWriter をラップする。
+   `Flush()` は委譲されるが、大きな単一 Write の処理中に
+   ミドルウェアのライフサイクル管理と競合する可能性がある。
+
+3. **Kubernetes API の応答遅延**: 全 namespace の Pod 一覧など大量データの取得は
+   K8s API Server 自体の応答に時間がかかり、
+   その間に SSE クライアント側のタイムアウトに達する場合がある。
+
+明確な「何 KB まで」というハードリミットは存在しないが、
+レスポンスが大きいほど転送時間が長くなり、接続が途切れるリスクが高まる。
+
+#### 対策
+
+本システムでは以下の対策を実装している:
+
+1. **全 namespace 一括取得の禁止**: `pods_list`（namespace パラメータなし）を
+   使用せず、`pods_list_in_namespace` のみを使用。
+   `k8s_list_pods` ツールの `namespace` パラメータを必須化。
+
+2. **SSE セッション再利用**: 各ツール呼び出しで新規 SSE 接続を作成する代わりに、
+   `KubernetesMCPTool.session_context()` で単一セッションを再利用。
+   接続チャーン（急速な接続/切断の繰り返し）による Go サーバーの不安定化を防止。
+
+3. **トランスポート自動検出**: 起動時に SSE / Streamable HTTP の両方を試行し、
+   動作するトランスポートを自動選択。SSE が失敗する場合は
+   Streamable HTTP へフォールバック。
+
+#### 一般的なガイドライン
+
+MCP ツール設計において、SSE トランスポート使用時は以下に注意する:
+
+- **レスポンスを小さく保つ**: フィルタパラメータ（namespace、labelSelector 等）で
+  クエリ範囲を限定し、不必要に大きなレスポンスを避ける
+- **全件取得を避ける**: `*_list`（全件）より `*_list_in_*`（範囲指定）を優先する
+- **セッションを再利用する**: 複数ツール呼び出しで毎回接続を作り直さない
+- **Streamable HTTP の検討**: SSE で大きなレスポンスが問題になる場合、
+  Streamable HTTP (`/mcp`) はリクエスト/レスポンス型のため
+  長寿命接続の問題を回避できる可能性がある
+  （ただし Go SDK のミドルウェア互換性を事前に検証すること）
 
 ### デバッグログの有効化
 
