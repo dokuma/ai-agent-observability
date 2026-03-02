@@ -26,3 +26,22 @@
   helm install langfuse langfuse/langfuse
 
 全サービスは ClusterIP（内部アクセスのみ）で公開されています。
+
+MCP トランスポート設定:
+  - デフォルト:     {{ .Values.config.mcpTransport }}
+  - Prometheus MCP: {{ .Values.config.mcpPrometheusTransport | default .Values.config.mcpTransport }}
+  - Loki MCP:       {{ .Values.config.mcpLokiTransport | default .Values.config.mcpTransport }}
+  - Grafana MCP:    {{ .Values.config.mcpGrafanaTransport | default .Values.config.mcpTransport }}
+  - Kubernetes MCP: {{ .Values.config.mcpKubernetesTransport | default .Values.config.mcpTransport }}
+
+  注意: kubernetes-mcp-server (Go SDK) は SSE トランスポートを推奨。
+  Streamable HTTP は Go SDK ミドルウェアとの互換性問題あり。
+
+デプロイ後の確認:
+  # ヘルスチェック
+  kubectl exec -n {{ .Release.Namespace }} deploy/{{ include "ai-agent-monitoring.fullname" . }}-agent -- \
+    wget -qO- http://localhost:8000/api/v1/health
+
+  # MCP プロトコルレベルの診断
+  kubectl exec -n {{ .Release.Namespace }} deploy/{{ include "ai-agent-monitoring.fullname" . }}-agent -- \
+    wget -qO- http://localhost:8000/api/v1/health/mcp-diagnose

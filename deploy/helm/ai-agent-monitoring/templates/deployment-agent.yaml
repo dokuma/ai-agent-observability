@@ -26,6 +26,72 @@ spec:
       serviceAccountName: {{ include "ai-agent-monitoring.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.securityContext | nindent 8 }}
+      {{- if .Values.agent.waitForMcpServers.enabled }}
+      initContainers:
+        - name: wait-for-mcp-servers
+          image: {{ .Values.agent.waitForMcpServers.image | default "busybox:1.36" | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+          command:
+            - sh
+            - -c
+            - |
+              TIMEOUT={{ .Values.agent.waitForMcpServers.timeoutSeconds | default 120 }}
+              ELAPSED=0
+              echo "Waiting for MCP servers to be ready (timeout=${TIMEOUT}s)..."
+
+              # kubernetes-mcp-server — /healthz エンドポイント
+              {{- if index .Values "kubernetes-mcp-server" "enabled" }}
+              K8S_URL="http://{{ .Release.Name }}-kubernetes-mcp-server.{{ .Release.Namespace }}.svc:{{ index .Values "kubernetes-mcp-server" "service" "port" }}"
+              until wget -q --spider -T 3 "${K8S_URL}/healthz" 2>/dev/null; do
+                ELAPSED=$((ELAPSED + 3))
+                if [ $ELAPSED -ge $TIMEOUT ]; then echo "WARN: kubernetes-mcp-server not ready after ${TIMEOUT}s, continuing..."; break; fi
+                echo "  waiting for kubernetes-mcp-server... (${ELAPSED}s)"
+                sleep 3
+              done
+              echo "kubernetes-mcp-server: ready"
+              {{- end }}
+
+              # prometheus-mcp — TCP ポートチェック
+              PROM_HOST="{{ include "ai-agent-monitoring.fullname" . }}-prometheus-mcp.{{ .Release.Namespace }}.svc"
+              PROM_PORT={{ .Values.prometheusMcp.service.port }}
+              until nc -z -w 3 "${PROM_HOST}" "${PROM_PORT}" 2>/dev/null; do
+                ELAPSED=$((ELAPSED + 3))
+                if [ $ELAPSED -ge $TIMEOUT ]; then echo "WARN: prometheus-mcp not ready after ${TIMEOUT}s, continuing..."; break; fi
+                echo "  waiting for prometheus-mcp... (${ELAPSED}s)"
+                sleep 3
+              done
+              echo "prometheus-mcp: ready"
+
+              # loki-mcp — TCP ポートチェック
+              LOKI_HOST="{{ include "ai-agent-monitoring.fullname" . }}-loki-mcp.{{ .Release.Namespace }}.svc"
+              LOKI_PORT={{ .Values.lokiMcp.service.port }}
+              until nc -z -w 3 "${LOKI_HOST}" "${LOKI_PORT}" 2>/dev/null; do
+                ELAPSED=$((ELAPSED + 3))
+                if [ $ELAPSED -ge $TIMEOUT ]; then echo "WARN: loki-mcp not ready after ${TIMEOUT}s, continuing..."; break; fi
+                echo "  waiting for loki-mcp... (${ELAPSED}s)"
+                sleep 3
+              done
+              echo "loki-mcp: ready"
+
+              # grafana-mcp — /healthz エンドポイント
+              {{- if index .Values "grafana-mcp" "enabled" }}
+              GRAFANA_URL="http://{{ .Release.Name }}-grafana-mcp.{{ .Release.Namespace }}.svc:{{ index .Values "grafana-mcp" "service" "port" }}"
+              until wget -q --spider -T 3 "${GRAFANA_URL}/healthz" 2>/dev/null; do
+                ELAPSED=$((ELAPSED + 3))
+                if [ $ELAPSED -ge $TIMEOUT ]; then echo "WARN: grafana-mcp not ready after ${TIMEOUT}s, continuing..."; break; fi
+                echo "  waiting for grafana-mcp... (${ELAPSED}s)"
+                sleep 3
+              done
+              echo "grafana-mcp: ready"
+              {{- end }}
+
+              echo "All MCP servers are ready!"
+      {{- end }}
       containers:
         - name: agent
           image: {{ include "ai-agent-monitoring.image" (dict "global" .Values.global "image" .Values.agent.image) }}
