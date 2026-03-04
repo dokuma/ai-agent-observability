@@ -127,7 +127,17 @@ class KubernetesAgent:
             if plan.target_instances:
                 investigation_details.append(f"対象インスタンス: {', '.join(plan.target_instances)}")
 
-            details_text = "\n".join(investigation_details) if investigation_details else "全般的な調査"
+            if investigation_details:
+                details_text = "\n".join(investigation_details)
+                investigation_scope = "Toolを使ってクラスタの状態を確認し、異常を分析してください。"
+            else:
+                details_text = "クラスタ全体の健康状態を調査"
+                investigation_scope = (
+                    "パターンBの手順に従ってください: "
+                    "まず k8s_list_namespaces でnamespace一覧を取得し、"
+                    "各namespaceごとに k8s_list_events でイベントを確認してください。"
+                    "全namespaceを一括で取得するAPIコールは使わないでください。"
+                )
 
             setup_messages: list[BaseMessage] = [
                 SystemMessage(content=KUBERNETES_AGENT_SYSTEM_PROMPT),
@@ -135,7 +145,7 @@ class KubernetesAgent:
                     content=(
                         f"Kubernetesクラスタの状態を調査してください:\n{details_text}\n"
                         f"時間範囲: {time_desc}\n"
-                        "Toolを使ってクラスタの状態を確認し、異常を分析してください。"
+                        f"{investigation_scope}"
                     )
                 ),
             ]

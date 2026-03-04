@@ -127,7 +127,8 @@ class TestKubernetesAgentReason:
         result = await self.agent._reason(state)
         messages = result["messages"]
         assert len(messages) == 3
-        assert "全般的な調査" in messages[1].content
+        assert "クラスタ全体の健康状態を調査" in messages[1].content
+        assert "パターンB" in messages[1].content
 
 
 # ================================================================

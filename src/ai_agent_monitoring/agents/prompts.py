@@ -63,8 +63,14 @@ Metrics Agent・Logs Agentに調査を委任し、最終的にRCAレポートを
   ],
   "logql_queries": ["{{namespace=\"myns\"}} |= \"error\""],
   "target_instances": ["pod-abc-123"],
+  "target_namespaces": ["myns"],
+  "target_pods": ["pod-abc-123"],
+  "k8s_resource_kinds": ["Pod", "Deployment", "Event"],
   "time_range": {{"start": "<ISO 8601絶対時刻>", "end": "<ISO 8601絶対時刻>"}}
 }}
+
+Kubernetes関連の調査が必要な場合は target_namespaces, target_pods, k8s_resource_kinds も含めてください。
+クラスタ全体の健康状態を調査する場合は target_namespaces を空にしてください。
 
 間違った例（オブジェクトの配列にしないでください）:
 {{
@@ -114,16 +120,31 @@ Orchestratorから指示された対象について、Kubernetes APIを通じて
 - イベントログから障害の兆候を発見する
 
 ## 診断手順
-1. まずイベント（Warning/Error）を確認し、直近の異常を把握する
+
+### パターンA: 特定の namespace が指定されている場合
+1. 指定された namespace のイベント（Warning/Error）を確認する
 2. Pod状態を確認する（CrashLoopBackOff, OOMKilled, Pending, ImagePullBackOff等）
 3. 異常なPodが見つかった場合、そのログを取得する
 4. Podのリソース使用状況を確認する（CPU/メモリの逼迫）
 5. 必要に応じてDeployment/Service/PVC等の設定を確認する
-6. 必要に応じてNetworkPolicy/RBACの設定を確認する
+
+### パターンB: クラスタ全体の健康状態を調査する場合（namespace 未指定）
+**重要**: 全 namespace を一括で取得するAPIコールは禁止。必ず段階的に調査すること。
+
+1. k8s_list_namespaces で namespace 一覧を取得
+2. 各 namespace ごとに k8s_list_events(namespace=ns) でイベントを確認
+   - Warning/Error イベントが検出された namespace を優先調査対象として記録
+3. 異常が検出された namespace に対して k8s_list_pods(namespace=ns) で Pod 状態を確認
+4. 異常な Pod が見つかった場合、そのログを取得する
+5. k8s_get_pods_top(namespace=ns) でリソース使用状況を namespace ごとに確認
+6. 調査結果を namespace 横断でまとめ、問題の重大度順に報告する
 
 ## 注意事項
-- **k8s_list_pods には必ず namespace を指定すること**（未指定は全Podを返し応答が巨大になる）
+- k8s_list_events には必ず namespace を指定すること（未指定は全イベントを返しSSE接続が切断される）
+- k8s_list_pods には必ず namespace を指定すること（未指定は全Podを返し応答が巨大になる）
+- k8s_get_pods_top にも namespace を指定すること（全 namespace 一括は応答が巨大になる可能性がある）
 - まず k8s_list_namespaces で対象 namespace を特定してから調査する
+- namespace が多い場合は、kube-system/kube-public/kube-node-lease 以外のユーザ定義 namespace を優先する
 - イベントのWarning/Errorを優先的に確認する
 - リソース使用状況（requests/limits）の不整合に注目する
 - k8s_get_resource で汎用リソースを取得する際、api_version は自動推定される

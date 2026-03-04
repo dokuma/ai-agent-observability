@@ -176,7 +176,13 @@ def create_kubernetes_tools(
 
     @tool
     async def k8s_list_events(namespace: str = "") -> dict[str, Any]:
-        """Kubernetesイベント一覧を取得します。Warning/Errorイベントの確認に使用します。"""
+        """指定namespaceのKubernetesイベント一覧を取得します。Warning/Errorイベントの確認に使用します。
+
+        重要: namespaceを必ず指定してください。未指定だと全namespaceのイベントを返し、
+        レスポンスが巨大になりSSE接続が切断される可能性があります。
+        クラスタ全体を調査する場合は、k8s_list_namespacesで一覧取得後、
+        各namespaceごとにこのツールを呼び出してください。
+        """
         return await k8s.list_events(namespace)
 
     @tool
@@ -186,7 +192,11 @@ def create_kubernetes_tools(
 
     @tool
     async def k8s_get_pods_top(namespace: str = "") -> dict[str, Any]:
-        """各PodのCPU/メモリ使用状況を取得します。"""
+        """指定namespaceの各PodのCPU/メモリ使用状況を取得します。
+
+        namespaceを指定することを推奨します。未指定だと全namespaceのPodを返し、
+        レスポンスが巨大になる可能性があります。
+        """
         return await k8s.get_pods_top(namespace)
 
     @tool

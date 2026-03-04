@@ -1175,12 +1175,16 @@ class OrchestratorAgent:
                 "上記のフィードバックとリファレンスを踏まえ、前回とは異なるアプローチで"
                 "調査計画をJSON形式で出力してください。\n"
                 "promql_queries, logql_queries, target_instances, time_range を含めてください。\n"
+                "Kubernetes関連の調査が必要な場合は target_namespaces, target_pods, "
+                "k8s_resource_kinds も含めてください。\n"
                 "time_rangeは必ずISO 8601絶対時刻のstart/endで指定してください。"
             )
         else:
             plan_prompt_parts.append(
                 "上記の分析に基づき、調査計画をJSON形式で出力してください。\n"
                 "promql_queries, logql_queries, target_instances, time_range を含めてください。\n"
+                "Kubernetes関連の調査が必要な場合は target_namespaces, target_pods, "
+                "k8s_resource_kinds も含めてください。\n"
                 "time_rangeは必ずISO 8601絶対時刻のstart/endで指定してください。"
             )
 
