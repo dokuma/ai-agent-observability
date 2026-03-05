@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
+from langgraph.errors import GraphBubbleUp
 from langgraph.graph import END, StateGraph
 from langgraph.types import interrupt
 
@@ -508,6 +509,8 @@ class OrchestratorAgent:
                 await self._discover_loki_info(grafana, env)
                 # キーワードを使ってダッシュボードを探索
                 await self._discover_dashboard_queries(grafana, env)
+        except GraphBubbleUp:
+            raise
         except Exception as e:
             detail = str(e)
             if isinstance(e, ExceptionGroup):
@@ -553,6 +556,8 @@ class OrchestratorAgent:
             env.prometheus_datasource_uid = self._select_or_ask("prometheus", prometheus_candidates)
             env.loki_datasource_uid = self._select_or_ask("loki", loki_candidates)
 
+        except GraphBubbleUp:
+            raise
         except Exception as e:
             logger.warning("Failed to list datasources: %s: %s", type(e).__name__, e)
 
@@ -707,6 +712,8 @@ class OrchestratorAgent:
 
         try:
             await self._fetch_prometheus_info(grafana, env)
+        except GraphBubbleUp:
+            raise
         except Exception as e:
             logger.warning("Failed to get Prometheus info with uid=%s: %s", env.prometheus_datasource_uid, e)
             alt_candidates = [ds for ds in env.prometheus_datasources if ds.uid != env.prometheus_datasource_uid]
@@ -752,6 +759,8 @@ class OrchestratorAgent:
 
         try:
             await self._fetch_loki_info(grafana, env)
+        except GraphBubbleUp:
+            raise
         except Exception as e:
             logger.warning("Failed to get Loki info with uid=%s: %s", env.loki_datasource_uid, e)
             alt_candidates = [ds for ds in env.loki_datasources if ds.uid != env.loki_datasource_uid]
