@@ -133,6 +133,63 @@ class TestUserQuery:
         data = response.json()
         assert data["status"] == "running"
 
+    def test_query_routed_to_report_search(self, client):
+        """レポートがある場合、search インテントで report_search_agent にルーティング."""
+        mock_store = MagicMock()
+        mock_store.count.return_value = 3
+
+        mock_search_agent = AsyncMock()
+        mock_search_agent.search_and_answer.return_value = ReportSearchResponse(
+            answer="問題のコンポーネントは monitoring 名前空間にあります。",
+            results=[],
+            total_reports=3,
+        )
+
+        app_state.report_store = mock_store
+        app_state.report_search_agent = mock_search_agent
+
+        # orchestrator の LLM を mock して "search" と返す
+        mock_llm = AsyncMock()
+        mock_llm.ainvoke.return_value = MagicMock(content="search")
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.llm = mock_llm
+        app_state.orchestrator = mock_orchestrator
+
+        response = client.post(
+            "/api/v1/query",
+            json={"query": "前回の問題のコンポーネントはどの名前空間にありますか？"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["routed_to"] == "report_search"
+        assert data["status"] == "completed"
+        assert "monitoring" in data["report_search_answer"]
+
+        # cleanup
+        app_state.report_store = None
+        app_state.report_search_agent = None
+
+    def test_query_routed_to_investigation_no_reports(self, client):
+        """レポートがない場合、常に新規調査を開始."""
+        app_state.report_store = MagicMock()
+        app_state.report_store.count.return_value = 0
+
+        app_state.orchestrator = MagicMock()
+        compiled = MagicMock()
+        compiled.ainvoke = AsyncMock(return_value={"rca_report": None})
+        app_state.orchestrator.compile.return_value = compiled
+
+        response = client.post(
+            "/api/v1/query",
+            json={"query": "クラスタの状態を確認してください"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["routed_to"] == "investigation"
+        assert data["status"] == "running"
+
+        app_state.report_store = None
+
     def test_query_empty(self, client):
         response = client.post(
             "/api/v1/query",

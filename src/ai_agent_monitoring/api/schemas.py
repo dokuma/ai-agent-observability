@@ -50,6 +50,8 @@ class UserQueryResponse(BaseModel):
     investigation_id: str
     status: str
     message: str
+    routed_to: str = "investigation"  # "investigation" | "report_search"
+    report_search_answer: str | None = None
 
 
 # ---- 調査ステータス ----

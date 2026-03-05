@@ -112,7 +112,27 @@ async def submit_query(
     request: UserQueryRequest,
     background_tasks: BackgroundTasks,
 ) -> UserQueryResponse:
-    """ユーザの自然言語クエリを受け付け調査を開始."""
+    """ユーザの自然言語クエリを受け付け、レポート検索または新規調査にルーティング."""
+    # 既存レポートがある場合、インテント分類を実行
+    if (
+        app_state.report_store
+        and app_state.report_store.count() > 0
+        and app_state.report_search_agent
+    ):
+        intent = await _classify_query_intent(request.query)
+        if intent == "search":
+            logger.info("Query routed to report_search: %s", request.query[:100])
+            result = await app_state.report_search_agent.search_and_answer(
+                query=request.query,
+            )
+            return UserQueryResponse(
+                investigation_id="",
+                status="completed",
+                message=result.answer,
+                routed_to="report_search",
+                report_search_answer=result.answer,
+            )
+
     user_query = UserQuery(
         raw_input=request.query,
         target_instances=request.target_instances,
@@ -416,6 +436,39 @@ async def _resume_investigation(
     except Exception as e:
         logger.exception("Investigation failed after resume: %s", inv_id)
         app_state.fail_investigation(inv_id, str(e))
+
+
+# ---- クエリインテント分類 ----
+
+
+async def _classify_query_intent(query: str) -> str:
+    """ユーザクエリのインテントを分類する.
+
+    Returns:
+        "search" — 過去レポートで回答可能
+        "investigate" — 新規調査が必要
+    """
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    from ai_agent_monitoring.agents.prompts import QUERY_INTENT_CLASSIFICATION_PROMPT
+
+    if not app_state.orchestrator:
+        return "investigate"
+
+    try:
+        llm = app_state.orchestrator.llm
+        messages = [
+            SystemMessage(content=QUERY_INTENT_CLASSIFICATION_PROMPT),
+            HumanMessage(content=query),
+        ]
+        response = await llm.ainvoke(messages)
+        intent = response.content.strip().lower()
+        if "search" in intent:
+            return "search"
+        return "investigate"
+    except Exception:
+        logger.warning("Intent classification failed, falling back to investigate", exc_info=True)
+        return "investigate"
 
 
 # ---- RCAレポート検索・一覧 ----
