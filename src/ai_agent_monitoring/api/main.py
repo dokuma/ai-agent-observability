@@ -34,9 +34,6 @@ class _HealthAccessFilter(logging.Filter):
             msg = record.getMessage()
             if "/api/v1/health" in msg:
                 return False
-            # OpenShift Route のヘルスチェック (GET /)
-            if '"GET / ' in msg:
-                return False
         return True
 
 
@@ -70,17 +67,6 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
-
-
-@app.middleware("http")
-async def _debug_root_request(request, call_next):  # type: ignore[no-untyped-def]
-    if request.url.path == "/":
-        logger.warning(
-            "DEBUG GET /: client=%s headers=%s",
-            request.client,
-            dict(request.headers),
-        )
-    return await call_next(request)
 
 
 app.include_router(router, prefix="/api/v1")
