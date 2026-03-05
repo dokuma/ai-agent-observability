@@ -72,6 +72,75 @@ logger = logging.getLogger(__name__)
 # (inv_id, stage, iteration_count, detail)
 StageUpdateCallback = Callable[..., None]
 
+# RCA Agent ノード名の日本語ラベル
+_NODE_LABELS: dict[str, str] = {
+    "correlate": "データ相関分析中",
+    "collect_evidence": "証拠収集中",
+    "generate_report": "レポート生成中",
+    "render_markdown": "Markdown整形中",
+}
+
+
+def _summarize_tool_args(args: dict[str, Any]) -> str:
+    """ツール引数から表示用の短いサマリを生成."""
+    if not args:
+        return ""
+    # Prometheus/Grafana クエリ系
+    for key in ("query", "expr", "promql", "logql"):
+        if key in args:
+            q = str(args[key])
+            return q[:80] + "…" if len(q) > 80 else q
+    # K8s 系: namespace + name
+    parts: list[str] = []
+    if "kind" in args:
+        parts.append(str(args["kind"]))
+    if "namespace" in args:
+        parts.append(str(args["namespace"]))
+    if "name" in args:
+        parts.append(str(args["name"]))
+    if parts:
+        return "/".join(parts)
+    # その他: 最初の引数の値を短縮表示
+    first_val = str(next(iter(args.values())))
+    return first_val[:50] + "…" if len(first_val) > 50 else first_val
+
+
+def _describe_step(node_name: str, node_output: Any, step_count: int) -> str:
+    """サブグラフのステップ詳細を生成."""
+    # ToolNode の出力からツール名を抽出
+    if node_name == "tools" and isinstance(node_output, dict):
+        messages = node_output.get("messages", [])
+        tool_descs: list[str] = []
+        for msg in messages:
+            if hasattr(msg, "name") and msg.name:
+                tool_descs.append(msg.name)
+        if tool_descs:
+            return f"step {step_count}: ツール実行完了 ({', '.join(tool_descs)})"
+    # reason ノード: LLMが次のアクションを判断
+    if node_name == "reason":
+        if isinstance(node_output, dict):
+            messages = node_output.get("messages", [])
+            for msg in reversed(messages):
+                if hasattr(msg, "tool_calls") and msg.tool_calls:
+                    parts = []
+                    for tc in msg.tool_calls:
+                        name = tc.get("name", "")
+                        if not name:
+                            continue
+                        brief = _summarize_tool_args(tc.get("args", {}))
+                        parts.append(f"{name}({brief})" if brief else name)
+                    if parts:
+                        return f"step {step_count}: 次のツール → {', '.join(parts)}"
+        return f"step {step_count}: LLM推論中"
+    if node_name == "summarize":
+        return f"step {step_count}: 結果を要約中"
+    # RCA Agent 等の既知ノード
+    label = _NODE_LABELS.get(node_name)
+    if label:
+        return f"step {step_count}: {label}"
+    # その他のノード
+    return f"step {step_count}: {node_name}"
+
 
 class OrchestratorAgent:
     """Orchestrator Agent.
@@ -215,30 +284,7 @@ class OrchestratorAgent:
     @staticmethod
     def _describe_step(node_name: str, node_output: Any, step_count: int) -> str:
         """サブグラフのステップ詳細を生成."""
-        # ToolNode の出力からツール名を抽出
-        if node_name == "tools" and isinstance(node_output, dict):
-            messages = node_output.get("messages", [])
-            tool_names = []
-            for msg in messages:
-                if hasattr(msg, "name") and msg.name:
-                    tool_names.append(msg.name)
-            if tool_names:
-                return f"step {step_count}: ツール実行完了 ({', '.join(tool_names)})"
-        # reason ノード: LLMが次のアクションを判断
-        if node_name == "reason":
-            if isinstance(node_output, dict):
-                messages = node_output.get("messages", [])
-                # tool_calls があれば次に呼ぶツール名を表示
-                for msg in reversed(messages):
-                    if hasattr(msg, "tool_calls") and msg.tool_calls:
-                        pending = [tc.get("name", "") for tc in msg.tool_calls if tc.get("name")]
-                        if pending:
-                            return f"step {step_count}: ツール呼び出し予定 ({', '.join(pending)})"
-            return f"step {step_count}: LLM推論中"
-        if node_name == "summarize":
-            return f"step {step_count}: 結果を要約中"
-        # その他のノード
-        return f"step {step_count}: {node_name}"
+        return _describe_step(node_name, node_output, step_count)
 
     def _build_graph(self) -> StateGraph[AgentState]:
         """LangGraphワークフローを構築.

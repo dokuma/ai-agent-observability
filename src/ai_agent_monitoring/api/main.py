@@ -25,6 +25,17 @@ logging.root.handlers.clear()
 logging.root.addHandler(_handler)
 logging.root.setLevel(_log_level)
 
+
+class _HealthAccessFilter(logging.Filter):
+    """uvicorn アクセスログから /health エンドポイントを除外."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return "/api/v1/health" not in msg
+
+
+logging.getLogger("uvicorn.access").addFilter(_HealthAccessFilter())
+
 logger = logging.getLogger(__name__)
 
 
