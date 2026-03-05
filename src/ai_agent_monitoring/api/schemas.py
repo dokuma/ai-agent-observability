@@ -65,6 +65,7 @@ class InvestigationStatus(BaseModel):
     trigger_type: str
     iteration_count: int = 0
     current_stage: str = ""  # 現在のステージ（例: "環境発見中", "メトリクス調査中"）
+    stage_detail: str = ""  # ステージ内の詳細（例: "ReAct step 2/5: grafana_query_prometheus"）
     error: str = ""  # 失敗時のエラーメッセージ
     created_at: datetime
     completed_at: datetime | None = None

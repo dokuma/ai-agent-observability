@@ -88,13 +88,12 @@ class KubernetesMCPTool(BaseMCPTool):
         logger.info("K8s get pod logs: %s/%s (tail=%d)", namespace, name, tail)
         return await self._call_tool("pods_log", params)
 
-    async def list_events(self, namespace: str = "") -> dict[str, Any]:
-        """Kubernetesイベント一覧を取得."""
-        params: dict[str, Any] = {}
-        if namespace:
-            params["namespace"] = namespace
-        logger.info("K8s list events: namespace=%s", namespace or "(all)")
-        return await self._call_tool("events_list", params)
+    async def list_events(self, namespace: str) -> dict[str, Any]:
+        """指定 namespace の Kubernetes イベント一覧を取得."""
+        if not namespace:
+            raise ValueError("namespace is required for list_events to avoid oversized responses")
+        logger.info("K8s list events: namespace=%s", namespace)
+        return await self._call_tool("events_list", {"namespace": namespace})
 
     async def list_namespaces(self) -> dict[str, Any]:
         """Namespace一覧を取得."""
@@ -106,13 +105,12 @@ class KubernetesMCPTool(BaseMCPTool):
         logger.info("K8s get nodes top")
         return await self._call_tool("nodes_top", {})
 
-    async def get_pods_top(self, namespace: str = "") -> dict[str, Any]:
-        """Podリソース使用状況を取得."""
-        params: dict[str, Any] = {}
-        if namespace:
-            params["namespace"] = namespace
-        logger.info("K8s get pods top: namespace=%s", namespace or "(all)")
-        return await self._call_tool("pods_top", params)
+    async def get_pods_top(self, namespace: str) -> dict[str, Any]:
+        """指定 namespace の Pod リソース使用状況を取得."""
+        if not namespace:
+            raise ValueError("namespace is required for get_pods_top to avoid oversized responses")
+        logger.info("K8s get pods top: namespace=%s", namespace)
+        return await self._call_tool("pods_top", {"namespace": namespace})
 
     async def get_resource(
         self,
@@ -137,7 +135,9 @@ class KubernetesMCPTool(BaseMCPTool):
             logger.info("K8s get resource: %s/%s %s/%s", resolved_api_version, kind, namespace or "(cluster)", name)
             return await self._call_tool("resources_get", params)
         else:
-            logger.info("K8s list resources: %s/%s namespace=%s", resolved_api_version, kind, namespace or "(all)")
+            if not namespace:
+                raise ValueError(f"namespace is required when listing {kind} resources to avoid oversized responses")
+            logger.info("K8s list resources: %s/%s namespace=%s", resolved_api_version, kind, namespace)
             return await self._call_tool("resources_list", params)
 
 
@@ -175,13 +175,11 @@ def create_kubernetes_tools(
         return await k8s.get_pod_logs(name, namespace, container, tail)
 
     @tool
-    async def k8s_list_events(namespace: str = "") -> dict[str, Any]:
+    async def k8s_list_events(namespace: str) -> dict[str, Any]:
         """指定namespaceのKubernetesイベント一覧を取得します。Warning/Errorイベントの確認に使用します。
 
-        重要: namespaceを必ず指定してください。未指定だと全namespaceのイベントを返し、
-        レスポンスが巨大になりSSE接続が切断される可能性があります。
-        クラスタ全体を調査する場合は、k8s_list_namespacesで一覧取得後、
-        各namespaceごとにこのツールを呼び出してください。
+        namespaceは必須です。クラスタ全体を調査する場合は、
+        k8s_list_namespacesで一覧取得後、各namespaceごとにこのツールを呼び出してください。
         """
         return await k8s.list_events(namespace)
 
@@ -191,11 +189,11 @@ def create_kubernetes_tools(
         return await k8s.list_namespaces()
 
     @tool
-    async def k8s_get_pods_top(namespace: str = "") -> dict[str, Any]:
+    async def k8s_get_pods_top(namespace: str) -> dict[str, Any]:
         """指定namespaceの各PodのCPU/メモリ使用状況を取得します。
 
-        namespaceを指定することを推奨します。未指定だと全namespaceのPodを返し、
-        レスポンスが巨大になる可能性があります。
+        namespaceは必須です。クラスタ全体を調査する場合は、
+        k8s_list_namespacesで一覧取得後、各namespaceごとにこのツールを呼び出してください。
         """
         return await k8s.get_pods_top(namespace)
 
@@ -209,7 +207,7 @@ def create_kubernetes_tools(
         """汎用Kubernetesリソースを取得します。
 
         kindにDeployment,Service,PVC,NetworkPolicy等を指定します。
-        nameを省略するとリスト取得になります。
+        nameを省略するとリスト取得になります（その場合namespaceは必須）。
         api_versionは自動推定されますが、明示指定も可能です
         (例: apps/v1, networking.k8s.io/v1)。
         """

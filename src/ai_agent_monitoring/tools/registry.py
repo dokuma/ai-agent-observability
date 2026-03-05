@@ -134,7 +134,7 @@ class ToolRegistry:
 
             results[conn.name] = conn.healthy
             if conn.healthy:
-                logger.info("MCP Server '%s' is healthy (url=%s)", conn.name, url)
+                logger.debug("MCP Server '%s' is healthy (url=%s)", conn.name, url)
             else:
                 logger.warning("MCP Server '%s' is unreachable (url=%s)", conn.name, url)
 

@@ -78,6 +78,7 @@ class InvestigationRecord:
     trigger_type: str
     iteration_count: int = 0
     current_stage: str = ""  # 現在のステージ（例: "環境発見中", "メトリクス調査中"）
+    stage_detail: str = ""  # ステージ内の詳細（例: "ReAct step 2: grafana_query_prometheus を実行中"）
     created_at: datetime = field(default_factory=datetime.now)
     completed_at: datetime | None = None
     error: str = ""
@@ -110,13 +111,13 @@ class AppState:
         # MCP クライアント
         self.registry = ToolRegistry.from_settings(self.settings)
         health = await self.registry.health_check()
-        logger.info("MCP health check: %s", health)
+        logger.debug("MCP health check: %s", health)
 
         # MCP プロトコルレベルのトランスポート自動検出
         # HTTP ヘルスチェック通過後に実際の MCP 接続を試行し、
         # SSE/Streamable HTTP の互換性問題を自動的に解決する
         transports = await self.registry.auto_detect_transports()
-        logger.info("MCP transport detection: %s", transports)
+        logger.debug("MCP transport detection: %s", transports)
 
         # LLM
         # カスタムヘッダーは event hook で上書き適用する。
@@ -273,14 +274,21 @@ class AppState:
             record.current_stage = "ユーザ入力を待機中"
             logger.info("Investigation %s waiting for input: %s", inv_id, pending_input.get("type"))
 
-    def update_investigation_stage(self, inv_id: str, stage: str, iteration_count: int | None = None) -> None:
+    def update_investigation_stage(
+        self,
+        inv_id: str,
+        stage: str,
+        iteration_count: int | None = None,
+        detail: str = "",
+    ) -> None:
         """調査の現在ステージを更新."""
         record = self.investigations.get(inv_id)
         if record:
             record.current_stage = stage
+            record.stage_detail = detail
             if iteration_count is not None:
                 record.iteration_count = iteration_count
-            logger.debug("Investigation %s: stage=%s", inv_id, stage)
+            logger.debug("Investigation %s: stage=%s detail=%s", inv_id, stage, detail)
 
 
 # シングルトンインスタンス

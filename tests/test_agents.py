@@ -626,7 +626,7 @@ class TestOrchestratorStageUpdate:
 
         agent._update_stage(state, "テストステージ")
 
-        callback.assert_called_once_with("test-inv-123", "テストステージ", 2)
+        callback.assert_called_once_with("test-inv-123", "テストステージ", 2, "")
 
     def test_update_stage_no_callback(self):
         """コールバックが未設定の場合は何もしない."""
@@ -677,9 +677,13 @@ class TestOrchestratorStageUpdate:
             stage_update_callback=callback,
         )
 
-        # モックのサブグラフ
+        # モックのサブグラフ（astream を使うため AsyncIterator を返す）
         mock_subgraph = MagicMock()
-        mock_subgraph.ainvoke = AsyncMock(return_value={"test_result": "ok"})
+
+        async def mock_astream(*args, **kwargs):
+            yield {"test_result": "ok"}
+
+        mock_subgraph.astream = mock_astream
 
         wrapped = agent._wrap_with_stage(mock_subgraph, "ラップテスト")
 
@@ -692,10 +696,11 @@ class TestOrchestratorStageUpdate:
         config: dict[str, Any] = {"callbacks": []}
         result = await wrapped(state, config)
 
-        # コールバックが呼ばれた
-        callback.assert_called_once_with("test-inv-456", "ラップテスト", 0)
-        # サブグラフが実行された（config伝播あり）
-        mock_subgraph.ainvoke.assert_called_once_with(state, config=config)
+        # コールバックが呼ばれた（開始 + ストリームチャンク分）
+        assert callback.call_count >= 1
+        # 最初の呼び出しは "開始"
+        first_call = callback.call_args_list[0]
+        assert first_call.args == ("test-inv-456", "ラップテスト", 0, "開始")
         # 結果が返された
         assert result == {"test_result": "ok"}
 
@@ -708,17 +713,19 @@ class TestOrchestratorStageUpdate:
 
         agent = OrchestratorAgent(llm=llm, registry=registry)
 
-        # サブグラフが全ステートキーを返すケースをシミュレート
+        # サブグラフが全ステートキーを返すケースをシミュレート（astream）
         mock_subgraph = MagicMock()
-        mock_subgraph.ainvoke = AsyncMock(
-            return_value={
+
+        async def mock_astream(*args, **kwargs):
+            yield {
                 "messages": [HumanMessage(content="test")],
                 "metrics_results": [{"summary": "ok"}],
                 "investigation_id": "inv-123",
                 "trigger_type": "alert",
                 "plan": {"promql_queries": []},
             }
-        )
+
+        mock_subgraph.astream = mock_astream
 
         output_keys = frozenset({"messages", "metrics_results"})
         wrapped = agent._wrap_with_stage(mock_subgraph, "テスト", output_keys=output_keys)
@@ -744,13 +751,15 @@ class TestOrchestratorStageUpdate:
         agent = OrchestratorAgent(llm=llm, registry=registry)
 
         mock_subgraph = MagicMock()
-        mock_subgraph.ainvoke = AsyncMock(
-            return_value={
+
+        async def mock_astream(*args, **kwargs):
+            yield {
                 "messages": [],
                 "rca_report": {"summary": "root cause"},
                 "investigation_id": "inv-123",
             }
-        )
+
+        mock_subgraph.astream = mock_astream
 
         # output_keys=None（デフォルト）は全キーを返す
         wrapped = agent._wrap_with_stage(mock_subgraph, "RCAテスト")
@@ -787,7 +796,7 @@ class TestOrchestratorStageUpdate:
 
         await agent._discover_environment(state)
 
-        callback.assert_called_with("test-inv-789", "環境情報を収集中", 0)
+        callback.assert_called_with("test-inv-789", "環境情報を収集中", 0, "")
 
 
 class TestOrchestratorEnvironmentDiscovery:

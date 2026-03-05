@@ -29,7 +29,7 @@ Open WebUI のサイドバーにカスタムモデルとして表示され、チ
 """
 title: AI Agent Monitoring
 description: システム監視 AI Agent にクエリを送信し RCA レポートを取得する
-version: 0.6.0
+version: 0.7.0
 
 Note:
     - Open WebUI v0.6.43+ では AsyncGenerator を返すとUIがスタックする
@@ -253,6 +253,13 @@ class Pipe:
         data = res.json()
         inv_id = data["investigation_id"]
 
+        # report_search で即時完了した場合はポーリング不要
+        if data.get("status") == "completed" and data.get("report_search_answer"):
+            await self._emit_status(
+                __event_emitter__, "✅ 過去レポートから回答", done=True
+            )
+            return data["report_search_answer"]
+
         await self._emit_status(__event_emitter__, f"🔍 調査中... (ID: {inv_id})")
 
         # 2. 完了までポーリング
@@ -281,21 +288,25 @@ class Pipe:
             except Exception:
                 continue  # 一時的な通信エラーは無視
 
-            # ステージが変わったらステータスバーを更新
+            # ステージまたは詳細が変わったらステータスバーを更新
             current_stage = status.get("current_stage", "")
-            if current_stage and current_stage != last_stage:
+            stage_detail = status.get("stage_detail", "")
+            stage_key = f"{current_stage}|{stage_detail}"
+            if current_stage and stage_key != last_stage:
                 iteration = status.get("iteration_count", 0)
                 if iteration > 0:
                     status_msg = f"⏳ {current_stage} (イテレーション {iteration})"
                 else:
                     status_msg = f"⏳ {current_stage}"
+                if stage_detail:
+                    status_msg += f" — {stage_detail}"
                 # MCP 状態も表示（ポーリングレスポンスに含まれる場合）
                 mcp_st = status.get("mcp_status", {})
                 if mcp_st:
                     parts = [f"{'✅' if v else '❌'} {k}" for k, v in mcp_st.items()]
                     status_msg += f" | MCP: {' / '.join(parts)}"
                 await self._emit_status(emitter, status_msg)
-                last_stage = current_stage
+                last_stage = stage_key
 
             if status.get("status") == "completed":
                 await self._emit_status(
@@ -376,6 +387,10 @@ class Pipe:
         return "\n".join(lines)
 ```
 
+> **Note (v0.7.0)**:
+> - `stage_detail` 対応: ポーリング中にサブエージェント内のReActステップ（ツール名、推論/要約フェーズ）をリアルタイム表示
+> - `report_search` 即時完了対応: 過去レポートから回答可能な場合、ポーリングなしで即座に結果を返す
+>
 > **Note (v0.6.0)**:
 > - `waiting_for_input` (interrupt) 対応: Orchestrator がユーザ入力を要求した場合、チャットメッセージとして問い合わせを表示し、次の発話で自動再開
 > - 調査開始前に `GET /health` でMCPヘルスチェックを実行し、ステータスバーに表示（例: `MCP: ✅ prometheus / ❌ loki / ✅ grafana / ✅ kubernetes`）

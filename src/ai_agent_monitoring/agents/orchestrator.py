@@ -69,7 +69,8 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 # ステージ更新用コールバック型
-StageUpdateCallback = Callable[[str, str, int | None], None]
+# (inv_id, stage, iteration_count, detail)
+StageUpdateCallback = Callable[..., None]
 
 
 class OrchestratorAgent:
@@ -165,12 +166,12 @@ class OrchestratorAgent:
             for conn in [registry.prometheus, registry.loki, registry.grafana, registry.kubernetes]
         }
 
-    def _update_stage(self, state: AgentState, stage: str) -> None:
+    def _update_stage(self, state: AgentState, stage: str, detail: str = "") -> None:
         """調査ステージを更新."""
         inv_id = state.get("investigation_id", "")
         iteration = state.get("iteration_count", 0)
         if inv_id and self._stage_callback:
-            self._stage_callback(inv_id, stage, iteration)
+            self._stage_callback(inv_id, stage, iteration, detail)
 
     def _wrap_with_stage(
         self,
@@ -182,8 +183,8 @@ class OrchestratorAgent:
 
         サブグラフ（MetricsAgent, LogsAgent, RCAAgent）の実行前に
         ステージを更新するラッパー関数を返す。
-        LangGraphの config（LangfuseCallbackHandler含む）を
-        サブグラフに伝播させる。
+        astream を使用してサブグラフ内のノード実行をリアルタイムで
+        ステージ詳細に反映する。
 
         Args:
             subgraph: コンパイル済みサブグラフ
@@ -195,13 +196,49 @@ class OrchestratorAgent:
         """
 
         async def wrapped(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
-            self._update_stage(state, stage_name)
-            result: dict[str, Any] = await subgraph.ainvoke(cast(Any, state), config=config)
+            self._update_stage(state, stage_name, detail="開始")
+            result: dict[str, Any] = {}
+            step_count = 0
+            async for chunk in subgraph.astream(cast(Any, state), config=config):
+                result.update(chunk)
+                # chunk のキーはノード名
+                for node_name, node_output in chunk.items():
+                    step_count += 1
+                    detail = self._describe_step(node_name, node_output, step_count)
+                    self._update_stage(state, stage_name, detail=detail)
             if output_keys is not None:
                 return {k: v for k, v in result.items() if k in output_keys}
             return result
 
         return wrapped
+
+    @staticmethod
+    def _describe_step(node_name: str, node_output: Any, step_count: int) -> str:
+        """サブグラフのステップ詳細を生成."""
+        # ToolNode の出力からツール名を抽出
+        if node_name == "tools" and isinstance(node_output, dict):
+            messages = node_output.get("messages", [])
+            tool_names = []
+            for msg in messages:
+                if hasattr(msg, "name") and msg.name:
+                    tool_names.append(msg.name)
+            if tool_names:
+                return f"step {step_count}: ツール実行完了 ({', '.join(tool_names)})"
+        # reason ノード: LLMが次のアクションを判断
+        if node_name == "reason":
+            if isinstance(node_output, dict):
+                messages = node_output.get("messages", [])
+                # tool_calls があれば次に呼ぶツール名を表示
+                for msg in reversed(messages):
+                    if hasattr(msg, "tool_calls") and msg.tool_calls:
+                        pending = [tc.get("name", "") for tc in msg.tool_calls if tc.get("name")]
+                        if pending:
+                            return f"step {step_count}: ツール呼び出し予定 ({', '.join(pending)})"
+            return f"step {step_count}: LLM推論中"
+        if node_name == "summarize":
+            return f"step {step_count}: 結果を要約中"
+        # その他のノード
+        return f"step {step_count}: {node_name}"
 
     def _build_graph(self) -> StateGraph[AgentState]:
         """LangGraphワークフローを構築.

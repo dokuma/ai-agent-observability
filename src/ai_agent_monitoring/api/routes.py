@@ -171,6 +171,7 @@ async def get_investigation_status(investigation_id: str) -> InvestigationStatus
         trigger_type=record.trigger_type,
         iteration_count=record.iteration_count,
         current_stage=record.current_stage,
+        stage_detail=record.stage_detail,
         error=record.error,
         created_at=record.created_at,
         completed_at=record.completed_at,
@@ -269,7 +270,7 @@ async def _refresh_orchestrator_health(inv_id: str) -> dict[str, bool]:
 
         mcp_status = await registry.health_check()
         orchestrator.refresh_health(registry)
-        logger.info("MCP health refreshed before investigation %s: %s", inv_id, mcp_status)
+        logger.debug("MCP health refreshed before investigation %s: %s", inv_id, mcp_status)
 
         record = app_state.get_investigation(inv_id)
         if record:

@@ -418,7 +418,7 @@ class MCPClient:
                         self.base_url,
                     )
                 else:
-                    logger.info("Transport verified: %s (url=%s)", transport, self.base_url)
+                    logger.debug("Transport verified: %s (url=%s)", transport, self.base_url)
                 return transport
             except (MCPConnectionError, MCPTimeoutError) as e:
                 logger.warning("Transport '%s' failed for %s: %s", transport, self.base_url, e)
