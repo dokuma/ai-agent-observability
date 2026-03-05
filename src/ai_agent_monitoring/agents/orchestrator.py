@@ -1631,7 +1631,12 @@ class OrchestratorAgent:
         """
         try:
             json_str = self._extract_json(content)
-            data = json.loads(json_str)
+            try:
+                data = json.loads(json_str)
+            except json.JSONDecodeError:
+                repaired = self._repair_truncated_json(json_str)
+                data = json.loads(repaired)
+                logger.info("切り詰められたJSONを修復してパースしました")
 
             if not isinstance(data, dict):
                 raise ValueError(f"Expected dict, got {type(data).__name__}")
@@ -1734,32 +1739,89 @@ class OrchestratorAgent:
         """テキストからJSON部分を抽出."""
         # ```json ... ``` 形式を優先
         if "```json" in text:
+            start = text.index("```json") + 7
             try:
-                start = text.index("```json") + 7
                 end = text.index("```", start)
                 return text[start:end].strip()
             except ValueError:
-                pass  # フォールバックへ
+                # 閉じ ``` がない（出力切り詰め）→ 残り全体を返す
+                return text[start:].strip()
 
         # ``` ... ``` 形式（言語指定なし）
         if "```" in text:
+            start = text.index("```") + 3
+            # 改行をスキップ
+            while start < len(text) and text[start] in "\n\r":
+                start += 1
             try:
-                start = text.index("```") + 3
-                # 改行をスキップ
-                while start < len(text) and text[start] in "\n\r":
-                    start += 1
                 end = text.index("```", start)
                 candidate = text[start:end].strip()
-                if candidate.startswith("{"):
-                    return candidate
             except ValueError:
-                pass
+                candidate = text[start:].strip()
+            if candidate.startswith("{"):
+                return candidate
 
         # 生の{...}を探す
-        if "{" in text and "}" in text:
+        if "{" in text:
             start = text.index("{")
-            end = text.rindex("}") + 1
-            return text[start:end]
+            if "}" in text:
+                end = text.rindex("}") + 1
+                return text[start:end]
+            # 閉じブラケットがない（切り詰め）→ { 以降を返して修復に委ねる
+            return text[start:]
 
         # JSONが見つからない
         raise ValueError(f"No JSON found in text: {text[:200]}...")
+
+    @staticmethod
+    def _repair_truncated_json(text: str) -> str:
+        """LLM出力が途中で切れた不完全なJSONを修復する.
+
+        PromQLクエリ等の長い文字列を含むJSONをLLMが生成する際、
+        max_tokens に達して出力が切り詰められることがある。
+        未閉じの文字列・配列・オブジェクトを閉じて有効なJSONにする。
+        """
+        in_string = False
+        escape_next = False
+        stack: list[str] = []  # '{' or '['
+
+        for ch in text:
+            if escape_next:
+                escape_next = False
+                continue
+            if ch == "\\":
+                if in_string:
+                    escape_next = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch in ("{", "["):
+                stack.append(ch)
+            elif ch == "}" and stack and stack[-1] == "{":
+                stack.pop()
+            elif ch == "]" and stack and stack[-1] == "[":
+                stack.pop()
+
+        suffix = ""
+        if in_string:
+            suffix += '"'
+        for bracket in reversed(stack):
+            suffix += "]" if bracket == "[" else "}"
+
+        if not suffix:
+            return text
+
+        # 末尾の不完全なトークン（途切れた key/value）を除去してから閉じる
+        trimmed = text.rstrip()
+        # 末尾が , : または未完了の文字列値の場合、最後の完全な要素まで戻す
+        while trimmed and trimmed[-1] in (",", ":", " ", "\n", "\r", "\t"):
+            trimmed = trimmed[:-1]
+        # 未閉じ文字列を閉じた上で残りのブラケットを閉じる
+        if in_string:
+            trimmed += '"'
+        for bracket in reversed(stack):
+            trimmed += "]" if bracket == "[" else "}"
+        return trimmed

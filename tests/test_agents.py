@@ -284,6 +284,42 @@ class TestOrchestratorExtractJson:
             OrchestratorAgent._extract_json("no json here")
 
 
+class TestOrchestratorRepairTruncatedJson:
+    """_repair_truncated_json のテスト."""
+
+    def test_valid_json_unchanged(self):
+        text = '{"promql_queries": ["up"]}'
+        assert OrchestratorAgent._repair_truncated_json(text) == text
+
+    def test_truncated_string_value(self):
+        text = '{"promql_queries": ["kube_pod_container_status_terminated_reason{reason=\\"OOMKill'
+        result = OrchestratorAgent._repair_truncated_json(text)
+        data = json.loads(result)
+        assert "promql_queries" in data
+        assert len(data["promql_queries"]) == 1
+
+    def test_truncated_array(self):
+        text = '{"promql_queries": ["up", "rate(cpu[5m])"'
+        result = OrchestratorAgent._repair_truncated_json(text)
+        data = json.loads(result)
+        assert data["promql_queries"] == ["up", "rate(cpu[5m])"]
+
+    def test_truncated_after_comma(self):
+        text = '{"promql_queries": ["up"],'
+        result = OrchestratorAgent._repair_truncated_json(text)
+        data = json.loads(result)
+        assert data["promql_queries"] == ["up"]
+
+    def test_parse_plan_truncated_json(self):
+        agent, _ = _make_orchestrator()
+        content = (
+            '```json\n{"promql_queries": ["up", '
+            '"sum by (namespace) (kube_pod_container_status_terminated_reason{reason=\\"OOMKill'
+        )
+        plan = agent._parse_plan(content)
+        assert len(plan.promql_queries) >= 1
+
+
 class TestOrchestratorResolveTimeRange:
     """_resolve_time_range_node の時間範囲解決ロジックテスト."""
 
