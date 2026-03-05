@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from ai_agent_monitoring.api.dependencies import app_state
 from ai_agent_monitoring.api.main import app
+from ai_agent_monitoring.api.schemas import ReportSearchResponse
 from ai_agent_monitoring.core.models import RCAReport, RootCause, TriggerType
 
 
@@ -336,3 +337,65 @@ class TestUserInput:
         assert data["status"] == "waiting_for_input"
         assert data["pending_input"] is not None
         assert data["pending_input"]["type"] == "datasource_selection"
+
+
+class TestReportEndpoints:
+    """RCAレポート検索・一覧エンドポイントのテスト."""
+
+    def test_reports_list_not_initialized(self, client):
+        app_state.report_store = None
+        response = client.get("/api/v1/reports")
+        assert response.status_code == 503
+
+    def test_reports_list_empty(self, client):
+        mock_store = MagicMock()
+        mock_store.list_reports.return_value = ([], 0)
+        app_state.report_store = mock_store
+
+        response = client.get("/api/v1/reports")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 0
+        assert data["reports"] == []
+
+    def test_reports_search_not_initialized(self, client):
+        app_state.report_search_agent = None
+        response = client.post(
+            "/api/v1/reports/search",
+            json={"query": "OOMKill"},
+        )
+        assert response.status_code == 503
+
+    def test_reports_search_valid(self, client):
+        mock_agent = MagicMock()
+        mock_agent.search_and_answer = AsyncMock(
+            return_value=ReportSearchResponse(
+                answer="テスト回答",
+                results=[],
+                total_reports=0,
+            )
+        )
+        app_state.report_search_agent = mock_agent
+
+        response = client.post(
+            "/api/v1/reports/search",
+            json={"query": "OOMKillの原因"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["answer"] == "テスト回答"
+
+    def test_reports_get_not_found(self, client):
+        mock_store = MagicMock()
+        mock_store.get_report.return_value = None
+        app_state.report_store = mock_store
+
+        response = client.get("/api/v1/reports/nonexistent")
+        assert response.status_code == 404
+
+    def test_reports_search_empty_query(self, client):
+        response = client.post(
+            "/api/v1/reports/search",
+            json={"query": ""},
+        )
+        assert response.status_code == 422

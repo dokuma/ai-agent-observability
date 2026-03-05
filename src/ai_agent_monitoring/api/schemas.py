@@ -101,3 +101,43 @@ class HealthResponse(BaseModel):
     status: str  # "healthy" | "degraded" | "unhealthy"
     mcp_servers: dict[str, bool] = Field(default_factory=dict)
     version: str = "0.1.0"
+
+
+# ---- RCAレポート検索 ----
+
+
+class ReportSearchRequest(BaseModel):
+    """RCAレポート検索リクエスト."""
+
+    query: str = Field(..., min_length=1, max_length=10000)
+    top_k: int = Field(default=5, ge=1, le=50)
+
+
+class ReportSearchResult(BaseModel):
+    """RCAレポート検索結果の個別エントリ."""
+
+    report_id: str
+    investigation_id: str
+    score: float
+    trigger_type: str
+    alert_name: str | None = None
+    root_causes_summary: str
+    created_at: datetime
+    highlights: list[str] = Field(default_factory=list)
+
+
+class ReportSearchResponse(BaseModel):
+    """RCAレポート検索レスポンス."""
+
+    answer: str
+    results: list[ReportSearchResult]
+    total_reports: int
+
+
+class ReportListResponse(BaseModel):
+    """RCAレポート一覧レスポンス."""
+
+    reports: list[dict[str, Any]]
+    total: int
+    offset: int
+    limit: int

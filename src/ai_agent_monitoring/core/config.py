@@ -74,6 +74,9 @@ class Settings(BaseSettings):
     # Datasource preferences
     datasource_preferences_path: str = "data/datasource_preferences.json"
 
+    # Report Store
+    report_store_path: str = "data/rca_reports.db"
+
     # CORS
     cors_allowed_origins: list[str] = ["http://localhost:3000"]
 

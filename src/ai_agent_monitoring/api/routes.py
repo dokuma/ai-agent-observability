@@ -15,6 +15,9 @@ from ai_agent_monitoring.api.schemas import (
     HealthResponse,
     InvestigationStatus,
     RCAReportResponse,
+    ReportListResponse,
+    ReportSearchRequest,
+    ReportSearchResponse,
     UserInputRequest,
     UserQueryRequest,
     UserQueryResponse,
@@ -413,3 +416,39 @@ async def _resume_investigation(
     except Exception as e:
         logger.exception("Investigation failed after resume: %s", inv_id)
         app_state.fail_investigation(inv_id, str(e))
+
+
+# ---- RCAレポート検索・一覧 ----
+
+
+@router.post("/reports/search", response_model=ReportSearchResponse)
+async def search_reports(request: ReportSearchRequest) -> ReportSearchResponse:
+    """過去のRCAレポートを自然言語で検索し、LLMが要約回答を生成."""
+    if not app_state.report_search_agent:
+        raise HTTPException(status_code=503, detail="Report search agent not initialized")
+    return await app_state.report_search_agent.search_and_answer(query=request.query, top_k=request.top_k)
+
+
+@router.get("/reports", response_model=ReportListResponse)
+async def list_reports(offset: int = 0, limit: int = 20) -> ReportListResponse:
+    """保存済みRCAレポートの一覧を取得（ページング対応）."""
+    if not app_state.report_store:
+        raise HTTPException(status_code=503, detail="Report store not initialized")
+    reports, total = app_state.report_store.list_reports(offset=offset, limit=limit)
+    return ReportListResponse(
+        reports=[r.model_dump(mode="json") for r in reports],
+        total=total,
+        offset=offset,
+        limit=limit,
+    )
+
+
+@router.get("/reports/{report_id}")
+async def get_report(report_id: str) -> dict[str, Any]:
+    """個別のRCAレポートを取得."""
+    if not app_state.report_store:
+        raise HTTPException(status_code=503, detail="Report store not initialized")
+    report = app_state.report_store.get_report(report_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+    return report.model_dump(mode="json")

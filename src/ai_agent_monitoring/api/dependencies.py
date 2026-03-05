@@ -14,10 +14,12 @@ from langgraph.checkpoint.memory import MemorySaver
 from pydantic import SecretStr
 
 from ai_agent_monitoring.agents.orchestrator import OrchestratorAgent
+from ai_agent_monitoring.agents.report_search_agent import ReportSearchAgent
 from ai_agent_monitoring.core.config import Settings
 from ai_agent_monitoring.core.datasource import DatasourcePreferenceStore
 from ai_agent_monitoring.core.llm_retry import RateLimitRetryWrapper
 from ai_agent_monitoring.core.models import RCAReport
+from ai_agent_monitoring.core.report_store import ReportStore
 from ai_agent_monitoring.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -100,6 +102,8 @@ class AppState:
         self.investigations: dict[str, InvestigationRecord] = {}
         self.checkpointer = MemorySaver()
         self.ds_preference_store: DatasourcePreferenceStore | None = None
+        self.report_store: ReportStore | None = None
+        self.report_search_agent: ReportSearchAgent | None = None
 
     async def initialize(self) -> None:
         """アプリケーション起動時の初期化."""
@@ -194,6 +198,14 @@ class AppState:
         # データソースプリファレンスストア
         self.ds_preference_store = DatasourcePreferenceStore(Path(self.settings.datasource_preferences_path))
 
+        # レポートストア
+        self.report_store = ReportStore(db_path=self.settings.report_store_path)
+        self.report_store.initialize()
+        logger.info("ReportStore initialized (%d reports)", self.report_store.count())
+
+        # レポート検索エージェント
+        self.report_search_agent = ReportSearchAgent(llm=llm, report_store=self.report_store)
+
         # Orchestrator（registryを渡してhealthy状態を考慮）
         self.orchestrator = OrchestratorAgent(
             llm=llm,
@@ -229,6 +241,12 @@ class AppState:
             record.status = "completed"
             record.completed_at = datetime.now()
             record.rca_report = rca_report
+            if rca_report and self.report_store:
+                try:
+                    report_id = self.report_store.save_report(inv_id, rca_report)
+                    logger.info("RCA report saved: %s (investigation: %s)", report_id, inv_id)
+                except Exception:
+                    logger.exception("Failed to save RCA report for investigation %s", inv_id)
 
     def fail_investigation(self, inv_id: str, error: str) -> None:
         """調査を失敗としてマーク."""

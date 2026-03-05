@@ -142,3 +142,12 @@ class RCAReport(BaseModel):
     log_excerpts: list[LogExcerpt] = Field(default_factory=list)
     markdown: str = ""
     created_at: datetime = Field(default_factory=datetime.now)
+
+
+class StoredRCAReport(BaseModel):
+    """永続化されたRCAレポート."""
+
+    id: str
+    investigation_id: str
+    report: RCAReport
+    created_at: datetime
