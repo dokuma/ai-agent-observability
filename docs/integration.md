@@ -117,6 +117,23 @@ class Pipe:
             for i, opt in enumerate(options, 1):
                 name = opt.get("name", opt.get("uid", f"選択肢{i}"))
                 uid = opt.get("uid", "")
+                recommended = " ⭐" if opt.get("recommended") else ""
+                lines.append(f"  {i}. **{name}** (`{uid}`){recommended}")
+            lines.append("")
+            lines.append("番号または名前で回答してください。")
+            lines.append(f"\n{marker}")
+            return "\n".join(lines)
+        elif input_type == "datasource_retry":
+            # API失敗時のデータソース再選択
+            error = pending_input.get("error", "")
+            options = pending_input.get("options", [])
+            lines = [message, ""]
+            if error:
+                lines.append(f"> エラー: `{error}`")
+                lines.append("")
+            for i, opt in enumerate(options, 1):
+                name = opt.get("name", opt.get("uid", f"選択肢{i}"))
+                uid = opt.get("uid", "")
                 lines.append(f"  {i}. **{name}** (`{uid}`)")
             lines.append("")
             lines.append("番号または名前で回答してください。")

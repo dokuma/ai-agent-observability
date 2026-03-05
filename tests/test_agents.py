@@ -2050,8 +2050,8 @@ class TestDiscoverDatasources:
     """_discover_datasources のインテリジェント選択テスト."""
 
     @pytest.mark.asyncio
-    async def test_single_ds_auto_selected(self):
-        """単一データソースは自動選択される."""
+    async def test_single_ds_interrupts(self):
+        """単一データソースでもinterruptで確認を求める."""
         agent, _ = _make_orchestrator()
         grafana = AsyncMock()
         grafana.list_datasources = AsyncMock(
@@ -2071,16 +2071,18 @@ class TestDiscoverDatasources:
         )
 
         env = EnvironmentContext()
-        await agent._discover_datasources(grafana, env)
+        with patch("ai_agent_monitoring.agents.orchestrator.interrupt") as mock_interrupt:
+            mock_interrupt.return_value = "prom-1"
+            await agent._discover_datasources(grafana, env)
 
-        assert env.prometheus_datasource_uid == "prom-1"
-        assert env.loki_datasource_uid == "loki-1"
-        assert len(env.prometheus_datasources) == 1
-        assert len(env.loki_datasources) == 1
+            # prometheus(1件) + loki(1件) で2回呼ばれる
+            assert mock_interrupt.call_count == 2
+            assert env.prometheus_datasource_uid == "prom-1"
+            assert env.loki_datasource_uid == "loki-1"
 
     @pytest.mark.asyncio
-    async def test_multiple_ds_with_preference_auto_selected(self, tmp_path):
-        """複数DS + プリファレンスあり → 自動選択."""
+    async def test_multiple_ds_with_preference_interrupts_with_recommended(self, tmp_path):
+        """複数DS + プリファレンスあり → interruptでrecommendedフラグ付き."""
         agent, _ = _make_orchestrator()
         store = DatasourcePreferenceStore(tmp_path / "prefs.json")
         store.save("prometheus", "prom-2")
@@ -2105,14 +2107,20 @@ class TestDiscoverDatasources:
         )
 
         env = EnvironmentContext()
-        await agent._discover_datasources(grafana, env)
+        with patch("ai_agent_monitoring.agents.orchestrator.interrupt") as mock_interrupt:
+            mock_interrupt.return_value = "prom-2"
+            await agent._discover_datasources(grafana, env)
 
-        assert env.prometheus_datasource_uid == "prom-2"
-        assert env.loki_datasource_uid == "loki-1"
+            # prometheus interrupt の options を検証
+            prom_call = mock_interrupt.call_args_list[0][0][0]
+            assert prom_call["datasource_type"] == "prometheus"
+            options = prom_call["options"]
+            assert options[0]["recommended"] is False  # prom-1: not preferred
+            assert options[1]["recommended"] is True  # prom-2: preferred
 
     @pytest.mark.asyncio
-    async def test_multiple_ds_with_default_auto_selected(self):
-        """複数DS + isDefault → 自動選択."""
+    async def test_multiple_ds_with_default_interrupts_with_recommended(self):
+        """複数DS + isDefault → interruptでrecommendedフラグ付き."""
         agent, _ = _make_orchestrator()
 
         grafana = AsyncMock()
@@ -2133,9 +2141,15 @@ class TestDiscoverDatasources:
         )
 
         env = EnvironmentContext()
-        await agent._discover_datasources(grafana, env)
+        with patch("ai_agent_monitoring.agents.orchestrator.interrupt") as mock_interrupt:
+            mock_interrupt.return_value = "prom-2"
+            await agent._discover_datasources(grafana, env)
 
-        assert env.prometheus_datasource_uid == "prom-2"
+            mock_interrupt.assert_called_once()
+            call_args = mock_interrupt.call_args[0][0]
+            options = call_args["options"]
+            assert options[0]["recommended"] is False  # not default
+            assert options[1]["recommended"] is True  # isDefault
 
     @pytest.mark.asyncio
     async def test_multiple_ds_no_preference_no_default_interrupts(self):
@@ -2169,6 +2183,79 @@ class TestDiscoverDatasources:
             assert call_args["type"] == "datasource_selection"
             assert call_args["datasource_type"] == "prometheus"
             assert len(call_args["options"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_ask_datasource_retry_on_prometheus_failure(self):
+        """Prometheus API失敗時に代替候補でinterrupt再選択."""
+        agent, _ = _make_orchestrator()
+
+        env = EnvironmentContext()
+        env.prometheus_datasource_uid = "prom-1"
+        env.prometheus_datasources = [
+            DatasourceInfo(uid="prom-1", name="Prometheus 1", type="prometheus"),
+            DatasourceInfo(uid="prom-2", name="Prometheus 2", type="prometheus"),
+        ]
+
+        grafana = AsyncMock()
+        call_count = 0
+
+        async def failing_then_succeeding(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 1:
+                raise RuntimeError("Connection refused")
+            return {"content": [{"type": "text", "text": "[]"}]}
+
+        grafana.list_prometheus_metric_names = AsyncMock(side_effect=failing_then_succeeding)
+        grafana.list_prometheus_label_names = AsyncMock(
+            return_value={"content": [{"type": "text", "text": "[]"}]},
+        )
+
+        with patch("ai_agent_monitoring.agents.orchestrator.interrupt") as mock_interrupt:
+            mock_interrupt.return_value = "prom-2"
+            await agent._discover_prometheus_info(grafana, env)
+
+            mock_interrupt.assert_called_once()
+            call_args = mock_interrupt.call_args[0][0]
+            assert call_args["type"] == "datasource_retry"
+            assert call_args["failed_uid"] == "prom-1"
+            assert len(call_args["options"]) == 1
+            assert call_args["options"][0]["uid"] == "prom-2"
+            assert env.prometheus_datasource_uid == "prom-2"
+
+    @pytest.mark.asyncio
+    async def test_ask_datasource_retry_on_loki_failure(self):
+        """Loki API失敗時に代替候補でinterrupt再選択."""
+        agent, _ = _make_orchestrator()
+
+        env = EnvironmentContext()
+        env.loki_datasource_uid = "loki-1"
+        env.loki_datasources = [
+            DatasourceInfo(uid="loki-1", name="Loki 1", type="loki"),
+            DatasourceInfo(uid="loki-2", name="Loki 2", type="loki"),
+        ]
+
+        grafana = AsyncMock()
+        call_count = 0
+
+        async def failing_then_succeeding(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 1:
+                raise RuntimeError("Connection refused")
+            return {"content": [{"type": "text", "text": "[]"}]}
+
+        grafana.list_loki_label_names = AsyncMock(side_effect=failing_then_succeeding)
+
+        with patch("ai_agent_monitoring.agents.orchestrator.interrupt") as mock_interrupt:
+            mock_interrupt.return_value = "loki-2"
+            await agent._discover_loki_info(grafana, env)
+
+            mock_interrupt.assert_called_once()
+            call_args = mock_interrupt.call_args[0][0]
+            assert call_args["type"] == "datasource_retry"
+            assert call_args["failed_uid"] == "loki-1"
+            assert env.loki_datasource_uid == "loki-2"
 
     def test_resolve_user_choice_uid(self):
         """UIDでの選択解決."""

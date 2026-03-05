@@ -24,7 +24,6 @@ from ai_agent_monitoring.core.datasource import (
     DatasourceInfo,
     DatasourcePreferenceStore,
     parse_datasource_list,
-    select_datasource,
 )
 from ai_agent_monitoring.core.models import TriggerType
 from ai_agent_monitoring.core.sanitizer import sanitize_user_input
@@ -562,40 +561,27 @@ class OrchestratorAgent:
         ds_type: str,
         candidates: list[DatasourceInfo],
     ) -> str:
-        """データソースを選択、または判断不可の場合はinterruptでユーザに問い合わせ."""
+        """データソース選択を必ずinterruptでユーザに問い合わせ."""
         if not candidates:
             return ""
 
-        if len(candidates) == 1:
-            logger.info("Auto-selected %s datasource: %s", ds_type, candidates[0].uid)
-            return candidates[0].uid
-
-        # 複数候補あり — プリファレンスまたはisDefaultで自動選択を試みる
+        # プリファレンスから推奨UIDを取得
         preferred_uid = ""
         if self.ds_preference_store:
             preferred_uid = self.ds_preference_store.get_preferred_uid(ds_type)
 
-        selected = select_datasource(candidates, preferred_uid)
-        if selected and (preferred_uid and selected.uid == preferred_uid):
-            logger.info("Auto-selected %s datasource from preference: %s", ds_type, selected.uid)
-            return selected.uid
-
-        if selected and selected.is_default:
-            logger.info("Auto-selected %s datasource (isDefault): %s", ds_type, selected.uid)
-            return selected.uid
-
-        # 判断不可 — interrupt でユーザに問い合わせ
-        logger.info("Multiple %s datasources found, requesting user selection", ds_type)
+        logger.info("Requesting user selection for %s datasource (%d candidates)", ds_type, len(candidates))
         user_choice = interrupt(
             {
                 "type": "datasource_selection",
                 "datasource_type": ds_type,
-                "message": f"複数の{ds_type}データソースが見つかりました。使用するデータソースを選択してください:",
+                "message": f"使用する{ds_type}データソースを選択してください:",
                 "options": [
                     {
                         "uid": ds.uid,
                         "name": ds.name,
                         "is_default": ds.is_default,
+                        "recommended": ds.uid == preferred_uid or ds.is_default,
                     }
                     for ds in candidates
                 ],
@@ -603,7 +589,6 @@ class OrchestratorAgent:
         )
 
         resolved_uid = self._resolve_user_choice(user_choice, candidates)
-        # プリファレンスに保存
         if self.ds_preference_store and resolved_uid:
             self.ds_preference_store.save(ds_type, resolved_uid)
         return resolved_uid
@@ -650,6 +635,67 @@ class OrchestratorAgent:
         logger.warning("Could not resolve user choice '%s', using first candidate", user_choice)
         return candidates[0].uid
 
+    def _ask_datasource_retry(
+        self,
+        ds_type: str,
+        failed_uid: str,
+        alt_candidates: list[DatasourceInfo],
+        error_message: str,
+    ) -> str:
+        """API失敗時に代替データソースをinterruptで問い合わせ."""
+        user_choice = interrupt(
+            {
+                "type": "datasource_retry",
+                "datasource_type": ds_type,
+                "failed_uid": failed_uid,
+                "error": error_message,
+                "message": (
+                    f"{ds_type}データソース(uid={failed_uid})へのリクエストが失敗しました。"
+                    "別のデータソースを選択してください:"
+                ),
+                "options": [{"uid": ds.uid, "name": ds.name, "is_default": ds.is_default} for ds in alt_candidates],
+            }
+        )
+        return self._resolve_user_choice(user_choice, alt_candidates)
+
+    async def _fetch_prometheus_info(
+        self,
+        grafana: GrafanaMCPTool,
+        env: EnvironmentContext,
+    ) -> None:
+        """指定UIDでPrometheusメトリクス・ラベル情報を取得."""
+        # メトリクス名一覧（上位100件）
+        metrics_result = await grafana.list_prometheus_metric_names(
+            env.prometheus_datasource_uid,
+            limit=100,
+        )
+        env.available_metrics = self._extract_list_from_result(metrics_result)
+        logger.info("Found %d Prometheus metrics", len(env.available_metrics))
+
+        # ラベル名一覧
+        labels_result = await grafana.list_prometheus_label_names(
+            env.prometheus_datasource_uid,
+        )
+        env.available_labels = self._extract_list_from_result(labels_result)
+
+        # jobラベルの値を取得
+        if "job" in env.available_labels:
+            jobs_result = await grafana.list_prometheus_label_values(
+                env.prometheus_datasource_uid,
+                "job",
+            )
+            env.available_jobs = self._extract_list_from_result(jobs_result)
+            logger.info("Found %d jobs: %s", len(env.available_jobs), env.available_jobs[:5])
+
+        # instanceラベルの値を取得
+        if "instance" in env.available_labels:
+            instances_result = await grafana.list_prometheus_label_values(
+                env.prometheus_datasource_uid,
+                "instance",
+            )
+            env.available_instances = self._extract_list_from_result(instances_result)
+            logger.info("Found %d instances", len(env.available_instances))
+
     async def _discover_prometheus_info(
         self,
         grafana: GrafanaMCPTool,
@@ -660,39 +706,40 @@ class OrchestratorAgent:
             return
 
         try:
-            # メトリクス名一覧（上位100件）
-            metrics_result = await grafana.list_prometheus_metric_names(
-                env.prometheus_datasource_uid,
-                limit=100,
-            )
-            env.available_metrics = self._extract_list_from_result(metrics_result)
-            logger.info("Found %d Prometheus metrics", len(env.available_metrics))
-
-            # ラベル名一覧
-            labels_result = await grafana.list_prometheus_label_names(
-                env.prometheus_datasource_uid,
-            )
-            env.available_labels = self._extract_list_from_result(labels_result)
-
-            # jobラベルの値を取得
-            if "job" in env.available_labels:
-                jobs_result = await grafana.list_prometheus_label_values(
-                    env.prometheus_datasource_uid,
-                    "job",
-                )
-                env.available_jobs = self._extract_list_from_result(jobs_result)
-                logger.info("Found %d jobs: %s", len(env.available_jobs), env.available_jobs[:5])
-
-            # instanceラベルの値を取得
-            if "instance" in env.available_labels:
-                instances_result = await grafana.list_prometheus_label_values(
-                    env.prometheus_datasource_uid,
-                    "instance",
-                )
-                env.available_instances = self._extract_list_from_result(instances_result)
-                logger.info("Found %d instances", len(env.available_instances))
+            await self._fetch_prometheus_info(grafana, env)
         except Exception as e:
-            logger.warning("Failed to get Prometheus info: %s: %s", type(e).__name__, e)
+            logger.warning("Failed to get Prometheus info with uid=%s: %s", env.prometheus_datasource_uid, e)
+            alt_candidates = [ds for ds in env.prometheus_datasources if ds.uid != env.prometheus_datasource_uid]
+            if alt_candidates:
+                new_uid = self._ask_datasource_retry(
+                    "prometheus",
+                    env.prometheus_datasource_uid,
+                    alt_candidates,
+                    str(e),
+                )
+                if new_uid:
+                    env.prometheus_datasource_uid = new_uid
+                    try:
+                        await self._fetch_prometheus_info(grafana, env)
+                    except Exception:
+                        logger.warning("Retry also failed for prometheus uid=%s", new_uid)
+
+    async def _fetch_loki_info(
+        self,
+        grafana: GrafanaMCPTool,
+        env: EnvironmentContext,
+    ) -> None:
+        """指定UIDでLokiラベル情報を取得."""
+        loki_labels_result = await grafana.list_loki_label_names(env.loki_datasource_uid)
+        env.loki_labels = self._extract_list_from_result(loki_labels_result)
+        logger.info("Found %d Loki labels", len(env.loki_labels))
+
+        if "job" in env.loki_labels:
+            loki_jobs_result = await grafana.list_loki_label_values(
+                env.loki_datasource_uid,
+                "job",
+            )
+            env.loki_jobs = self._extract_list_from_result(loki_jobs_result)
 
     async def _discover_loki_info(
         self,
@@ -704,18 +751,23 @@ class OrchestratorAgent:
             return
 
         try:
-            loki_labels_result = await grafana.list_loki_label_names(env.loki_datasource_uid)
-            env.loki_labels = self._extract_list_from_result(loki_labels_result)
-            logger.info("Found %d Loki labels", len(env.loki_labels))
-
-            if "job" in env.loki_labels:
-                loki_jobs_result = await grafana.list_loki_label_values(
-                    env.loki_datasource_uid,
-                    "job",
-                )
-                env.loki_jobs = self._extract_list_from_result(loki_jobs_result)
+            await self._fetch_loki_info(grafana, env)
         except Exception as e:
-            logger.warning("Failed to get Loki info: %s: %s", type(e).__name__, e)
+            logger.warning("Failed to get Loki info with uid=%s: %s", env.loki_datasource_uid, e)
+            alt_candidates = [ds for ds in env.loki_datasources if ds.uid != env.loki_datasource_uid]
+            if alt_candidates:
+                new_uid = self._ask_datasource_retry(
+                    "loki",
+                    env.loki_datasource_uid,
+                    alt_candidates,
+                    str(e),
+                )
+                if new_uid:
+                    env.loki_datasource_uid = new_uid
+                    try:
+                        await self._fetch_loki_info(grafana, env)
+                    except Exception:
+                        logger.warning("Retry also failed for loki uid=%s", new_uid)
 
     async def _discover_dashboards(
         self,
