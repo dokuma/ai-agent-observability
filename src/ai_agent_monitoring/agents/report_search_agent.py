@@ -19,10 +19,36 @@ class ReportSearchAgent:
         self._llm = llm
         self._report_store = report_store
 
+    async def _translate_query_to_keywords(self, query: str) -> str:
+        """ユーザクエリから英語検索キーワードを生成."""
+        messages = [
+            SystemMessage(
+                content=(
+                    "Convert this monitoring/infrastructure query to English search keywords. "
+                    "Include: metric names, error types, service names, resource types, symptoms. "
+                    "Output ONLY space-separated English keywords, no explanation."
+                )
+            ),
+            HumanMessage(content=query),
+        ]
+        try:
+            response = await self._llm.ainvoke(messages)
+            result: str = response.content.strip()
+            return result
+        except Exception:
+            logger.warning("Failed to translate query to English keywords")
+            return ""
+
     async def search_and_answer(self, query: str, top_k: int = 5) -> ReportSearchResponse:
         """クエリに基づいてレポートを検索し、LLMで回答を生成する."""
         total = self._report_store.count()
-        results = self._report_store.search(query, top_k=top_k)
+
+        en_query = await self._translate_query_to_keywords(query)
+        combined_query = f"{en_query} {query}".strip() if en_query else query
+        results = self._report_store.search(combined_query, top_k=top_k)
+
+        if not results and en_query:
+            results = self._report_store.search(query, top_k=top_k)
 
         if not results:
             return ReportSearchResponse(

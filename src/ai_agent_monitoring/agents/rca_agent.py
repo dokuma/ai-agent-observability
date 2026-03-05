@@ -263,6 +263,34 @@ class RCAAgent:
             )
         return excerpts
 
+    async def _generate_search_keywords(self, report: RCAReport) -> str:
+        """レポートから英語検索キーワードを生成."""
+        summary = (
+            f"Root causes: {'; '.join(rc.description for rc in report.root_causes[:5])}\n"
+            f"Metrics: {report.metrics_summary[:500]}\n"
+            f"Logs: {report.logs_summary[:500]}\n"
+            f"K8s: {report.k8s_summary[:500]}\n"
+            f"Recommendations: {'; '.join(report.recommendations[:5])}"
+        )
+        messages = [
+            SystemMessage(
+                content=(
+                    "Extract English search keywords from this RCA report summary. "
+                    "Include: metric names, error types, service names, resource types, "
+                    "symptoms, root cause categories. "
+                    "Output ONLY space-separated English keywords, no explanation."
+                )
+            ),
+            HumanMessage(content=summary),
+        ]
+        try:
+            response = await self.llm.ainvoke(messages)
+            result: str = response.content.strip()
+            return result
+        except Exception:
+            logger.warning("Failed to generate search keywords, using empty")
+            return ""
+
     async def _render_markdown(self, state: AgentState) -> dict[str, Any]:
         """RCAレポートをMarkdownにレンダリングし保存."""
         report = state.get("rca_report")
@@ -270,6 +298,7 @@ class RCAAgent:
             return {}
 
         report.markdown = render_rca_markdown(report)
+        report.search_keywords_en = await self._generate_search_keywords(report)
 
         # ファイルに保存
         self.output_dir.mkdir(parents=True, exist_ok=True)

@@ -145,6 +145,7 @@ class RCAReport(BaseModel):
     log_excerpts: list[LogExcerpt] = Field(default_factory=list)
     agent_tool_outputs: dict[str, list[str]] = Field(default_factory=dict)
     markdown: str = ""
+    search_keywords_en: str = ""
     created_at: datetime = Field(default_factory=datetime.now)
 
 

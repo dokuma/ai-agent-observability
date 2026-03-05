@@ -54,6 +54,8 @@ class ReportStore:
             for row in rows:
                 report_id, report_json = row
                 text = self._extract_searchable_text_from_json(report_json)
+                if not text.strip():
+                    logger.warning("Empty searchable text for report %s", report_id)
                 docs.append(Document(content=text, doc_id=report_id))
             self._index.add_documents(docs)
             logger.info("Loaded %d reports into BM25 index", len(docs))
@@ -114,12 +116,17 @@ class ReportStore:
             k8s_summary=report.k8s_summary,
             recommendations_text=recommendations_text,
             agent_tool_outputs_text=agent_tool_outputs_text,
+            search_keywords_en=report.search_keywords_en,
         )
+        tokens = self._tokenizer.tokenize(searchable_text)
+        logger.debug("Searchable text tokens: %d for report %s", len(tokens), report_id)
         self._index.add_documents([Document(content=searchable_text, doc_id=report_id)])
         logger.info("Saved report %s for investigation %s", report_id, investigation_id)
         return report_id
 
     def search(self, query: str, top_k: int = 5) -> list[tuple[StoredRCAReport, float, list[str]]]:
+        tokens = self._tokenizer.tokenize(query)
+        logger.debug("Search query tokens: %s", tokens)
         results = self._index.search(query, top_k=top_k)
         output: list[tuple[StoredRCAReport, float, list[str]]] = []
         for sr in results:
@@ -194,6 +201,7 @@ class ReportStore:
         k8s_summary: str,
         recommendations_text: str,
         agent_tool_outputs_text: str = "",
+        search_keywords_en: str = "",
     ) -> str:
         parts = [
             p
@@ -207,6 +215,7 @@ class ReportStore:
                 k8s_summary,
                 recommendations_text,
                 agent_tool_outputs_text,
+                search_keywords_en,
             ]
             if p
         ]
@@ -232,4 +241,5 @@ class ReportStore:
             k8s_summary=data.get("k8s_summary", ""),
             recommendations_text="\n".join(data.get("recommendations", [])),
             agent_tool_outputs_text=" ".join(tool_outputs_parts),
+            search_keywords_en=data.get("search_keywords_en", ""),
         )

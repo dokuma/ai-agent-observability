@@ -53,9 +53,12 @@ class TestReportSearchAgent:
     @pytest.fixture
     def mock_llm(self):
         llm = MagicMock()
-        response = MagicMock()
-        response.content = "テスト回答: CPUが高い原因はループ処理でした。"
-        llm.ainvoke = AsyncMock(return_value=response)
+        # ainvoke is called for both query translation and answer generation
+        translate_response = MagicMock()
+        translate_response.content = "high CPU cause loop"
+        answer_response = MagicMock()
+        answer_response.content = "テスト回答: CPUが高い原因はループ処理でした。"
+        llm.ainvoke = AsyncMock(side_effect=[translate_response, answer_response])
         return llm
 
     @pytest.fixture
@@ -81,7 +84,8 @@ class TestReportSearchAgent:
         assert result.results[0].alert_name == "HighCPU"
         assert result.total_reports == 5
 
-        mock_llm.ainvoke.assert_called_once()
+        # 1st call: query translation, 2nd call: answer generation
+        assert mock_llm.ainvoke.call_count == 2
 
     @pytest.mark.asyncio
     async def test_search_no_results(self, mock_llm, mock_store):
@@ -93,7 +97,8 @@ class TestReportSearchAgent:
         assert "見つかりませんでした" in result.answer
         assert result.results == []
         assert result.total_reports == 5
-        mock_llm.ainvoke.assert_not_called()
+        # Only query translation is called (1 time), answer generation is skipped
+        assert mock_llm.ainvoke.call_count == 1
 
     @pytest.mark.asyncio
     async def test_search_user_query_trigger(self, mock_llm, mock_store):
@@ -109,3 +114,43 @@ class TestReportSearchAgent:
 
         assert result.results[0].trigger_type == "user_query"
         assert result.results[0].alert_name is None
+
+    @pytest.mark.asyncio
+    async def test_translate_query_failure_falls_back(self, mock_store):
+        """クエリ変換が失敗した場合、元のクエリで検索する."""
+        llm = MagicMock()
+        # Translation fails, then answer generation succeeds
+        answer_response = MagicMock()
+        answer_response.content = "回答"
+        llm.ainvoke = AsyncMock(side_effect=[Exception("LLM error"), answer_response])
+
+        stored = _make_stored_report()
+        mock_store.search.return_value = [(stored, 1.0, [])]
+
+        agent = ReportSearchAgent(llm=llm, report_store=mock_store)
+        result = await agent.search_and_answer("CPUが高い")
+
+        # Translation failed, so search is called with the original query only
+        mock_store.search.assert_called_once_with("CPUが高い", top_k=5)
+        assert len(result.results) == 1
+
+    @pytest.mark.asyncio
+    async def test_fallback_search_on_empty_results(self, mock_store):
+        """英語変換+元クエリで0件→元クエリのみで再検索."""
+        llm = MagicMock()
+        translate_response = MagicMock()
+        translate_response.content = "cpu high"
+        answer_response = MagicMock()
+        answer_response.content = "回答"
+        llm.ainvoke = AsyncMock(side_effect=[translate_response, answer_response])
+
+        stored = _make_stored_report()
+        # First search (combined) returns empty, second (original) returns results
+        mock_store.search.side_effect = [[], [(stored, 1.0, [])]]
+        mock_store.count.return_value = 5
+
+        agent = ReportSearchAgent(llm=llm, report_store=mock_store)
+        result = await agent.search_and_answer("CPUが高い")
+
+        assert mock_store.search.call_count == 2
+        assert len(result.results) == 1

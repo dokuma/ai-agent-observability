@@ -170,6 +170,31 @@ class TestReportStoreSearch:
         results = store.search("memory", top_k=3)
         assert len(results) <= 3
 
+    def test_search_by_english_keywords(self, store):
+        """search_keywords_en を含むレポートが英語キーワードで検索できる."""
+        report = _make_alert_report(
+            search_keywords_en="high cpu usage pod memory OOMKill restart nginx",
+        )
+        store.save_report("inv-en-001", report)
+
+        results = store.search("cpu usage")
+        assert len(results) >= 1
+        found_report, score, _highlights = results[0]
+        assert found_report.investigation_id == "inv-en-001"
+        assert score > 0
+
+    def test_search_english_keywords_not_in_other_fields(self, store):
+        """search_keywords_en にのみ存在するキーワードで検索できる."""
+        report = _make_alert_report(
+            search_keywords_en="deadlock thread contention",
+        )
+        store.save_report("inv-en-002", report)
+
+        results = store.search("deadlock")
+        assert len(results) >= 1
+        found_report, _score, _highlights = results[0]
+        assert found_report.investigation_id == "inv-en-002"
+
 
 class TestReportStoreIndexRebuild:
     def test_rebuild_index_on_init(self, tmp_path):
