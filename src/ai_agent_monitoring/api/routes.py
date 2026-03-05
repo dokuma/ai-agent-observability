@@ -114,11 +114,7 @@ async def submit_query(
 ) -> UserQueryResponse:
     """ユーザの自然言語クエリを受け付け、レポート検索または新規調査にルーティング."""
     # 既存レポートがある場合、インテント分類を実行
-    if (
-        app_state.report_store
-        and app_state.report_store.count() > 0
-        and app_state.report_search_agent
-    ):
+    if app_state.report_store and app_state.report_store.count() > 0 and app_state.report_search_agent:
         intent = await _classify_query_intent(request.query)
         if intent == "search":
             logger.info("Query routed to report_search: %s", request.query[:100])
