@@ -1629,17 +1629,27 @@ class OrchestratorAgent:
         Raises:
             ValueError: 調査計画のパースに失敗した場合
         """
+        json_str = ""
         try:
             json_str = self._extract_json(content)
+            logger.debug(
+                "調査計画パース: extracted_json=%s",
+                json_str[:1000] if json_str else "(empty)",
+            )
             try:
                 data = json.loads(json_str)
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as jde:
+                logger.info(
+                    "JSON初回パース失敗、修復を試行: error=%s, json_preview=%s",
+                    jde,
+                    json_str[:500],
+                )
                 repaired = self._repair_truncated_json(json_str)
                 data = json.loads(repaired)
                 logger.info("切り詰められたJSONを修復してパースしました")
 
             if not isinstance(data, dict):
-                raise ValueError(f"Expected dict, got {type(data).__name__}")
+                raise ValueError(f"Expected dict, got {type(data).__name__}: {str(data)[:200]}")
 
             # ネストされた計画オブジェクトを探索
             data = self._unwrap_nested_plan(data)
@@ -1698,13 +1708,15 @@ class OrchestratorAgent:
                     else:
                         data["time_range"] = None
 
+            logger.debug("調査計画パース: normalized_data_keys=%s", list(data.keys()))
             return InvestigationPlan(**data)
         except (json.JSONDecodeError, ValueError, TypeError) as e:
-            # エラーの詳細をログ出力
             logger.error(
-                "調査計画のパースに失敗。error=%s, content_preview=%s",
+                "調査計画のパースに失敗。error_type=%s, error=%s, extracted_json=%s, llm_output=%s",
+                type(e).__name__,
                 e,
-                content[:500] if content else "(empty)",
+                json_str[:500] if json_str else "(no json extracted)",
+                content[:1000] if content else "(empty)",
             )
             raise ValueError(f"調査計画のパースに失敗しました: {e}") from e
 
@@ -1771,7 +1783,7 @@ class OrchestratorAgent:
             return text[start:]
 
         # JSONが見つからない
-        raise ValueError(f"No JSON found in text: {text[:200]}...")
+        raise ValueError(f"No JSON found in text (length={len(text)}): {text[:500]}")
 
     @staticmethod
     def _repair_truncated_json(text: str) -> str:
