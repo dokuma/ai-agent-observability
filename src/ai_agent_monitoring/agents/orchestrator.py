@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
-from langgraph.errors import GraphBubbleUp
 from langgraph.graph import END, StateGraph
 from langgraph.types import interrupt
 
@@ -501,65 +500,115 @@ class OrchestratorAgent:
         if env.investigation_keywords:
             logger.info("Investigation keywords: %s", env.investigation_keywords)
 
+        # Phase 1: MCP経由でデータソース一覧を取得
         try:
-            # セッションを再利用して複数のMCP呼び出しを効率化
             async with self.grafana_tool.session_context() as grafana:
                 await self._discover_datasources(grafana, env)
-                await self._discover_prometheus_info(grafana, env)
-                await self._discover_loki_info(grafana, env)
-                # キーワードを使ってダッシュボードを探索
-                await self._discover_dashboard_queries(grafana, env)
-        except GraphBubbleUp:
-            raise
         except Exception as e:
-            detail = str(e)
-            if isinstance(e, ExceptionGroup):
-                from ai_agent_monitoring.tools.base import _flatten_exception_group
+            self._log_discovery_error("datasource listing", e)
 
-                leaves = _flatten_exception_group(e)
-                detail = "; ".join(f"{type(exc).__name__}: {exc}" for exc in leaves)
-            logger.warning(
-                "Environment discovery failed: %s: %s",
-                type(e).__name__,
-                detail,
-            )
+        # Phase 2: interrupt でデータソース選択（セッション外で実行）
+        # GraphBubbleUp がセッション cleanup に巻き込まれないようにする
+        if env.prometheus_datasources:
+            env.prometheus_datasource_uid = self._select_or_ask("prometheus", env.prometheus_datasources)
+        if env.loki_datasources:
+            env.loki_datasource_uid = self._select_or_ask("loki", env.loki_datasources)
+
+        # Phase 3: 選択されたデータソースで詳細情報を取得（失敗時はリトライ）
+        try:
+            async with self.grafana_tool.session_context() as grafana:
+                # Prometheus
+                if env.prometheus_datasource_uid:
+                    try:
+                        await self._discover_prometheus_info(grafana, env)
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to get Prometheus info with uid=%s: %s",
+                            env.prometheus_datasource_uid,
+                            e,
+                        )
+                        env._prometheus_fetch_error = str(e)  # type: ignore[attr-defined]
+
+                # Loki
+                if env.loki_datasource_uid:
+                    try:
+                        await self._discover_loki_info(grafana, env)
+                    except Exception as e:
+                        logger.warning("Failed to get Loki info with uid=%s: %s", env.loki_datasource_uid, e)
+                        env._loki_fetch_error = str(e)  # type: ignore[attr-defined]
+
+                # ダッシュボード探索
+                await self._discover_dashboard_queries(grafana, env)
+        except Exception as e:
+            self._log_discovery_error("environment detail", e)
+
+        # Phase 4: フェッチ失敗したデータソースのリトライ（interrupt はセッション外）
+        for ds_type, uid_attr, ds_list_attr, fetch_fn, err_attr in [
+            (
+                "prometheus",
+                "prometheus_datasource_uid",
+                "prometheus_datasources",
+                self._discover_prometheus_info,
+                "_prometheus_fetch_error",
+            ),
+            ("loki", "loki_datasource_uid", "loki_datasources", self._discover_loki_info, "_loki_fetch_error"),
+        ]:
+            error_msg = getattr(env, err_attr, None)
+            if not error_msg:
+                continue
+            failed_uid = getattr(env, uid_attr)
+            alt_candidates = [ds for ds in getattr(env, ds_list_attr) if ds.uid != failed_uid]
+            if not alt_candidates:
+                continue
+            # interrupt でユーザに代替選択を要求（セッション外）
+            new_uid = self._ask_datasource_retry(ds_type, failed_uid, alt_candidates, error_msg)
+            if new_uid:
+                setattr(env, uid_attr, new_uid)
+                try:
+                    async with self.grafana_tool.session_context() as grafana:
+                        await fetch_fn(grafana, env)
+                except Exception:
+                    logger.warning("Retry also failed for %s uid=%s", ds_type, new_uid)
 
         return {"environment": env}
+
+    def _log_discovery_error(self, phase: str, exc: Exception) -> None:
+        """環境情報収集のエラーログ出力."""
+        detail = str(exc)
+        if isinstance(exc, ExceptionGroup):
+            from ai_agent_monitoring.tools.base import _flatten_exception_group
+
+            leaves = _flatten_exception_group(exc)
+            detail = "; ".join(f"{type(e).__name__}: {e}" for e in leaves)
+        logger.warning(
+            "Environment discovery (%s) failed: %s: %s",
+            phase,
+            type(exc).__name__,
+            detail,
+        )
 
     async def _discover_datasources(
         self,
         grafana: GrafanaMCPTool,
         env: EnvironmentContext,
     ) -> None:
-        """データソース一覧を取得し、インテリジェントに選択.
+        """データソース一覧を取得してEnvironmentContextに格納.
 
-        複数の同種データソースが存在する場合:
-        1. プリファレンスに一致するものを自動選択
-        2. isDefaultフラグを持つものを自動選択
-        3. 判断不可の場合はinterrupt()でユーザに問い合わせ
+        データソースの選択（interrupt）は呼び出し元で行う。
         """
-        try:
-            datasources_result = await grafana.list_datasources()
-            datasources = self._extract_content_text(datasources_result)
+        datasources_result = await grafana.list_datasources()
+        datasources = self._extract_content_text(datasources_result)
 
-            all_ds = parse_datasource_list(self._parse_datasources(datasources))
+        all_ds = parse_datasource_list(self._parse_datasources(datasources))
 
-            # タイプ別に分類
-            prometheus_candidates = [ds for ds in all_ds if ds.type == "prometheus"]
-            loki_candidates = [ds for ds in all_ds if ds.type == "loki"]
-
-            # 全候補をEnvironmentContextに保存（エラーリカバリ用）
-            env.prometheus_datasources = prometheus_candidates
-            env.loki_datasources = loki_candidates
-
-            # 各タイプの選択
-            env.prometheus_datasource_uid = self._select_or_ask("prometheus", prometheus_candidates)
-            env.loki_datasource_uid = self._select_or_ask("loki", loki_candidates)
-
-        except GraphBubbleUp:
-            raise
-        except Exception as e:
-            logger.warning("Failed to list datasources: %s: %s", type(e).__name__, e)
+        # タイプ別に分類
+        env.prometheus_datasources = [ds for ds in all_ds if ds.type == "prometheus"]
+        env.loki_datasources = [ds for ds in all_ds if ds.type == "loki"]
+        logger.info(
+            "Found %d prometheus, %d loki datasources",
+            len(env.prometheus_datasources),
+            len(env.loki_datasources),
+        )
 
     def _select_or_ask(
         self,
@@ -709,27 +758,7 @@ class OrchestratorAgent:
         """Prometheusメトリクス・ラベル情報を取得."""
         if not env.prometheus_datasource_uid:
             return
-
-        try:
-            await self._fetch_prometheus_info(grafana, env)
-        except GraphBubbleUp:
-            raise
-        except Exception as e:
-            logger.warning("Failed to get Prometheus info with uid=%s: %s", env.prometheus_datasource_uid, e)
-            alt_candidates = [ds for ds in env.prometheus_datasources if ds.uid != env.prometheus_datasource_uid]
-            if alt_candidates:
-                new_uid = self._ask_datasource_retry(
-                    "prometheus",
-                    env.prometheus_datasource_uid,
-                    alt_candidates,
-                    str(e),
-                )
-                if new_uid:
-                    env.prometheus_datasource_uid = new_uid
-                    try:
-                        await self._fetch_prometheus_info(grafana, env)
-                    except Exception:
-                        logger.warning("Retry also failed for prometheus uid=%s", new_uid)
+        await self._fetch_prometheus_info(grafana, env)
 
     async def _fetch_loki_info(
         self,
@@ -756,27 +785,7 @@ class OrchestratorAgent:
         """Lokiラベル情報を取得."""
         if not env.loki_datasource_uid:
             return
-
-        try:
-            await self._fetch_loki_info(grafana, env)
-        except GraphBubbleUp:
-            raise
-        except Exception as e:
-            logger.warning("Failed to get Loki info with uid=%s: %s", env.loki_datasource_uid, e)
-            alt_candidates = [ds for ds in env.loki_datasources if ds.uid != env.loki_datasource_uid]
-            if alt_candidates:
-                new_uid = self._ask_datasource_retry(
-                    "loki",
-                    env.loki_datasource_uid,
-                    alt_candidates,
-                    str(e),
-                )
-                if new_uid:
-                    env.loki_datasource_uid = new_uid
-                    try:
-                        await self._fetch_loki_info(grafana, env)
-                    except Exception:
-                        logger.warning("Retry also failed for loki uid=%s", new_uid)
+        await self._fetch_loki_info(grafana, env)
 
     async def _discover_dashboards(
         self,
