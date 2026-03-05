@@ -71,4 +71,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def _debug_root_request(request, call_next):  # type: ignore[no-untyped-def]
+    if request.url.path == "/":
+        logger.warning(
+            "DEBUG GET /: client=%s headers=%s",
+            request.client,
+            dict(request.headers),
+        )
+    return await call_next(request)
+
+
 app.include_router(router, prefix="/api/v1")
