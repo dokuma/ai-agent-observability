@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, cast
@@ -1907,7 +1908,8 @@ class OrchestratorAgent:
             suffix += "]" if bracket == "[" else "}"
 
         if not suffix:
-            return text
+            # 切り詰めはないが trailing comma がある場合に対応
+            return re.sub(r",\s*([}\]])", r"\1", text)
 
         # 末尾の不完全なトークン（途切れた key/value）を除去してから閉じる
         trimmed = text.rstrip()
@@ -1919,4 +1921,6 @@ class OrchestratorAgent:
             trimmed += '"'
         for bracket in reversed(stack):
             trimmed += "]" if bracket == "[" else "}"
+        # JSON本文中の trailing comma を除去
+        trimmed = re.sub(r",\s*([}\]])", r"\1", trimmed)
         return trimmed

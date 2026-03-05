@@ -30,10 +30,17 @@ class _HealthAccessFilter(logging.Filter):
     """uvicorn アクセスログから /health エンドポイントを除外."""
 
     def filter(self, record: logging.LogRecord) -> bool:
-        msg = record.getMessage()
-        return "/api/v1/health" not in msg
+        if record.name == "uvicorn.access":
+            msg = record.getMessage()
+            if "/api/v1/health" in msg:
+                return False
+            # OpenShift Route のヘルスチェック (GET /)
+            if '"GET / ' in msg:
+                return False
+        return True
 
 
+_handler.addFilter(_HealthAccessFilter())
 logging.getLogger("uvicorn.access").addFilter(_HealthAccessFilter())
 
 logger = logging.getLogger(__name__)
