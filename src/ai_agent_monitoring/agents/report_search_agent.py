@@ -38,13 +38,26 @@ class ReportSearchAgent:
             rca = report.report
             root_causes_summary = "; ".join(rc.description for rc in rca.root_causes[:3]) if rca.root_causes else "不明"
 
+            # agent_tool_outputs のコンテキスト（各ソース先頭500文字）
+            tool_output_context = ""
+            if rca.agent_tool_outputs:
+                tool_parts: list[str] = []
+                for source, outputs in rca.agent_tool_outputs.items():
+                    combined = " ".join(outputs)[:500]
+                    if combined:
+                        tool_parts.append(f"  {source}: {combined}")
+                if tool_parts:
+                    tool_output_context = "\nツール実行結果:\n" + "\n".join(tool_parts) + "\n"
+
             context_parts.append(
                 f"--- レポート {i} (ID: {report.id}, スコア: {score:.2f}) ---\n"
                 f"作成日時: {report.created_at.isoformat()}\n"
                 f"根本原因: {root_causes_summary}\n"
                 f"メトリクス: {rca.metrics_summary or 'なし'}\n"
                 f"ログ: {rca.logs_summary or 'なし'}\n"
+                f"K8s: {rca.k8s_summary or 'なし'}\n"
                 f"推奨事項: {'; '.join(rca.recommendations[:3]) if rca.recommendations else 'なし'}\n"
+                f"{tool_output_context}"
             )
 
             # Determine trigger info

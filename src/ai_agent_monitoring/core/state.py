@@ -54,6 +54,21 @@ def sanitize_tool_call_messages(messages: Sequence[BaseMessage]) -> list[BaseMes
     return result
 
 
+_TOOL_OUTPUT_MAX_CHARS = 2000
+_TOOL_OUTPUT_MAX_MESSAGES = 5
+
+
+def extract_tool_outputs(messages: Sequence[BaseMessage]) -> list[str]:
+    """ToolMessage からツール実行結果のテキストを抽出する.
+
+    最新 _TOOL_OUTPUT_MAX_MESSAGES 件に制限し、各メッセージは最大 _TOOL_OUTPUT_MAX_CHARS 文字。
+    """
+    tool_msgs = [m for m in messages if isinstance(m, ToolMessage)]
+    # 最新N件
+    recent = tool_msgs[-_TOOL_OUTPUT_MAX_MESSAGES:]
+    return [str(m.content)[:_TOOL_OUTPUT_MAX_CHARS] for m in recent]
+
+
 class TimeRange(BaseModel):
     """調査対象の時間範囲."""
 

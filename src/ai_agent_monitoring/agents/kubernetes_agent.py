@@ -9,7 +9,7 @@ from langgraph.prebuilt import ToolNode
 
 from ai_agent_monitoring.agents.prompts import KUBERNETES_AGENT_SYSTEM_PROMPT
 from ai_agent_monitoring.core.models import KubernetesResult
-from ai_agent_monitoring.core.state import AgentState, sanitize_tool_call_messages
+from ai_agent_monitoring.core.state import AgentState, extract_tool_outputs, sanitize_tool_call_messages
 from ai_agent_monitoring.tools.base import MCPClient
 from ai_agent_monitoring.tools.kubernetes import KubernetesMCPTool, create_kubernetes_tools
 
@@ -176,6 +176,7 @@ class KubernetesAgent:
 
         result = KubernetesResult(
             summary=response.content,
+            tool_outputs=extract_tool_outputs(state["messages"]),
         )
 
         return {

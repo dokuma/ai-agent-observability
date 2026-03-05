@@ -118,16 +118,27 @@ async def submit_query(
         intent = await _classify_query_intent(request.query)
         if intent == "search":
             logger.info("Query routed to report_search: %s", request.query[:100])
-            result = await app_state.report_search_agent.search_and_answer(
-                query=request.query,
-            )
-            return UserQueryResponse(
-                investigation_id="",
-                status="completed",
-                message=result.answer,
-                routed_to="report_search",
-                report_search_answer=result.answer,
-            )
+            inv_id = app_state.create_investigation("report_search")
+            app_state.update_investigation_stage(inv_id, "レポート検索中")
+            try:
+                result = await app_state.report_search_agent.search_and_answer(
+                    query=request.query,
+                )
+                record = app_state.get_investigation(inv_id)
+                if record:
+                    record.status = "completed"
+                    record.completed_at = datetime.now()
+                return UserQueryResponse(
+                    investigation_id=inv_id,
+                    status="completed",
+                    message=result.answer,
+                    routed_to="report_search",
+                    report_search_answer=result.answer,
+                )
+            except Exception:
+                logger.warning("Report search failed, falling back to investigation", exc_info=True)
+                app_state.fail_investigation(inv_id, "レポート検索に失敗")
+                # フォールバック: 新規調査として続行（下の処理へ）
 
     user_query = UserQuery(
         raw_input=request.query,
@@ -457,12 +468,12 @@ async def _classify_query_intent(query: str) -> str:
             SystemMessage(content=QUERY_INTENT_CLASSIFICATION_PROMPT),
             HumanMessage(content=query),
         ]
-        response = await llm.ainvoke(messages)
+        response = await asyncio.wait_for(llm.ainvoke(messages), timeout=30)
         intent = response.content.strip().lower()
         if "search" in intent:
             return "search"
         return "investigate"
-    except Exception:
+    except (TimeoutError, Exception):
         logger.warning("Intent classification failed, falling back to investigate", exc_info=True)
         return "investigate"
 

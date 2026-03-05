@@ -293,6 +293,18 @@ class RCAAgent:
             root_causes = [RootCause(description=content, confidence=0.5)]
             data = {}
 
+        # 各エージェントの tool_outputs を集約
+        agent_tool_outputs: dict[str, list[str]] = {}
+        for mr in state.get("metrics_results", []):
+            if mr.tool_outputs:
+                agent_tool_outputs.setdefault("metrics", []).extend(mr.tool_outputs)
+        for lr in state.get("logs_results", []):
+            if lr.tool_outputs:
+                agent_tool_outputs.setdefault("logs", []).extend(lr.tool_outputs)
+        for kr in state.get("k8s_results", []):
+            if kr.tool_outputs:
+                agent_tool_outputs.setdefault("k8s", []).extend(kr.tool_outputs)
+
         return RCAReport(
             trigger_type=state["trigger_type"],
             alert=state.get("alert"),
@@ -302,6 +314,7 @@ class RCAAgent:
             logs_summary=data.get("logs_summary", ""),
             k8s_summary=data.get("k8s_summary", ""),
             recommendations=data.get("recommendations", []),
+            agent_tool_outputs=agent_tool_outputs,
         )
 
     @staticmethod

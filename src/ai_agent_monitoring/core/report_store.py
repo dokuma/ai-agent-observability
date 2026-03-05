@@ -98,6 +98,12 @@ class ReportStore:
         finally:
             conn.close()
 
+        # agent_tool_outputs を結合（各ソースの先頭部分を含める）
+        tool_outputs_parts: list[str] = []
+        for outputs in report.agent_tool_outputs.values():
+            tool_outputs_parts.extend(outputs)
+        agent_tool_outputs_text = " ".join(tool_outputs_parts)
+
         searchable_text = self._build_searchable_text(
             alert_name=alert_name,
             alert_summary=alert_summary,
@@ -107,6 +113,7 @@ class ReportStore:
             logs_summary=report.logs_summary,
             k8s_summary=report.k8s_summary,
             recommendations_text=recommendations_text,
+            agent_tool_outputs_text=agent_tool_outputs_text,
         )
         self._index.add_documents([Document(content=searchable_text, doc_id=report_id)])
         logger.info("Saved report %s for investigation %s", report_id, investigation_id)
@@ -186,6 +193,7 @@ class ReportStore:
         logs_summary: str,
         k8s_summary: str,
         recommendations_text: str,
+        agent_tool_outputs_text: str = "",
     ) -> str:
         parts = [
             p
@@ -198,6 +206,7 @@ class ReportStore:
                 logs_summary,
                 k8s_summary,
                 recommendations_text,
+                agent_tool_outputs_text,
             ]
             if p
         ]
@@ -208,6 +217,11 @@ class ReportStore:
         alert = data.get("alert") or {}
         user_query = data.get("user_query") or {}
         root_causes = data.get("root_causes") or []
+        agent_tool_outputs = data.get("agent_tool_outputs") or {}
+        tool_outputs_parts: list[str] = []
+        for outputs in agent_tool_outputs.values():
+            if isinstance(outputs, list):
+                tool_outputs_parts.extend(outputs)
         return self._build_searchable_text(
             alert_name=alert.get("alert_name"),
             alert_summary=alert.get("summary"),
@@ -217,4 +231,5 @@ class ReportStore:
             logs_summary=data.get("logs_summary", ""),
             k8s_summary=data.get("k8s_summary", ""),
             recommendations_text="\n".join(data.get("recommendations", [])),
+            agent_tool_outputs_text=" ".join(tool_outputs_parts),
         )

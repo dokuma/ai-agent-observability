@@ -61,6 +61,7 @@ class MetricsResult(BaseModel):
     data_points: list[MetricDataPoint] = Field(default_factory=list)
     anomalies: list[str] = Field(default_factory=list)
     summary: str = ""
+    tool_outputs: list[str] = Field(default_factory=list)
 
 
 class LogEntry(BaseModel):
@@ -79,6 +80,7 @@ class LogsResult(BaseModel):
     entries: list[LogEntry] = Field(default_factory=list)
     error_patterns: list[str] = Field(default_factory=list)
     summary: str = ""
+    tool_outputs: list[str] = Field(default_factory=list)
 
 
 class KubernetesResourceState(BaseModel):
@@ -99,6 +101,7 @@ class KubernetesResult(BaseModel):
     events: list[str] = Field(default_factory=list)
     anomalies: list[str] = Field(default_factory=list)
     summary: str = ""
+    tool_outputs: list[str] = Field(default_factory=list)
 
 
 class RootCause(BaseModel):
@@ -140,6 +143,7 @@ class RCAReport(BaseModel):
     recommendations: list[str] = Field(default_factory=list)
     panel_snapshots: list[PanelSnapshot] = Field(default_factory=list)
     log_excerpts: list[LogExcerpt] = Field(default_factory=list)
+    agent_tool_outputs: dict[str, list[str]] = Field(default_factory=dict)
     markdown: str = ""
     created_at: datetime = Field(default_factory=datetime.now)
 

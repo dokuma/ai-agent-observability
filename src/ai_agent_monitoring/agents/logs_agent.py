@@ -9,7 +9,7 @@ from langgraph.prebuilt import ToolNode
 
 from ai_agent_monitoring.agents.prompts import LOGS_AGENT_SYSTEM_PROMPT
 from ai_agent_monitoring.core.models import LogsResult
-from ai_agent_monitoring.core.state import AgentState, sanitize_tool_call_messages
+from ai_agent_monitoring.core.state import AgentState, extract_tool_outputs, sanitize_tool_call_messages
 from ai_agent_monitoring.tools.base import MCPClient
 from ai_agent_monitoring.tools.grafana import create_grafana_tools
 from ai_agent_monitoring.tools.loki import create_loki_tools
@@ -159,6 +159,7 @@ class LogsAgent:
         result = LogsResult(
             query=", ".join(plan.logql_queries) if plan is not None else "",
             summary=response.content,
+            tool_outputs=extract_tool_outputs(state["messages"]),
         )
 
         return {
