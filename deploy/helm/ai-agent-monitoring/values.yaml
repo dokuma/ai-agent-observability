@@ -57,6 +57,13 @@ agent:
   #   - name: NO_PROXY
   #     value: "localhost,127.0.0.1,.svc.cluster.local"
   extraEnv: []
+  # 永続ボリューム（ReportStore DB, Datasource Preferences 等）
+  persistence:
+    enabled: true
+    # storageClass: ""  # 空の場合はデフォルトの StorageClass を使用
+    accessMode: ReadWriteOnce
+    size: 1Gi
+    mountPath: /app/data
   # MCP サーバーの起動完了を待つ initContainer（docker-compose の depends_on 相当）
   # Kubernetes では Pod の起動順序が保証されないため、Agent 起動前に
   # 各 MCP サーバーの readiness を確認する。

@@ -1,0 +1,17 @@
+{{- if .Values.agent.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "ai-agent-monitoring.fullname" . }}-agent-data
+  labels:
+    {{- include "ai-agent-monitoring.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.agent.persistence.accessMode | default "ReadWriteOnce" }}
+  resources:
+    requests:
+      storage: {{ .Values.agent.persistence.size | default "1Gi" }}
+  {{- with .Values.agent.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+{{- end }}

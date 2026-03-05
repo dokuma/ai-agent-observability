@@ -140,6 +140,17 @@ spec:
           {{- end }}
           resources:
             {{- toYaml .Values.agent.resources | nindent 12 }}
+          {{- if .Values.agent.persistence.enabled }}
+          volumeMounts:
+            - name: agent-data
+              mountPath: {{ .Values.agent.persistence.mountPath }}
+          {{- end }}
+      {{- if .Values.agent.persistence.enabled }}
+      volumes:
+        - name: agent-data
+          persistentVolumeClaim:
+            claimName: {{ include "ai-agent-monitoring.fullname" . }}-agent-data
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
