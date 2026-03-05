@@ -1,8 +1,10 @@
 """LangGraph AgentState 定義."""
 
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Annotated, Any
 
+from langchain_core.messages import BaseMessage, ToolMessage
 from langgraph.graph import MessagesState
 from pydantic import BaseModel, Field
 
@@ -21,6 +23,35 @@ from ai_agent_monitoring.core.models import (
 def _merge_list(left: list[Any], right: list[Any]) -> list[Any]:
     """リストをマージするreducer."""
     return left + right
+
+
+def sanitize_tool_call_messages(messages: Sequence[BaseMessage]) -> list[BaseMessage]:
+    """未応答の tool_calls に対してダミー ToolMessage を補完する.
+
+    ReAct ループ上限で打ち切られた場合、最後の AIMessage に tool_calls が
+    残るが対応する ToolMessage がない。OpenAI API はこれを拒否するため、
+    ダミーの ToolMessage を挿入して整合性を保つ。
+    """
+    result: list[BaseMessage] = []
+    for msg in messages:
+        result.append(msg)
+        if hasattr(msg, "tool_calls") and msg.tool_calls:
+            # この AIMessage の直後にある ToolMessage の tool_call_id を収集
+            answered_ids: set[str] = set()
+            for following in messages[messages.index(msg) + 1 :]:
+                if isinstance(following, ToolMessage):
+                    answered_ids.add(following.tool_call_id)
+                else:
+                    break
+            for tc in msg.tool_calls:
+                if tc["id"] not in answered_ids:
+                    result.append(
+                        ToolMessage(
+                            content="[ReActループ上限により実行されませんでした]",
+                            tool_call_id=tc["id"],
+                        )
+                    )
+    return result
 
 
 class TimeRange(BaseModel):

@@ -9,7 +9,7 @@ from langgraph.prebuilt import ToolNode
 
 from ai_agent_monitoring.agents.prompts import KUBERNETES_AGENT_SYSTEM_PROMPT
 from ai_agent_monitoring.core.models import KubernetesResult
-from ai_agent_monitoring.core.state import AgentState
+from ai_agent_monitoring.core.state import AgentState, sanitize_tool_call_messages
 from ai_agent_monitoring.tools.base import MCPClient
 from ai_agent_monitoring.tools.kubernetes import KubernetesMCPTool, create_kubernetes_tools
 
@@ -161,7 +161,7 @@ class KubernetesAgent:
     async def _summarize(self, state: AgentState) -> dict[str, Any]:
         """Tool実行結果をサマリとしてKubernetesResultに変換."""
         messages = [
-            *state["messages"],
+            *sanitize_tool_call_messages(state["messages"]),
             HumanMessage(
                 content=(
                     "これまでのKubernetesクラスタ調査結果をまとめてください。\n"

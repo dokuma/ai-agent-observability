@@ -9,7 +9,7 @@ from langgraph.prebuilt import ToolNode
 
 from ai_agent_monitoring.agents.prompts import METRICS_AGENT_SYSTEM_PROMPT
 from ai_agent_monitoring.core.models import MetricsResult
-from ai_agent_monitoring.core.state import AgentState
+from ai_agent_monitoring.core.state import AgentState, sanitize_tool_call_messages
 from ai_agent_monitoring.tools.base import MCPClient
 from ai_agent_monitoring.tools.grafana import create_grafana_tools
 from ai_agent_monitoring.tools.prometheus import create_prometheus_tools
@@ -141,7 +141,7 @@ class MetricsAgent:
     async def _summarize(self, state: AgentState) -> dict[str, Any]:
         """Tool実行結果をサマリとしてMetricsResultに変換."""
         messages = [
-            *state["messages"],
+            *sanitize_tool_call_messages(state["messages"]),
             HumanMessage(
                 content=(
                     "これまでのメトリクス調査結果をまとめてください。\n"
