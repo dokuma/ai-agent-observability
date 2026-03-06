@@ -68,11 +68,12 @@ class TestAppStateInvestigations:
         assert record.status == "running"
         assert record.trigger_type == "alert"
 
-    def test_complete(self):
+    @pytest.mark.asyncio
+    async def test_complete(self):
         app = AppState()
         inv_id = app.create_investigation("user_query")
         report = RCAReport(trigger_type=TriggerType.USER_QUERY)
-        app.complete_investigation(inv_id, rca_report=report)
+        await app.complete_investigation(inv_id, rca_report=report)
 
         record = app.get_investigation(inv_id)
         assert record.status == "completed"

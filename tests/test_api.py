@@ -1,5 +1,6 @@
 """API エンドポイントのテスト."""
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -238,7 +239,7 @@ class TestInvestigationReport:
             recommendations=["fix it"],
             markdown="# Test Report",
         )
-        app_state.complete_investigation(inv_id, rca_report=report)
+        asyncio.get_event_loop().run_until_complete(app_state.complete_investigation(inv_id, rca_report=report))
 
         response = client.get(f"/api/v1/investigations/{inv_id}/report")
         assert response.status_code == 200
@@ -527,7 +528,7 @@ class TestSecondQueryAfterReport:
             root_causes=[RootCause(description="CPU spike in app pod", confidence=0.9)],
             markdown="# RCA Report\nCPU spike detected.",
         )
-        app_state.complete_investigation(inv_id_1, rca_report=report)
+        asyncio.get_event_loop().run_until_complete(app_state.complete_investigation(inv_id_1, rca_report=report))
 
         # レポート取得
         report_resp = client.get(f"/api/v1/investigations/{inv_id_1}/report")
@@ -565,7 +566,7 @@ class TestSecondQueryAfterReport:
             root_causes=[RootCause(description="OOMKilled pod", confidence=0.85)],
             markdown="# Report\nOOMKilled detected.",
         )
-        app_state.complete_investigation(inv_id_1, rca_report=report)
+        asyncio.get_event_loop().run_until_complete(app_state.complete_investigation(inv_id_1, rca_report=report))
 
         # --- 2回目: report_search で即時完了 ---
         mock_store = MagicMock()
@@ -681,7 +682,7 @@ class TestRetryInvestigation:
             root_causes=[RootCause(description="test", confidence=0.8)],
             markdown="# Test",
         )
-        app_state.complete_investigation(inv_id, rca_report=report)
+        asyncio.get_event_loop().run_until_complete(app_state.complete_investigation(inv_id, rca_report=report))
 
         response = client.post(
             f"/api/v1/investigations/{inv_id}/retry",
@@ -697,7 +698,7 @@ class TestRetryInvestigation:
             root_causes=[RootCause(description="test", confidence=0.8)],
             markdown="# Test",
         )
-        app_state.complete_investigation(inv_id, rca_report=report)
+        asyncio.get_event_loop().run_until_complete(app_state.complete_investigation(inv_id, rca_report=report))
 
         mock_compiled = MagicMock()
         mock_compiled.update_state = MagicMock()
@@ -723,7 +724,7 @@ class TestRetryInvestigation:
             root_causes=[RootCause(description="test", confidence=0.8)],
             markdown="# Test",
         )
-        app_state.complete_investigation(inv_id, rca_report=report)
+        asyncio.get_event_loop().run_until_complete(app_state.complete_investigation(inv_id, rca_report=report))
 
         mock_compiled = MagicMock()
         mock_compiled.update_state = MagicMock()
@@ -748,7 +749,7 @@ class TestRetryInvestigation:
             root_causes=[RootCause(description="test", confidence=0.8)],
             markdown="# Test",
         )
-        app_state.complete_investigation(inv_id, rca_report=report)
+        asyncio.get_event_loop().run_until_complete(app_state.complete_investigation(inv_id, rca_report=report))
 
         mock_compiled = MagicMock()
         mock_compiled.update_state = MagicMock()

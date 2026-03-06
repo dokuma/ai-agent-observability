@@ -434,7 +434,7 @@ async def _run_investigation_loop(
                 return
 
             rca_report = result.get("rca_report")
-            app_state.complete_investigation(inv_id, rca_report=rca_report)
+            await app_state.complete_investigation(inv_id, rca_report=rca_report)
             logger.info("Investigation completed: %s", inv_id)
         except TimeoutError:
             logger.warning("Investigation timed out after %ds: %s", timeout, inv_id)
@@ -539,7 +539,7 @@ async def _resume_investigation(
                 return
 
             rca_report = result.get("rca_report")
-            app_state.complete_investigation(inv_id, rca_report=rca_report)
+            await app_state.complete_investigation(inv_id, rca_report=rca_report)
             logger.info("Investigation completed after resume: %s", inv_id)
         except TimeoutError:
             logger.warning("Investigation timed out after resume %ds: %s", timeout, inv_id)
@@ -619,7 +619,7 @@ async def _retry_investigation(
                 return
 
             rca_report = result.get("rca_report")
-            app_state.complete_investigation(inv_id, rca_report=rca_report)
+            await app_state.complete_investigation(inv_id, rca_report=rca_report)
             logger.info("Investigation completed after retry: %s (%s)", inv_id, retry_type)
         except TimeoutError:
             logger.warning("Investigation timed out after retry %ds: %s", timeout, inv_id)

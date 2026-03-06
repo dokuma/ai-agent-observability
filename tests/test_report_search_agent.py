@@ -154,3 +154,53 @@ class TestReportSearchAgent:
 
         assert mock_store.search.call_count == 2
         assert len(result.results) == 1
+
+
+class TestReportSearchAgentWithHybridSearcher:
+    @pytest.fixture
+    def mock_hybrid_searcher(self):
+        searcher = MagicMock()
+        searcher.search = AsyncMock()
+        return searcher
+
+    @pytest.mark.asyncio
+    async def test_uses_hybrid_searcher_when_provided(self, mock_hybrid_searcher):
+        stored = _make_stored_report()
+        mock_hybrid_searcher.search.return_value = [(stored, 0.05, ["highlight"])]
+
+        llm = MagicMock()
+        translate_resp = MagicMock()
+        translate_resp.content = "high CPU"
+        answer_resp = MagicMock()
+        answer_resp.content = "ハイブリッド検索回答"
+        llm.ainvoke = AsyncMock(side_effect=[translate_resp, answer_resp])
+
+        store = MagicMock()
+        store.count.return_value = 10
+
+        agent = ReportSearchAgent(llm=llm, report_store=store, hybrid_searcher=mock_hybrid_searcher)
+        result = await agent.search_and_answer("CPUが高い")
+
+        mock_hybrid_searcher.search.assert_called_once()
+        store.search.assert_not_called()
+        assert result.answer == "ハイブリッド検索回答"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_without_hybrid_searcher(self):
+        stored = _make_stored_report()
+        llm = MagicMock()
+        translate_resp = MagicMock()
+        translate_resp.content = "high CPU"
+        answer_resp = MagicMock()
+        answer_resp.content = "BM25回答"
+        llm.ainvoke = AsyncMock(side_effect=[translate_resp, answer_resp])
+
+        store = MagicMock()
+        store.count.return_value = 5
+        store.search.return_value = [(stored, 2.0, [])]
+
+        agent = ReportSearchAgent(llm=llm, report_store=store, hybrid_searcher=None)
+        result = await agent.search_and_answer("test")
+
+        store.search.assert_called_once()
+        assert result.answer == "BM25回答"

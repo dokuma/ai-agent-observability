@@ -1,7 +1,7 @@
 """RCAレポート検索エージェント."""
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -9,15 +9,19 @@ from ai_agent_monitoring.agents.prompts import REPORT_SEARCH_SYSTEM_PROMPT
 from ai_agent_monitoring.api.schemas import ReportSearchResponse, ReportSearchResult
 from ai_agent_monitoring.core.report_store import ReportStore
 
+if TYPE_CHECKING:
+    from ai_agent_monitoring.core.hybrid_search import HybridSearcher
+
 logger = logging.getLogger(__name__)
 
 
 class ReportSearchAgent:
     """過去のRCAレポートを検索し、LLMで回答を生成するエージェント."""
 
-    def __init__(self, llm: Any, report_store: ReportStore) -> None:
+    def __init__(self, llm: Any, report_store: ReportStore, hybrid_searcher: "HybridSearcher | None" = None) -> None:
         self._llm = llm
         self._report_store = report_store
+        self._hybrid_searcher = hybrid_searcher
 
     async def _translate_query_to_keywords(self, query: str) -> str:
         """ユーザクエリから英語検索キーワードを生成."""
@@ -45,10 +49,17 @@ class ReportSearchAgent:
 
         en_query = await self._translate_query_to_keywords(query)
         combined_query = f"{en_query} {query}".strip() if en_query else query
-        results = self._report_store.search(combined_query, top_k=top_k)
+
+        if self._hybrid_searcher:
+            results = await self._hybrid_searcher.search(combined_query, top_k=top_k)
+        else:
+            results = self._report_store.search(combined_query, top_k=top_k)
 
         if not results and en_query:
-            results = self._report_store.search(query, top_k=top_k)
+            if self._hybrid_searcher:
+                results = await self._hybrid_searcher.search(query, top_k=top_k)
+            else:
+                results = self._report_store.search(query, top_k=top_k)
 
         if not results:
             return ReportSearchResponse(
