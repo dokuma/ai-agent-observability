@@ -17,6 +17,7 @@ dependencies = [
     "langchain>=1.2.7",
     "mcp>=1.0",
     "tenacity>=9.0",
+    "qdrant-client>=1.9",
 ]
 
 [project.optional-dependencies]
