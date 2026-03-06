@@ -272,14 +272,15 @@ type: kubernetes.io/service-account-token
 
 ### Helm Chart でのデプロイ
 
+Qdrant は[公式 Helm Chart](https://github.com/qdrant/qdrant-helm)を依存チャートとして利用する。
+`Chart.yaml` に定義済みのため、`values.yaml` で有効化するだけでデプロイできる。
+
 `values.yaml` で Qdrant を有効化する:
 
 ```yaml
 qdrant:
   enabled: true
-  image:
-    repository: qdrant/qdrant
-    tag: "v1.12.1"
+  replicaCount: 1
   persistence:
     size: 5Gi
   resources:
@@ -295,6 +296,9 @@ config:
   embeddingModel: "text-embedding-3-small"
   embeddingDimensions: "0"  # 0 = モデルデフォルト
 ```
+
+`qdrant:` セクションの設定は公式チャートの values をそのまま上書きできる。
+利用可能なパラメータは [qdrant-helm values.yaml](https://github.com/qdrant/qdrant-helm/blob/main/charts/qdrant/values.yaml) を参照。
 
 Embedding API キーが必要な場合は `secrets` セクションに設定する:
 
@@ -318,17 +322,18 @@ agent:
 
 ```bash
 # 1. values.yaml を編集（上記参照）
-# 2. 依存チャートの更新
+# 2. 依存チャートの更新（qdrant チャートのダウンロード）
 helm dependency update deploy/helm/ai-agent-monitoring/
 
 # 3. デプロイ（新規 or アップグレード）
 helm upgrade --install ai-agent-monitoring deploy/helm/ai-agent-monitoring/ \
   -n ai-monitoring \
+  --set qdrant.enabled=true \
   --set config.qdrantEnabled=true \
   --set secrets.embeddingApiKey="sk-..."
 
 # 4. Qdrant Pod の起動確認
-kubectl get pods -n ai-monitoring -l app.kubernetes.io/component=qdrant
+kubectl get pods -n ai-monitoring -l app.kubernetes.io/name=qdrant
 
 # 5. Qdrant ヘルスチェック
 kubectl exec -n ai-monitoring deploy/ai-agent-monitoring-agent -- \
@@ -337,13 +342,13 @@ kubectl exec -n ai-monitoring deploy/ai-agent-monitoring-agent -- \
 
 ### アーキテクチャ
 
-有効化すると以下の Kubernetes リソースが作成される:
+公式 Helm Chart により以下の Kubernetes リソースが作成される:
 
 | リソース | 名前 | 説明 |
 |---------|------|------|
-| StatefulSet | `*-qdrant` | Qdrant サーバー (1 replica) |
-| Service | `*-qdrant` | ClusterIP (6333: HTTP, 6334: gRPC) |
-| PVC | `qdrant-storage-*-qdrant-0` | StatefulSet の volumeClaimTemplate |
+| StatefulSet | `<release>-qdrant` | Qdrant サーバー |
+| Service | `<release>-qdrant` | ClusterIP (6333: HTTP, 6334: gRPC, 6335: P2P) |
+| PVC | `qdrant-storage-<release>-qdrant-*` | StatefulSet の volumeClaimTemplate |
 
 Agent Pod は起動時に自動的に:
 1. Qdrant コレクション（`rca_reports`）を作成

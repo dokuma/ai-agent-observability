@@ -39,7 +39,7 @@ data:
   # Qdrant / Embedding
   QDRANT_ENABLED: {{ .Values.config.qdrantEnabled | quote }}
   {{- if .Values.qdrant.enabled }}
-  QDRANT_URL: {{ printf "http://%s-qdrant.%s.svc:6333" (include "ai-agent-monitoring.fullname" .) .Release.Namespace | quote }}
+  QDRANT_URL: {{ printf "http://%s-qdrant.%s.svc:6333" .Release.Name .Release.Namespace | quote }}
   {{- end }}
   EMBEDDING_MODEL: {{ .Values.config.embeddingModel | quote }}
   EMBEDDING_DIMENSIONS: {{ .Values.config.embeddingDimensions | quote }}

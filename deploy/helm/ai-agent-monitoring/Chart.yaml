@@ -13,3 +13,7 @@ dependencies:
     version: "0.1.0"
     repository: "oci://ghcr.io/containers/charts"
     condition: kubernetes-mcp-server.enabled
+  - name: qdrant
+    version: "1.17.0"
+    repository: "https://qdrant.github.io/qdrant-helm"
+    condition: qdrant.enabled

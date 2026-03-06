@@ -5,5 +5,8 @@ dependencies:
 - name: kubernetes-mcp-server
   repository: oci://ghcr.io/containers/charts
   version: 0.1.0
-digest: sha256:c2f611d86770dcc7a3bfb1ede3efcee92d0f63c3fd1da2e17a8e3ce90bc8bce5
-generated: "2026-03-02T10:59:34.842086+09:00"
+- name: qdrant
+  repository: https://qdrant.github.io/qdrant-helm
+  version: 1.17.0
+digest: sha256:1422505849a50dc9f67d28481f42f0488ea1bfa7b13248ec8227e3d10b2a7ae1
+generated: "2026-03-06T16:43:31.528079+09:00"

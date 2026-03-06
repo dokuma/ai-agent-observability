@@ -249,13 +249,11 @@ kubernetes-mcp-server:
     runAsNonRoot: true
 
 # ===========================================================
-# Qdrant (Vector DB)
+# Qdrant 依存チャート上書き (qdrant/qdrant-helm)
 # ===========================================================
 qdrant:
   enabled: false
-  image:
-    repository: qdrant/qdrant
-    tag: "v1.12.1"
+  replicaCount: 1
   persistence:
     size: 5Gi
   resources:
@@ -265,6 +263,17 @@ qdrant:
     limits:
       cpu: 500m
       memory: 1Gi
+  # OpenShift restricted SCC 準拠
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: [ALL]
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
 
 # ===========================================================
 # 外部サービス接続先
