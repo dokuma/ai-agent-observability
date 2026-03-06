@@ -641,3 +641,127 @@ class TestPendingInputStringType:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "running"
+
+
+class TestRetryInvestigation:
+    """チェックポイントやり直しエンドポイントのテスト."""
+
+    def test_retry_not_found(self, client):
+        """存在しない調査IDでは404."""
+        response = client.post(
+            "/api/v1/investigations/nonexistent/retry",
+            json={"retry_type": "regenerate_rca"},
+        )
+        assert response.status_code == 404
+
+    def test_retry_not_completed(self, client):
+        """running 状態の調査では409."""
+        inv_id = app_state.create_investigation("user_query")
+        response = client.post(
+            f"/api/v1/investigations/{inv_id}/retry",
+            json={"retry_type": "regenerate_rca"},
+        )
+        assert response.status_code == 409
+
+    def test_retry_failed_investigation(self, client):
+        """failed 状態の調査では409."""
+        inv_id = app_state.create_investigation("user_query")
+        app_state.fail_investigation(inv_id, "test error")
+        response = client.post(
+            f"/api/v1/investigations/{inv_id}/retry",
+            json={"retry_type": "regenerate_rca"},
+        )
+        assert response.status_code == 409
+
+    def test_retry_no_graph_state(self, client):
+        """compiled_graph がない場合は410."""
+        inv_id = app_state.create_investigation("user_query")
+        report = RCAReport(
+            trigger_type=TriggerType.USER_QUERY,
+            root_causes=[RootCause(description="test", confidence=0.8)],
+            markdown="# Test",
+        )
+        app_state.complete_investigation(inv_id, rca_report=report)
+
+        response = client.post(
+            f"/api/v1/investigations/{inv_id}/retry",
+            json={"retry_type": "regenerate_rca"},
+        )
+        assert response.status_code == 410
+
+    def test_retry_regenerate_rca(self, client):
+        """regenerate_rca で running が返る."""
+        inv_id = app_state.create_investigation("user_query")
+        report = RCAReport(
+            trigger_type=TriggerType.USER_QUERY,
+            root_causes=[RootCause(description="test", confidence=0.8)],
+            markdown="# Test",
+        )
+        app_state.complete_investigation(inv_id, rca_report=report)
+
+        mock_compiled = MagicMock()
+        mock_compiled.update_state = MagicMock()
+        mock_compiled.ainvoke = AsyncMock(return_value={"rca_report": None})
+        record = app_state.get_investigation(inv_id)
+        record.compiled_graph = mock_compiled
+        record.graph_config = {"configurable": {"thread_id": inv_id}}
+
+        response = client.post(
+            f"/api/v1/investigations/{inv_id}/retry",
+            json={"retry_type": "regenerate_rca"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "running"
+        assert data["investigation_id"] == inv_id
+
+    def test_retry_reinvestigate(self, client):
+        """reinvestigate で running が返る."""
+        inv_id = app_state.create_investigation("user_query")
+        report = RCAReport(
+            trigger_type=TriggerType.USER_QUERY,
+            root_causes=[RootCause(description="test", confidence=0.8)],
+            markdown="# Test",
+        )
+        app_state.complete_investigation(inv_id, rca_report=report)
+
+        mock_compiled = MagicMock()
+        mock_compiled.update_state = MagicMock()
+        mock_compiled.ainvoke = AsyncMock(return_value={"rca_report": None})
+        record = app_state.get_investigation(inv_id)
+        record.compiled_graph = mock_compiled
+        record.graph_config = {"configurable": {"thread_id": inv_id}}
+
+        response = client.post(
+            f"/api/v1/investigations/{inv_id}/retry",
+            json={"retry_type": "reinvestigate", "feedback": "Lokiのログも確認して"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "running"
+
+    def test_retry_continue_investigation(self, client):
+        """continue_investigation で running が返る."""
+        inv_id = app_state.create_investigation("user_query")
+        report = RCAReport(
+            trigger_type=TriggerType.USER_QUERY,
+            root_causes=[RootCause(description="test", confidence=0.8)],
+            markdown="# Test",
+        )
+        app_state.complete_investigation(inv_id, rca_report=report)
+
+        mock_compiled = MagicMock()
+        mock_compiled.update_state = MagicMock()
+        mock_compiled.get_state = MagicMock(return_value=MagicMock(values={"max_iterations": 3}))
+        mock_compiled.ainvoke = AsyncMock(return_value={"rca_report": None})
+        record = app_state.get_investigation(inv_id)
+        record.compiled_graph = mock_compiled
+        record.graph_config = {"configurable": {"thread_id": inv_id}}
+
+        response = client.post(
+            f"/api/v1/investigations/{inv_id}/retry",
+            json={"retry_type": "continue_investigation", "feedback": "もっと詳しく"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "running"

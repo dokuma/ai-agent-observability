@@ -18,6 +18,8 @@ from ai_agent_monitoring.api.schemas import (
     ReportListResponse,
     ReportSearchRequest,
     ReportSearchResponse,
+    RetryRequest,
+    RetryType,
     UserInputRequest,
     UserQueryRequest,
     UserQueryResponse,
@@ -117,6 +119,44 @@ async def submit_query(
     report_search_timeout = app_state.settings.report_search_timeout_seconds
     if app_state.report_store and app_state.report_store.count() > 0 and app_state.report_search_agent:
         intent = await _classify_query_intent(request.query)
+
+        # retry インテント: 直近の completed 調査をやり直す
+        if intent.startswith("retry:"):
+            retry_type_str = intent.split(":", 1)[1]
+            try:
+                retry_type = RetryType(retry_type_str)
+            except ValueError:
+                retry_type = RetryType.REGENERATE_RCA
+
+            # 直近の completed 調査を探す
+            target_record = None
+            for record in reversed(list(app_state.investigations.values())):
+                if record.status == "completed" and record.compiled_graph and record.graph_config:
+                    target_record = record
+                    break
+
+            if target_record and target_record.graph_config is not None:
+                target_record.status = "running"
+                target_record.completed_at = None
+                target_record.error = ""
+                target_record.current_stage = "やり直し中"
+
+                background_tasks.add_task(
+                    _retry_investigation,
+                    target_record.investigation_id,
+                    target_record.compiled_graph,
+                    target_record.graph_config,
+                    retry_type,
+                    request.query,
+                )
+
+                return UserQueryResponse(
+                    investigation_id=target_record.investigation_id,
+                    status="running",
+                    message=f"調査をやり直します ({retry_type.value})",
+                )
+            # completed 調査が見つからない場合は新規調査にフォールスルー
+
         if intent == "search":
             logger.info("Query routed to report_search: %s", request.query[:100])
             inv_id = app_state.create_investigation("report_search")
@@ -128,10 +168,10 @@ async def submit_query(
                     ),
                     timeout=report_search_timeout,
                 )
-                record = app_state.get_investigation(inv_id)
-                if record:
-                    record.status = "completed"
-                    record.completed_at = datetime.now()
+                search_record = app_state.get_investigation(inv_id)
+                if search_record:
+                    search_record.status = "completed"
+                    search_record.completed_at = datetime.now()
                 return UserQueryResponse(
                     investigation_id=inv_id,
                     status="completed",
@@ -252,6 +292,52 @@ async def submit_user_input(
         investigation_id=investigation_id,
         status="running",
         message="ユーザ入力を受理しました。調査を再開します。",
+    )
+
+
+# ---- チェックポイントやり直し ----
+
+
+@router.post("/investigations/{investigation_id}/retry", response_model=UserQueryResponse)
+async def retry_investigation(
+    investigation_id: str,
+    request: RetryRequest,
+    background_tasks: BackgroundTasks,
+) -> UserQueryResponse:
+    """完了済み調査をチェックポイントからやり直す."""
+    record = app_state.get_investigation(investigation_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Investigation not found")
+    if record.status != "completed":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Investigation is not completed (status={record.status})",
+        )
+    if not record.compiled_graph or not record.graph_config:
+        raise HTTPException(
+            status_code=410,
+            detail="Graph state no longer available (Gone)",
+        )
+
+    # running に戻す
+    record.status = "running"
+    record.completed_at = None
+    record.error = ""
+    record.current_stage = "やり直し中"
+
+    background_tasks.add_task(
+        _retry_investigation,
+        investigation_id,
+        record.compiled_graph,
+        record.graph_config,
+        request.retry_type,
+        request.feedback,
+    )
+
+    return UserQueryResponse(
+        investigation_id=investigation_id,
+        status="running",
+        message=f"調査をやり直します ({request.retry_type.value})",
     )
 
 
@@ -477,6 +563,86 @@ async def _resume_investigation(
         app_state.fail_investigation(inv_id, str(e))
 
 
+async def _retry_investigation(
+    inv_id: str,
+    compiled: Any,
+    config: dict[str, Any],
+    retry_type: RetryType,
+    feedback: str,
+) -> None:
+    """チェックポイントからやり直す."""
+    timeout = app_state.settings.investigation_timeout_seconds
+
+    from ai_agent_monitoring.core.state import EvaluationFeedback
+
+    # retry_type に応じて state を書き換え
+    values: dict[str, Any]
+    if retry_type == RetryType.REGENERATE_RCA:
+        values = {"investigation_complete": True}
+    elif retry_type == RetryType.REINVESTIGATE:
+        values = {
+            "investigation_complete": False,
+            "iteration_count": 0,
+        }
+        if feedback:
+            values["evaluation_feedback"] = EvaluationFeedback(
+                reasoning=feedback,
+                additional_investigation_points=[feedback],
+            )
+    elif retry_type == RetryType.CONTINUE_INVESTIGATION:
+        # 現在の state を取得して max_iterations を +1
+        current_state = compiled.get_state(config)
+        current_max = current_state.values.get("max_iterations", 3)
+        values = {
+            "investigation_complete": False,
+            "max_iterations": current_max + 1,
+        }
+        if feedback:
+            values["evaluation_feedback"] = EvaluationFeedback(
+                reasoning=feedback,
+                additional_investigation_points=[feedback],
+            )
+    else:
+        app_state.fail_investigation(inv_id, f"Unknown retry_type: {retry_type}")
+        return
+
+    try:
+        # evaluate_results ノードの出力として state を上書き
+        compiled.update_state(config, values, as_node="evaluate_results")
+
+        # 次のノードから再実行
+        task = asyncio.create_task(compiled.ainvoke(None, config=config))
+        try:
+            result = await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+
+            if _check_interrupt(result, inv_id, compiled, config):
+                return
+
+            rca_report = result.get("rca_report")
+            app_state.complete_investigation(inv_id, rca_report=rca_report)
+            logger.info("Investigation completed after retry: %s (%s)", inv_id, retry_type)
+        except TimeoutError:
+            logger.warning("Investigation timed out after retry %ds: %s", timeout, inv_id)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                logger.info("Investigation task cancelled after retry: %s", inv_id)
+            app_state.fail_investigation(inv_id, f"調査がタイムアウトしました ({timeout}秒)")
+    except asyncio.CancelledError:
+        logger.info("Investigation cancelled after retry: %s", inv_id)
+        app_state.fail_investigation(inv_id, "調査がキャンセルされました")
+    except RateLimitError as e:
+        logger.warning("Investigation rate-limited after retry: %s - %s", inv_id, e)
+        app_state.fail_investigation(
+            inv_id,
+            "LLM APIのレートリミットにより調査を中断しました。しばらく待ってから再試行してください。",
+        )
+    except Exception as e:
+        logger.exception("Investigation failed after retry: %s", inv_id)
+        app_state.fail_investigation(inv_id, str(e))
+
+
 # ---- クエリインテント分類 ----
 
 
@@ -486,6 +652,9 @@ async def _classify_query_intent(query: str) -> str:
     Returns:
         "search" — 過去レポートで回答可能
         "investigate" — 新規調査が必要
+        "retry:regenerate_rca" — RCAレポート再生成
+        "retry:reinvestigate" — データソース変更して再調査
+        "retry:continue_investigation" — 追加調査
     """
     from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -502,6 +671,14 @@ async def _classify_query_intent(query: str) -> str:
         ]
         response = await asyncio.wait_for(llm.ainvoke(messages), timeout=30)
         intent = response.content.strip().lower()
+        # retry:* インテントを優先チェック
+        for retry_intent in (
+            "retry:regenerate_rca",
+            "retry:reinvestigate",
+            "retry:continue_investigation",
+        ):
+            if retry_intent in intent:
+                return retry_intent
         if "search" in intent:
             return "search"
         return "investigate"

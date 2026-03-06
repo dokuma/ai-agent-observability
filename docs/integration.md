@@ -379,10 +379,11 @@ class Pipe:
             )
 
         report = report_res.json()
+        marker = f"\n\n{self._RESUME_MARKER} {inv_id} -->"
 
         # Markdown レポートがあればそのまま返す
         if report.get("markdown"):
-            return report["markdown"]
+            return report["markdown"] + marker
 
         # フォールバック: 構造化データを整形
         lines = [f"## RCA レポート ({inv_id})\n"]
@@ -401,7 +402,7 @@ class Pipe:
                 "\n*レポートの内容が空です。"
                 "より大きなモデルの使用を推奨します。*"
             )
-        return "\n".join(lines)
+        return "\n".join(lines) + marker
 ```
 
 > **Note (v0.7.0)**:

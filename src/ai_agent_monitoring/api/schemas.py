@@ -1,6 +1,7 @@
 """API リクエスト/レスポンススキーマ."""
 
 from datetime import datetime
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -144,3 +145,21 @@ class ReportListResponse(BaseModel):
     total: int
     offset: int
     limit: int
+
+
+# ---- チェックポイントやり直し ----
+
+
+class RetryType(StrEnum):
+    """やり直しの種類."""
+
+    REGENERATE_RCA = "regenerate_rca"
+    REINVESTIGATE = "reinvestigate"
+    CONTINUE_INVESTIGATION = "continue_investigation"
+
+
+class RetryRequest(BaseModel):
+    """チェックポイントからのやり直しリクエスト."""
+
+    retry_type: RetryType
+    feedback: str = ""  # ユーザの追加指示

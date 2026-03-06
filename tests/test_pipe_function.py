@@ -280,7 +280,8 @@ class TestPollUntilDone:
         with patch("requests.get", side_effect=[status_response, report_response]):
             result = await pipe._poll_until_done("inv-done", "http://test:8000/api/v1", None)
 
-        assert result == "# RCA Report"
+        assert "# RCA Report" in result
+        assert "<!-- investigation_id: inv-done -->" in result
 
     @pytest.mark.asyncio
     async def test_failed_returns_error(self):

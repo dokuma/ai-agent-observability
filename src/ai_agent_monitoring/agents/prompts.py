@@ -168,7 +168,7 @@ Metrics AgentとLogs Agentの分析結果を統合し、根本原因を推論し
 """
 
 QUERY_INTENT_CLASSIFICATION_PROMPT = """\
-ユーザのクエリを以下の2つのカテゴリに分類してください。
+ユーザのクエリを以下のカテゴリに分類してください。
 
 ## カテゴリ
 - **search**: 過去の調査結果・レポートについての質問。
@@ -177,13 +177,21 @@ QUERY_INTENT_CLASSIFICATION_PROMPT = """\
 - **investigate**: 新しい調査が必要なリクエスト。
   例: 現在のクラスタ状態の確認、新しい障害の調査依頼、
   リアルタイムのメトリクス・ログの確認
+- **retry:regenerate_rca**: RCAレポートの再生成依頼。
+  例: 「レポートを作り直して」「もう一度まとめて」「分析をやり直して」
+- **retry:reinvestigate**: データソースや観点を変えての再調査依頼。
+  例: 「別のデータソースで調べて」「Lokiのログも見て」「違う角度から調査して」
+- **retry:continue_investigation**: 追加調査の依頼。
+  例: 「もっと詳しく調べて」「追加で確認して」「深掘りして」
 
 ## ルール
 1. 過去の調査結果に言及している場合は **search**
 2. 現在の状態を確認したい場合は **investigate**
-3. 曖昧な場合、過去のレポートが存在するなら **search** を優先
+3. 前回の調査をやり直す・続けるニュアンスがある場合は **retry:***
+4. 曖昧な場合、過去のレポートが存在するなら **search** を優先
 
-回答は "search" または "investigate" の1単語のみ。
+回答は "search", "investigate", "retry:regenerate_rca", "retry:reinvestigate", \
+"retry:continue_investigation" のいずれか1つのみ。
 """
 
 REPORT_SEARCH_SYSTEM_PROMPT = """\
