@@ -85,7 +85,7 @@ class InvestigationRecord:
     rca_report: RCAReport | None = None
     mcp_status: dict[str, bool] = field(default_factory=dict)
     # interrupt/resume 用
-    pending_input: dict[str, Any] | None = None
+    pending_input: dict[str, Any] | str | None = None
     compiled_graph: Any = None
     graph_config: dict[str, Any] | None = None
 
@@ -260,7 +260,7 @@ class AppState:
     def set_waiting_for_input(
         self,
         inv_id: str,
-        pending_input: dict[str, Any],
+        pending_input: dict[str, Any] | str,
         compiled_graph: Any,
         config: dict[str, Any],
     ) -> None:
@@ -272,7 +272,8 @@ class AppState:
             record.compiled_graph = compiled_graph
             record.graph_config = config
             record.current_stage = "ユーザ入力を待機中"
-            logger.info("Investigation %s waiting for input: %s", inv_id, pending_input.get("type"))
+            input_type = pending_input.get("type") if isinstance(pending_input, dict) else "text"
+            logger.info("Investigation %s waiting for input: %s", inv_id, input_type)
 
     def update_investigation_stage(
         self,

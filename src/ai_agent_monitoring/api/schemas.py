@@ -70,7 +70,7 @@ class InvestigationStatus(BaseModel):
     created_at: datetime
     completed_at: datetime | None = None
     mcp_status: dict[str, bool] = Field(default_factory=dict)
-    pending_input: dict[str, Any] | None = None  # interrupt時のユーザ入力要求
+    pending_input: dict[str, Any] | str | None = None  # interrupt時のユーザ入力要求
 
 
 # ---- RCAレポート ----
