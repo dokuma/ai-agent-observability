@@ -864,13 +864,26 @@ class TestOrchestratorEnvironmentDiscovery:
         assert result[0]["type"] == "prometheus"
         assert result[1]["uid"] == "loki-456"
 
-    def test_parse_datasources_invalid(self):
-        """無効なテキストは空リストを返す."""
+    def test_parse_datasources_with_surrounding_text(self):
+        """JSON前後に説明文がある場合でも抽出できる."""
+        agent, _ = _make_orchestrator()
+
+        text = 'Here are the datasources:\n[{"type": "prometheus", "uid": "prom-1"}]\nEnd of list.'
+        result = agent._parse_datasources(text)
+        assert len(result) == 1
+        assert result[0]["type"] == "prometheus"
+
+    def test_parse_datasources_invalid(self, caplog):
+        """無効なテキストは空リストを返し、warningログを出力する."""
         agent, _ = _make_orchestrator()
 
         text = "not valid json"
-        result = agent._parse_datasources(text)
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            result = agent._parse_datasources(text)
         assert result == []
+        assert "Failed to parse datasources text" in caplog.text
 
     def test_parse_dashboards_valid(self):
         """有効なダッシュボードテキストをパース."""

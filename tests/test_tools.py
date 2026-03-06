@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ai_agent_monitoring.tools.base import MCPClient
+from ai_agent_monitoring.tools.base import MCPClient, _truncate_tool_result
 from ai_agent_monitoring.tools.grafana import GrafanaMCPTool, create_grafana_tools
 from ai_agent_monitoring.tools.loki import LokiMCPTool, create_loki_tools
 from ai_agent_monitoring.tools.prometheus import PrometheusMCPTool, create_prometheus_tools
@@ -647,3 +647,51 @@ class TestToolRegistry:
         # 1つhealthy
         registry.prometheus.healthy = True
         assert registry.is_any_healthy() is True
+
+
+class TestTruncateToolResult:
+    """_truncate_tool_result のテスト."""
+
+    def test_no_truncation_when_small(self):
+        """max_chars以下の場合はそのまま返す."""
+        result = {"content": [{"type": "text", "text": "hello"}]}
+        out = _truncate_tool_result(result, max_chars=10000)
+        assert out == result
+        assert "_truncated" not in out
+
+    def test_truncation_preserves_structure(self):
+        """切り詰め後もdict構造が保持される."""
+        long_text = "x" * 10000
+        result = {"content": [{"type": "text", "text": long_text}]}
+        out = _truncate_tool_result(result, max_chars=500)
+
+        assert out["_truncated"] is True
+        assert isinstance(out["content"], list)
+        assert out["content"][0]["type"] == "text"
+        assert len(out["content"][0]["text"]) <= 500
+
+    def test_truncation_multiple_items(self):
+        """複数コンテンツアイテムがある場合、順番に切り詰められる."""
+        result = {
+            "content": [
+                {"type": "text", "text": "a" * 300},
+                {"type": "text", "text": "b" * 300},
+            ]
+        }
+        out = _truncate_tool_result(result, max_chars=400)
+
+        assert out["_truncated"] is True
+        assert len(out["content"]) == 2
+        # 最初のアイテムは300文字で収まる
+        assert out["content"][0]["text"] == "a" * 300
+        # 2番目は残りの文字数で切り詰め
+        assert len(out["content"][1]["text"]) <= 100
+
+    def test_truncated_text_is_valid_prefix(self):
+        """切り詰められたテキストは元テキストのプレフィクスである."""
+        original_text = '[{"type":"prometheus","uid":"p1"},{"type":"loki","uid":"l1"}]'
+        result = {"content": [{"type": "text", "text": original_text}]}
+        out = _truncate_tool_result(result, max_chars=30)
+
+        truncated_text = out["content"][0]["text"]
+        assert original_text.startswith(truncated_text)

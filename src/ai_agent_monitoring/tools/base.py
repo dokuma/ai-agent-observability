@@ -48,13 +48,32 @@ _DEFAULT_MAX_TOOL_RESULT_CHARS = 8000
 
 
 def _truncate_tool_result(result: dict[str, Any], max_chars: int) -> dict[str, Any]:
-    """ツール結果が大きすぎる場合に切り詰める."""
+    """ツール結果が大きすぎる場合に切り詰める.
+
+    テキストコンテンツのみを切り詰め、dict構造は保持する。
+    """
     serialized = json.dumps(result, ensure_ascii=False, default=str)
     if len(serialized) <= max_chars:
         return result
-    truncated = serialized[:max_chars]
+
+    # テキストコンテンツのみを切り詰め（構造は保持）
+    content = result.get("content", [])
+    truncated_content = []
+    remaining = max_chars
+    for item in content:
+        if isinstance(item, dict) and item.get("type") == "text":
+            text = item.get("text", "")
+            if len(text) > remaining:
+                truncated_content.append({"type": "text", "text": text[:remaining]})
+                remaining = 0
+            else:
+                truncated_content.append(item)
+                remaining -= len(text)
+        else:
+            truncated_content.append(item)
+
     return {
-        "content": [{"type": "text", "text": truncated}],
+        "content": truncated_content,
         "_truncated": True,
         "_original_chars": len(serialized),
     }
