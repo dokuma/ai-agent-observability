@@ -9,6 +9,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
 
 from ai_agent_monitoring.agents.prompts import RCA_AGENT_SYSTEM_PROMPT
+from ai_agent_monitoring.core.json_repair import extract_json, repair_truncated_json
 from ai_agent_monitoring.core.models import (
     LogExcerpt,
     PanelSnapshot,
@@ -314,8 +315,12 @@ class RCAAgent:
     def _parse_report(self, content: str, state: AgentState) -> RCAReport:
         """LLM出力からRCAレポートをパース."""
         try:
-            json_str = self._extract_json(content)
-            data = json.loads(json_str)
+            json_str = extract_json(content)
+            try:
+                data = json.loads(json_str)
+            except json.JSONDecodeError:
+                repaired = repair_truncated_json(json_str)
+                data = json.loads(repaired)
             root_causes = []
             for rc in data.get("root_causes", []):
                 # confidence を 0.0〜1.0 に正規化
@@ -352,26 +357,3 @@ class RCAAgent:
             recommendations=data.get("recommendations", []),
             agent_tool_outputs=agent_tool_outputs,
         )
-
-    @staticmethod
-    def _extract_json(text: str) -> str:
-        """テキストからJSON部分を抽出."""
-        # ```json ... ``` ブロックを優先
-        if "```json" in text:
-            start = text.index("```json") + 7
-            end = text.index("```", start)
-            return text[start:end].strip()
-        if "```" in text:
-            start = text.index("```") + 3
-            # 言語指定行をスキップ
-            newline = text.find("\n", start)
-            if newline != -1:
-                start = newline + 1
-            end = text.index("```", start)
-            candidate = text[start:end].strip()
-            if candidate.startswith("{"):
-                return candidate
-        # { ... } を抽出
-        start = text.index("{")
-        end = text.rindex("}") + 1
-        return text[start:end]

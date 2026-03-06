@@ -269,44 +269,60 @@ class TestOrchestratorParsePlan:
 
 
 class TestOrchestratorExtractJson:
+    """Orchestrator 経由の JSON 抽出テスト（共通ユーティリティに委譲）."""
+
     def test_extract_json_code_block(self):
+        from ai_agent_monitoring.core.json_repair import extract_json
+
         text = 'some text\n```json\n{"key": "value"}\n```\nmore text'
-        result = OrchestratorAgent._extract_json(text)
+        result = extract_json(text)
         assert json.loads(result) == {"key": "value"}
 
     def test_extract_json_inline(self):
+        from ai_agent_monitoring.core.json_repair import extract_json
+
         text = 'result is {"key": "value"} end'
-        result = OrchestratorAgent._extract_json(text)
+        result = extract_json(text)
         assert json.loads(result) == {"key": "value"}
 
     def test_extract_json_no_json(self):
+        from ai_agent_monitoring.core.json_repair import extract_json
+
         with pytest.raises(ValueError):
-            OrchestratorAgent._extract_json("no json here")
+            extract_json("no json here")
 
 
 class TestOrchestratorRepairTruncatedJson:
-    """_repair_truncated_json のテスト."""
+    """共通 repair_truncated_json のテスト."""
 
     def test_valid_json_unchanged(self):
+        from ai_agent_monitoring.core.json_repair import repair_truncated_json
+
         text = '{"promql_queries": ["up"]}'
-        assert OrchestratorAgent._repair_truncated_json(text) == text
+        assert repair_truncated_json(text) == text
 
     def test_truncated_string_value(self):
+        from ai_agent_monitoring.core.json_repair import repair_truncated_json
+
         text = '{"promql_queries": ["kube_pod_container_status_terminated_reason{reason=\\"OOMKill'
-        result = OrchestratorAgent._repair_truncated_json(text)
+        result = repair_truncated_json(text)
         data = json.loads(result)
         assert "promql_queries" in data
         assert len(data["promql_queries"]) == 1
 
     def test_truncated_array(self):
+        from ai_agent_monitoring.core.json_repair import repair_truncated_json
+
         text = '{"promql_queries": ["up", "rate(cpu[5m])"'
-        result = OrchestratorAgent._repair_truncated_json(text)
+        result = repair_truncated_json(text)
         data = json.loads(result)
         assert data["promql_queries"] == ["up", "rate(cpu[5m])"]
 
     def test_truncated_after_comma(self):
+        from ai_agent_monitoring.core.json_repair import repair_truncated_json
+
         text = '{"promql_queries": ["up"],'
-        result = OrchestratorAgent._repair_truncated_json(text)
+        result = repair_truncated_json(text)
         data = json.loads(result)
         assert data["promql_queries"] == ["up"]
 
@@ -1403,19 +1419,27 @@ class TestRCAAgentParseReport:
 
 
 class TestRCAAgentExtractJson:
+    """RCAAgent 経由の JSON 抽出テスト（共通ユーティリティに委譲）."""
+
     def test_code_block(self):
+        from ai_agent_monitoring.core.json_repair import extract_json
+
         text = '```json\n{"key": "value"}\n```'
-        result = RCAAgent._extract_json(text)
+        result = extract_json(text)
         assert json.loads(result) == {"key": "value"}
 
     def test_inline(self):
+        from ai_agent_monitoring.core.json_repair import extract_json
+
         text = 'result: {"a": 1}'
-        result = RCAAgent._extract_json(text)
+        result = extract_json(text)
         assert json.loads(result) == {"a": 1}
 
     def test_no_json_raises(self):
+        from ai_agent_monitoring.core.json_repair import extract_json
+
         with pytest.raises(ValueError):
-            RCAAgent._extract_json("no json")
+            extract_json("no json")
 
 
 class TestRCAAgentCorrelate:

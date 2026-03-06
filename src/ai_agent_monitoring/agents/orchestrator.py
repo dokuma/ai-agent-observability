@@ -25,6 +25,7 @@ from ai_agent_monitoring.core.datasource import (
     DatasourcePreferenceStore,
     parse_datasource_list,
 )
+from ai_agent_monitoring.core.json_repair import extract_json, repair_truncated_json
 from ai_agent_monitoring.core.models import TriggerType
 from ai_agent_monitoring.core.sanitizer import sanitize_user_input
 from ai_agent_monitoring.core.state import (
@@ -1652,7 +1653,7 @@ class OrchestratorAgent:
         response = await self.llm.ainvoke(messages)
 
         try:
-            json_str = self._extract_json(response.content)
+            json_str = extract_json(response.content)
             data = json.loads(json_str)
             plan.time_range = TimeRange(
                 start=datetime.fromisoformat(data["start"]),
@@ -1747,7 +1748,7 @@ class OrchestratorAgent:
         )
 
         try:
-            json_str = self._extract_json(content)
+            json_str = extract_json(content)
             data = json.loads(json_str)
             feedback.missing_information = data.get("missing_information", [])
             feedback.additional_investigation_points = data.get("additional_investigation_points", [])
@@ -1800,7 +1801,7 @@ class OrchestratorAgent:
         """
         json_str = ""
         try:
-            json_str = self._extract_json(content)
+            json_str = extract_json(content)
             logger.debug(
                 "調査計画パース: extracted_json=%s",
                 json_str[:1000] if json_str else "(empty)",
@@ -1813,7 +1814,7 @@ class OrchestratorAgent:
                     jde,
                     json_str[:500],
                 )
-                repaired = self._repair_truncated_json(json_str)
+                repaired = repair_truncated_json(json_str)
                 data = json.loads(repaired)
                 logger.info("切り詰められたJSONを修復してパースしました")
 
@@ -1914,98 +1915,3 @@ class OrchestratorAgent:
         if time_range is None:
             return "指定なし"
         return f"{time_range.start.isoformat()} 〜 {time_range.end.isoformat()}"
-
-    @staticmethod
-    def _extract_json(text: str) -> str:
-        """テキストからJSON部分を抽出."""
-        # ```json ... ``` 形式を優先
-        if "```json" in text:
-            start = text.index("```json") + 7
-            try:
-                end = text.index("```", start)
-                return text[start:end].strip()
-            except ValueError:
-                # 閉じ ``` がない（出力切り詰め）→ 残り全体を返す
-                return text[start:].strip()
-
-        # ``` ... ``` 形式（言語指定なし）
-        if "```" in text:
-            start = text.index("```") + 3
-            # 改行をスキップ
-            while start < len(text) and text[start] in "\n\r":
-                start += 1
-            try:
-                end = text.index("```", start)
-                candidate = text[start:end].strip()
-            except ValueError:
-                candidate = text[start:].strip()
-            if candidate.startswith("{"):
-                return candidate
-
-        # 生の{...}を探す
-        if "{" in text:
-            start = text.index("{")
-            if "}" in text:
-                end = text.rindex("}") + 1
-                return text[start:end]
-            # 閉じブラケットがない（切り詰め）→ { 以降を返して修復に委ねる
-            return text[start:]
-
-        # JSONが見つからない
-        raise ValueError(f"No JSON found in text (length={len(text)}): {text[:500]}")
-
-    @staticmethod
-    def _repair_truncated_json(text: str) -> str:
-        """LLM出力が途中で切れた不完全なJSONを修復する.
-
-        PromQLクエリ等の長い文字列を含むJSONをLLMが生成する際、
-        max_tokens に達して出力が切り詰められることがある。
-        未閉じの文字列・配列・オブジェクトを閉じて有効なJSONにする。
-        """
-        in_string = False
-        escape_next = False
-        stack: list[str] = []  # '{' or '['
-
-        for ch in text:
-            if escape_next:
-                escape_next = False
-                continue
-            if ch == "\\":
-                if in_string:
-                    escape_next = True
-                continue
-            if ch == '"':
-                in_string = not in_string
-                continue
-            if in_string:
-                continue
-            if ch in ("{", "["):
-                stack.append(ch)
-            elif ch == "}" and stack and stack[-1] == "{":
-                stack.pop()
-            elif ch == "]" and stack and stack[-1] == "[":
-                stack.pop()
-
-        suffix = ""
-        if in_string:
-            suffix += '"'
-        for bracket in reversed(stack):
-            suffix += "]" if bracket == "[" else "}"
-
-        if not suffix:
-            # 切り詰めはないが trailing comma がある場合に対応
-            return re.sub(r",\s*([}\]])", r"\1", text)
-
-        # 末尾の不完全なトークン（途切れた key/value）を除去してから閉じる
-        trimmed = text.rstrip()
-        # 末尾が , : または未完了の文字列値の場合、最後の完全な要素まで戻す
-        while trimmed and trimmed[-1] in (",", ":", " ", "\n", "\r", "\t"):
-            trimmed = trimmed[:-1]
-        # 未閉じ文字列を閉じた上で残りのブラケットを閉じる
-        if in_string:
-            trimmed += '"'
-        for bracket in reversed(stack):
-            trimmed += "]" if bracket == "[" else "}"
-        # JSON本文中の trailing comma を除去
-        trimmed = re.sub(r",\s*([}\]])", r"\1", trimmed)
-        return trimmed
