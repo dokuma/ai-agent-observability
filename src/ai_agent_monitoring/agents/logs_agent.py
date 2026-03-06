@@ -9,7 +9,12 @@ from langgraph.prebuilt import ToolNode
 
 from ai_agent_monitoring.agents.prompts import LOGS_AGENT_SYSTEM_PROMPT
 from ai_agent_monitoring.core.models import LogsResult
-from ai_agent_monitoring.core.state import AgentState, extract_tool_outputs, sanitize_tool_call_messages
+from ai_agent_monitoring.core.state import (
+    AgentState,
+    extract_tool_outputs,
+    sanitize_tool_call_messages,
+    should_stop_tool_loop,
+)
 from ai_agent_monitoring.tools.base import MCPClient
 from ai_agent_monitoring.tools.grafana import create_grafana_tools
 from ai_agent_monitoring.tools.loki import create_loki_tools
@@ -69,7 +74,7 @@ class LogsAgent:
         graph = StateGraph(AgentState)
 
         graph.add_node("reason", self._reason)
-        graph.add_node("tools", ToolNode(self.tools))
+        graph.add_node("tools", ToolNode(self.tools, handle_tool_errors=True))
         graph.add_node("summarize", self._summarize)
 
         graph.set_entry_point("reason")
@@ -170,11 +175,7 @@ class LogsAgent:
     @staticmethod
     def _should_use_tool(state: AgentState) -> str:
         """最後のメッセージにtool_callがあればToolを実行."""
-        last = state["messages"][-1]
-        if hasattr(last, "tool_calls") and last.tool_calls:
-            tool_msg_count = sum(1 for m in state["messages"] if m.type == "tool")
-            if tool_msg_count >= _MAX_REACT_STEPS:
-                logger.warning("ReAct loop limit reached (%d steps)", tool_msg_count)
-                return "done"
-            return "tool_call"
-        return "done"
+        result = should_stop_tool_loop(state["messages"], _MAX_REACT_STEPS)
+        if result == "done":
+            logger.info("LogsAgent: tool loop ended")
+        return result or "done"

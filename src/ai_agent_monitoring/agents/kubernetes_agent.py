@@ -9,7 +9,12 @@ from langgraph.prebuilt import ToolNode
 
 from ai_agent_monitoring.agents.prompts import KUBERNETES_AGENT_SYSTEM_PROMPT
 from ai_agent_monitoring.core.models import KubernetesResult
-from ai_agent_monitoring.core.state import AgentState, extract_tool_outputs, sanitize_tool_call_messages
+from ai_agent_monitoring.core.state import (
+    AgentState,
+    extract_tool_outputs,
+    sanitize_tool_call_messages,
+    should_stop_tool_loop,
+)
 from ai_agent_monitoring.tools.base import MCPClient
 from ai_agent_monitoring.tools.kubernetes import KubernetesMCPTool, create_kubernetes_tools
 
@@ -59,7 +64,7 @@ class KubernetesAgent:
             logger.warning("KubernetesAgent: No MCP tools available!")
 
         self.llm = llm.bind_tools(self.tools) if self.tools else llm
-        self._tool_node = ToolNode(self.tools)
+        self._tool_node = ToolNode(self.tools, handle_tool_errors=True)
         self.graph = self._build_graph()
 
     def _build_graph(self) -> StateGraph[AgentState]:
@@ -187,11 +192,7 @@ class KubernetesAgent:
     @staticmethod
     def _should_use_tool(state: AgentState) -> str:
         """最後のメッセージにtool_callがあればToolを実行."""
-        last = state["messages"][-1]
-        if hasattr(last, "tool_calls") and last.tool_calls:
-            tool_msg_count = sum(1 for m in state["messages"] if m.type == "tool")
-            if tool_msg_count >= _MAX_REACT_STEPS:
-                logger.warning("ReAct loop limit reached (%d steps)", tool_msg_count)
-                return "done"
-            return "tool_call"
-        return "done"
+        result = should_stop_tool_loop(state["messages"], _MAX_REACT_STEPS)
+        if result == "done":
+            logger.info("KubernetesAgent: tool loop ended")
+        return result or "done"

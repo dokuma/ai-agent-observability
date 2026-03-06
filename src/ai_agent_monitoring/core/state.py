@@ -54,6 +54,48 @@ def sanitize_tool_call_messages(messages: Sequence[BaseMessage]) -> list[BaseMes
     return result
 
 
+_DEFAULT_MAX_TOOL_ERRORS_PER_NAME = 5
+
+
+def count_tool_errors_by_name(messages: Sequence[BaseMessage]) -> dict[str, int]:
+    """ToolMessage からツール名ごとのエラー回数を集計する."""
+    counts: dict[str, int] = {}
+    for msg in messages:
+        if isinstance(msg, ToolMessage) and getattr(msg, "status", None) == "error":
+            name = getattr(msg, "name", None) or "unknown"
+            counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
+def should_stop_tool_loop(
+    messages: Sequence[BaseMessage],
+    max_react_steps: int,
+    max_errors_per_tool: int = _DEFAULT_MAX_TOOL_ERRORS_PER_NAME,
+) -> str | None:
+    """ReAct ループを継続すべきか判定する.
+
+    Returns:
+        "tool_call" / "done" / None (最後のメッセージに tool_calls がない場合)
+    """
+    if not messages:
+        return "done"
+    last = messages[-1]
+    if not (hasattr(last, "tool_calls") and last.tool_calls):
+        return "done"
+
+    tool_msg_count = sum(1 for m in messages if isinstance(m, ToolMessage))
+    if tool_msg_count >= max_react_steps:
+        return "done"
+
+    # 同じツールへのエラーが閾値を超えたら停止
+    error_counts = count_tool_errors_by_name(messages)
+    for _name, count in error_counts.items():
+        if count >= max_errors_per_tool:
+            return "done"
+
+    return "tool_call"
+
+
 _TOOL_OUTPUT_MAX_CHARS = 2000
 _TOOL_OUTPUT_MAX_MESSAGES = 5
 

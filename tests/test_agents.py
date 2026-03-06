@@ -1259,11 +1259,9 @@ class TestMetricsAgentShouldUseTool:
         assert MetricsAgent._should_use_tool(state) == "done"
 
     def test_react_loop_limit(self):
-        tool_msgs = []
-        for _ in range(5):
-            tm = MagicMock()
-            tm.type = "tool"
-            tool_msgs.append(tm)
+        from langchain_core.messages import ToolMessage
+
+        tool_msgs = [ToolMessage(content="ok", tool_call_id=str(i), name="query") for i in range(5)]
         msg = MagicMock(spec=AIMessage)
         msg.tool_calls = [{"name": "query", "args": {}}]
         msg.type = "ai"
@@ -1350,11 +1348,9 @@ class TestLogsAgentShouldUseTool:
         assert LogsAgent._should_use_tool(state) == "done"
 
     def test_react_loop_limit(self):
-        tool_msgs = []
-        for _ in range(5):
-            tm = MagicMock()
-            tm.type = "tool"
-            tool_msgs.append(tm)
+        from langchain_core.messages import ToolMessage
+
+        tool_msgs = [ToolMessage(content="ok", tool_call_id=str(i), name="query") for i in range(5)]
         msg = MagicMock(spec=AIMessage)
         msg.tool_calls = [{"name": "query", "args": {}}]
         msg.type = "ai"
