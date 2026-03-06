@@ -308,14 +308,11 @@ secrets:
 ```
 
 Embedding エンドポイントは LLM と異なる場合のみ指定する。
-未指定時は `externalServices.llm.endpoint` がフォールバックとして使用される:
+未指定（空文字）の場合は `LLM_ENDPOINT` がフォールバックとして使用される:
 
 ```yaml
-# embedding_endpoint は ConfigMap ではなく extraEnv で設定
-agent:
-  extraEnv:
-    - name: EMBEDDING_ENDPOINT
-      value: "https://api.openai.com/v1"
+config:
+  embeddingEndpoint: "https://api.openai.com/v1"
 ```
 
 ### デプロイ手順

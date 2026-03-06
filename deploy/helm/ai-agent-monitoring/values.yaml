@@ -316,6 +316,7 @@ config:
   mcpCaBundle: ""
   # Qdrant / Embedding
   qdrantEnabled: "false"
+  embeddingEndpoint: ""  # 空の場合は LLM_ENDPOINT を使用
   embeddingModel: "text-embedding-3-small"
   embeddingDimensions: "0"
 

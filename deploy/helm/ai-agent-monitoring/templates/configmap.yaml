@@ -41,6 +41,7 @@ data:
   {{- if .Values.qdrant.enabled }}
   QDRANT_URL: {{ printf "http://%s-qdrant.%s.svc:6333" .Release.Name .Release.Namespace | quote }}
   {{- end }}
+  EMBEDDING_ENDPOINT: {{ .Values.config.embeddingEndpoint | quote }}
   EMBEDDING_MODEL: {{ .Values.config.embeddingModel | quote }}
   EMBEDDING_DIMENSIONS: {{ .Values.config.embeddingDimensions | quote }}
   # Data paths
