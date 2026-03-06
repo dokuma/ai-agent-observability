@@ -114,7 +114,7 @@ async def submit_query(
 ) -> UserQueryResponse:
     """ユーザの自然言語クエリを受け付け、レポート検索または新規調査にルーティング."""
     # 既存レポートがある場合、インテント分類を実行
-    report_search_timeout = 20  # Pipe Function の POST timeout (30s) 未満に設定
+    report_search_timeout = app_state.settings.report_search_timeout_seconds
     if app_state.report_store and app_state.report_store.count() > 0 and app_state.report_search_agent:
         intent = await _classify_query_intent(request.query)
         if intent == "search":
@@ -141,14 +141,35 @@ async def submit_query(
                 )
             except TimeoutError:
                 logger.warning(
-                    "Report search timed out after %ds, falling back",
+                    "Report search timed out after %ds",
                     report_search_timeout,
                 )
                 app_state.fail_investigation(inv_id, "レポート検索がタイムアウト")
+                return UserQueryResponse(
+                    investigation_id=inv_id,
+                    status="completed",
+                    routed_to="report_search",
+                    message="レポート検索がタイムアウトしました",
+                    report_search_answer=(
+                        "⏰ 過去レポートの検索に時間がかかっています。\n\n"
+                        "以下のいずれかをお試しください:\n"
+                        "- もう少し具体的なキーワードで再度質問する\n"
+                        "- 「新しく調査して」と入力して新規調査を開始する"
+                    ),
+                )
             except Exception:
-                logger.warning("Report search failed, falling back to investigation", exc_info=True)
+                logger.warning("Report search failed", exc_info=True)
                 app_state.fail_investigation(inv_id, "レポート検索に失敗")
-                # フォールバック: 新規調査として続行（下の処理へ）
+                return UserQueryResponse(
+                    investigation_id=inv_id,
+                    status="completed",
+                    routed_to="report_search",
+                    message="レポート検索に失敗しました",
+                    report_search_answer=(
+                        "❌ 過去レポートの検索中にエラーが発生しました。\n\n"
+                        "「新しく調査して」と入力して新規調査を開始できます。"
+                    ),
+                )
 
     user_query = UserQuery(
         raw_input=request.query,

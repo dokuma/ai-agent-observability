@@ -459,10 +459,10 @@ class TestReportEndpoints:
 
 
 class TestReportSearchTimeout:
-    """report_search がタイムアウトした場合のフォールバックテスト."""
+    """report_search がタイムアウトした場合のテスト."""
 
-    def test_report_search_timeout_falls_back_to_investigation(self, client):
-        """report_search が遅い場合、タイムアウトして新規調査にフォールバック."""
+    def test_report_search_timeout_returns_message(self, client):
+        """report_search が遅い場合、タイムアウトしてユーザにメッセージを返す."""
         import asyncio
 
         mock_store = MagicMock()
@@ -482,9 +482,6 @@ class TestReportSearchTimeout:
         mock_llm.ainvoke.return_value = MagicMock(content="search")
         mock_orchestrator = MagicMock()
         mock_orchestrator.llm = mock_llm
-        compiled = MagicMock()
-        compiled.ainvoke = AsyncMock(return_value={"rca_report": None})
-        mock_orchestrator.compile.return_value = compiled
         app_state.orchestrator = mock_orchestrator
 
         response = client.post(
@@ -493,9 +490,10 @@ class TestReportSearchTimeout:
         )
         assert response.status_code == 200
         data = response.json()
-        # タイムアウト後、新規調査にフォールバック
-        assert data["routed_to"] == "investigation"
-        assert data["status"] == "running"
+        # タイムアウト後、フォールバックせずメッセージを返す
+        assert data["routed_to"] == "report_search"
+        assert data["status"] == "completed"
+        assert "時間がかかっています" in data["report_search_answer"]
 
         # cleanup
         app_state.report_store = None

@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     # Agent
     max_iterations: int = 5
     investigation_timeout_seconds: int = 300
+    report_search_timeout_seconds: int = 60
     max_react_steps: int = 5
     max_tool_result_chars: int = 8000
 
