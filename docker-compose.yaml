@@ -50,6 +50,27 @@ services:
         condition: service_started
       kubernetes-mcp:
         condition: service_healthy
+      qdrant:
+        condition: service_started
+    environment:
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_ENABLED: ${QDRANT_ENABLED:-false}
+      EMBEDDING_ENDPOINT: ${EMBEDDING_ENDPOINT:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+    networks:
+      - monitoring
+
+  # ===========================================================
+  # Qdrant (Vector DB)
+  # ===========================================================
+  qdrant:
+    image: qdrant/qdrant:v1.12.1
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
     networks:
       - monitoring
 
@@ -469,6 +490,7 @@ services:
       - monitoring
 
 volumes:
+  qdrant_data:
   open_webui_data:
   prometheus_data:
   loki_data:

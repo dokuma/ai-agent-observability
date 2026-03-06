@@ -265,6 +265,111 @@ type: kubernetes.io/service-account-token
 
 > **推奨:** OpenShift 4.x+ では自動バウンドトークンを使用し、長期トークンの作成は避ける。
 
+## Qdrant (ベクトル検索)
+
+セマンティック検索を有効にするには Qdrant ベクトル DB と Embedding API が必要。
+デフォルトでは `qdrant.enabled: false` のため、有効化しない限り既存の BM25 検索のみで動作する。
+
+### Helm Chart でのデプロイ
+
+`values.yaml` で Qdrant を有効化する:
+
+```yaml
+qdrant:
+  enabled: true
+  image:
+    repository: qdrant/qdrant
+    tag: "v1.12.1"
+  persistence:
+    size: 5Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+config:
+  qdrantEnabled: "true"
+  embeddingModel: "text-embedding-3-small"
+  embeddingDimensions: "0"  # 0 = モデルデフォルト
+```
+
+Embedding API キーが必要な場合は `secrets` セクションに設定する:
+
+```yaml
+secrets:
+  embeddingApiKey: "sk-..."
+```
+
+Embedding エンドポイントは LLM と異なる場合のみ指定する。
+未指定時は `externalServices.llm.endpoint` がフォールバックとして使用される:
+
+```yaml
+# embedding_endpoint は ConfigMap ではなく extraEnv で設定
+agent:
+  extraEnv:
+    - name: EMBEDDING_ENDPOINT
+      value: "https://api.openai.com/v1"
+```
+
+### デプロイ手順
+
+```bash
+# 1. values.yaml を編集（上記参照）
+# 2. 依存チャートの更新
+helm dependency update deploy/helm/ai-agent-monitoring/
+
+# 3. デプロイ（新規 or アップグレード）
+helm upgrade --install ai-agent-monitoring deploy/helm/ai-agent-monitoring/ \
+  -n ai-monitoring \
+  --set config.qdrantEnabled=true \
+  --set secrets.embeddingApiKey="sk-..."
+
+# 4. Qdrant Pod の起動確認
+kubectl get pods -n ai-monitoring -l app.kubernetes.io/component=qdrant
+
+# 5. Qdrant ヘルスチェック
+kubectl exec -n ai-monitoring deploy/ai-agent-monitoring-agent -- \
+  wget -qO- http://ai-agent-monitoring-qdrant.ai-monitoring.svc:6333/healthz
+```
+
+### アーキテクチャ
+
+有効化すると以下の Kubernetes リソースが作成される:
+
+| リソース | 名前 | 説明 |
+|---------|------|------|
+| StatefulSet | `*-qdrant` | Qdrant サーバー (1 replica) |
+| Service | `*-qdrant` | ClusterIP (6333: HTTP, 6334: gRPC) |
+| PVC | `qdrant-storage-*-qdrant-0` | StatefulSet の volumeClaimTemplate |
+
+Agent Pod は起動時に自動的に:
+1. Qdrant コレクション（`rca_reports`）を作成
+2. SQLite に保存済みのレポートを Qdrant にマイグレーション（差分のみ）
+3. 以後の検索は BM25 + Vector の RRF ハイブリッドで実行
+
+### 縮退運転
+
+Qdrant が停止・未接続の場合でも Agent は正常に動作する:
+
+| 状況 | 動作 |
+|------|------|
+| `qdrant.enabled: false` | BM25 のみで検索（既存動作） |
+| Qdrant Pod が停止中 | ベクトル検索をスキップし BM25 のみで検索 |
+| Embedding API が不通 | レポートの SQLite 保存は成功、ベクトル登録のみスキップ |
+
+### 永続化とバックアップ
+
+Qdrant のデータは StatefulSet の PVC に永続化される。
+ベクトルデータは SQLite のレポートから再構築可能なため、
+PVC を失った場合は Agent の再起動で自動マイグレーションが実行される。
+
+バックアップの優先順位:
+1. **SQLite DB** (`/app/data/rca_reports.db`) — 正本。必ずバックアップする
+2. **Qdrant PVC** — オプション。失っても SQLite から再構築可能
+
 ## Docker Compose (開発環境)
 
 ローカル開発ではホストの kubeconfig を読み取り専用でマウントする:

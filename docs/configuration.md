@@ -38,6 +38,23 @@
 | `MAX_ITERATIONS` | `5` | 調査ループの最大反復回数 |
 | `INVESTIGATION_TIMEOUT_SECONDS` | `120` | 調査タイムアウト (秒) |
 
+### Embedding / ベクトル検索
+
+| 変数名 | デフォルト | 説明 |
+|--------|-----------|------|
+| `QDRANT_ENABLED` | `false` | Qdrant ベクトル検索の有効化 |
+| `QDRANT_URL` | `http://localhost:6333` | Qdrant サーバー URL |
+| `QDRANT_REPORTS_COLLECTION` | `rca_reports` | レポート用コレクション名 |
+| `QDRANT_CHECKPOINTS_COLLECTION` | `checkpoint_outputs` | チェックポイント用コレクション名 |
+| `EMBEDDING_ENDPOINT` | (空 = `LLM_ENDPOINT`) | Embedding API エンドポイント |
+| `EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding モデル名 |
+| `EMBEDDING_API_KEY` | (空 = `LLM_API_KEY`) | Embedding API キー |
+| `EMBEDDING_DIMENSIONS` | `0` (モデルデフォルト) | ベクトル次元数の明示指定 |
+| `RRF_K` | `60` | RRF (Reciprocal Rank Fusion) パラメータ |
+
+> **注:** `EMBEDDING_ENDPOINT` / `EMBEDDING_API_KEY` が未設定の場合、LLM の設定値がフォールバックとして使用される。
+> カスタムヘッダー (`LLM_CUSTOM_HEADER_*`) は Embedding リクエストにも自動適用される。
+
 ### 通知
 
 | 変数名 | デフォルト | 説明 |

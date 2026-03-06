@@ -249,6 +249,24 @@ kubernetes-mcp-server:
     runAsNonRoot: true
 
 # ===========================================================
+# Qdrant (Vector DB)
+# ===========================================================
+qdrant:
+  enabled: false
+  image:
+    repository: qdrant/qdrant
+    tag: "v1.12.1"
+  persistence:
+    size: 5Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+# ===========================================================
 # 外部サービス接続先
 # ===========================================================
 externalServices:
@@ -287,6 +305,10 @@ config:
   mcpUseTls: "false"
   mcpVerifySsl: "true"
   mcpCaBundle: ""
+  # Qdrant / Embedding
+  qdrantEnabled: "false"
+  embeddingModel: "text-embedding-3-small"
+  embeddingDimensions: "0"
 
 # ===========================================================
 # Secret 設定値（機密）
@@ -302,6 +324,7 @@ secrets:
   #   Authorization: "Bearer eyJhbG..."
   #   X-Custom-Header: "my-value"
   llmCustomHeaders: {}
+  embeddingApiKey: ""
   grafanaApiKey: ""
   grafanaServiceAccountToken: ""
   slackWebhookUrl: ""

@@ -1,0 +1,22 @@
+{{- if .Values.qdrant.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ai-agent-monitoring.fullname" . }}-qdrant
+  labels:
+    {{- include "ai-agent-monitoring.labels" . | nindent 4 }}
+    {{- include "ai-agent-monitoring.selectorLabels" (dict "context" . "component" "qdrant") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 6333
+      targetPort: http
+      protocol: TCP
+    - name: grpc
+      port: 6334
+      targetPort: grpc
+      protocol: TCP
+  selector:
+    {{- include "ai-agent-monitoring.selectorLabels" (dict "context" . "component" "qdrant") | nindent 4 }}
+{{- end }}

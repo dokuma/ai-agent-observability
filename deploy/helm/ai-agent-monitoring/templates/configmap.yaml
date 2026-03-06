@@ -36,6 +36,13 @@ data:
   MCP_USE_TLS: {{ .Values.config.mcpUseTls | quote }}
   MCP_VERIFY_SSL: {{ .Values.config.mcpVerifySsl | quote }}
   MCP_CA_BUNDLE: {{ .Values.config.mcpCaBundle | quote }}
+  # Qdrant / Embedding
+  QDRANT_ENABLED: {{ .Values.config.qdrantEnabled | quote }}
+  {{- if .Values.qdrant.enabled }}
+  QDRANT_URL: {{ printf "http://%s-qdrant.%s.svc:6333" (include "ai-agent-monitoring.fullname" .) .Release.Namespace | quote }}
+  {{- end }}
+  EMBEDDING_MODEL: {{ .Values.config.embeddingModel | quote }}
+  EMBEDDING_DIMENSIONS: {{ .Values.config.embeddingDimensions | quote }}
   # Data paths
   REPORT_STORE_PATH: "{{ .Values.agent.persistence.mountPath }}/rca_reports.db"
   DATASOURCE_PREFERENCES_PATH: "{{ .Values.agent.persistence.mountPath }}/datasource_preferences.json"
