@@ -456,3 +456,190 @@ class TestReportEndpoints:
             json={"query": ""},
         )
         assert response.status_code == 422
+
+
+class TestReportSearchTimeout:
+    """report_search がタイムアウトした場合のフォールバックテスト."""
+
+    def test_report_search_timeout_falls_back_to_investigation(self, client):
+        """report_search が遅い場合、タイムアウトして新規調査にフォールバック."""
+        import asyncio
+
+        mock_store = MagicMock()
+        mock_store.count.return_value = 3
+
+        async def slow_search(**kwargs):
+            await asyncio.sleep(60)  # タイムアウトより長い
+
+        mock_search_agent = MagicMock()
+        mock_search_agent.search_and_answer = slow_search
+
+        app_state.report_store = mock_store
+        app_state.report_search_agent = mock_search_agent
+
+        # "search" を返すLLM
+        mock_llm = AsyncMock()
+        mock_llm.ainvoke.return_value = MagicMock(content="search")
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.llm = mock_llm
+        compiled = MagicMock()
+        compiled.ainvoke = AsyncMock(return_value={"rca_report": None})
+        mock_orchestrator.compile.return_value = compiled
+        app_state.orchestrator = mock_orchestrator
+
+        response = client.post(
+            "/api/v1/query",
+            json={"query": "前回の問題について教えてください"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        # タイムアウト後、新規調査にフォールバック
+        assert data["routed_to"] == "investigation"
+        assert data["status"] == "running"
+
+        # cleanup
+        app_state.report_store = None
+        app_state.report_search_agent = None
+
+
+class TestSecondQueryAfterReport:
+    """1回目の調査完了後に2回目のクエリが正常動作するE2Eフローテスト."""
+
+    def test_second_query_after_completed_investigation(self, client):
+        """RCA完了後の2回目のクエリが正常にレスポンスを返す."""
+        # --- 1回目: 調査完了 ---
+        app_state.orchestrator = MagicMock()
+        compiled = MagicMock()
+        compiled.ainvoke = AsyncMock(return_value={"rca_report": None})
+        app_state.orchestrator.compile.return_value = compiled
+        app_state.report_store = None  # レポートストアなし → report_search スキップ
+
+        resp1 = client.post(
+            "/api/v1/query",
+            json={"query": "CPU使用率が高い原因を調査して"},
+        )
+        assert resp1.status_code == 200
+        data1 = resp1.json()
+        inv_id_1 = data1["investigation_id"]
+        assert data1["status"] == "running"
+
+        # 調査完了をシミュレート
+        report = RCAReport(
+            trigger_type=TriggerType.USER_QUERY,
+            root_causes=[RootCause(description="CPU spike in app pod", confidence=0.9)],
+            markdown="# RCA Report\nCPU spike detected.",
+        )
+        app_state.complete_investigation(inv_id_1, rca_report=report)
+
+        # レポート取得
+        report_resp = client.get(f"/api/v1/investigations/{inv_id_1}/report")
+        assert report_resp.status_code == 200
+        assert report_resp.json()["markdown"] == "# RCA Report\nCPU spike detected."
+
+        # --- 2回目: 新しいクエリ ---
+        resp2 = client.post(
+            "/api/v1/query",
+            json={"query": "メモリ使用量も確認してください"},
+        )
+        assert resp2.status_code == 200
+        data2 = resp2.json()
+        assert data2["status"] == "running"
+        assert data2["investigation_id"] != inv_id_1
+
+    def test_second_query_with_report_search(self, client):
+        """1回目完了後、2回目が report_search にルーティングされても正常レスポンス."""
+        # --- 1回目: 調査完了 ---
+        app_state.orchestrator = MagicMock()
+        compiled = MagicMock()
+        compiled.ainvoke = AsyncMock(return_value={"rca_report": None})
+        app_state.orchestrator.compile.return_value = compiled
+        app_state.report_store = None
+
+        resp1 = client.post(
+            "/api/v1/query",
+            json={"query": "クラスタの状態を確認して"},
+        )
+        assert resp1.status_code == 200
+        inv_id_1 = resp1.json()["investigation_id"]
+
+        report = RCAReport(
+            trigger_type=TriggerType.USER_QUERY,
+            root_causes=[RootCause(description="OOMKilled pod", confidence=0.85)],
+            markdown="# Report\nOOMKilled detected.",
+        )
+        app_state.complete_investigation(inv_id_1, rca_report=report)
+
+        # --- 2回目: report_search で即時完了 ---
+        mock_store = MagicMock()
+        mock_store.count.return_value = 1
+        mock_search_agent = AsyncMock()
+        mock_search_agent.search_and_answer.return_value = ReportSearchResponse(
+            answer="前回の調査では OOMKilled が検出されました。",
+            results=[],
+            total_reports=1,
+        )
+        app_state.report_store = mock_store
+        app_state.report_search_agent = mock_search_agent
+
+        mock_llm = AsyncMock()
+        mock_llm.ainvoke.return_value = MagicMock(content="search")
+        app_state.orchestrator.llm = mock_llm
+
+        resp2 = client.post(
+            "/api/v1/query",
+            json={"query": "前回の問題は何でしたか？"},
+        )
+        assert resp2.status_code == 200
+        data2 = resp2.json()
+        assert data2["routed_to"] == "report_search"
+        assert data2["status"] == "completed"
+        assert "OOMKilled" in data2["report_search_answer"]
+
+        # cleanup
+        app_state.report_store = None
+        app_state.report_search_agent = None
+
+
+class TestPendingInputStringType:
+    """pending_input が文字列（時間範囲 interrupt）の場合のテスト."""
+
+    def test_status_with_string_pending_input(self, client):
+        """pending_input が文字列でも InvestigationStatus のバリデーションが通る."""
+        inv_id = app_state.create_investigation("user_query")
+
+        mock_compiled = MagicMock()
+        mock_config = {"configurable": {"thread_id": inv_id}}
+        app_state.set_waiting_for_input(
+            inv_id,
+            pending_input="調査対象の時間範囲を教えてください。例: 直近1時間",
+            compiled_graph=mock_compiled,
+            config=mock_config,
+        )
+
+        response = client.get(f"/api/v1/investigations/{inv_id}")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "waiting_for_input"
+        assert data["pending_input"] == "調査対象の時間範囲を教えてください。例: 直近1時間"
+
+    def test_resume_with_string_pending_input(self, client):
+        """文字列 pending_input の調査を resume できる."""
+        inv_id = app_state.create_investigation("user_query")
+
+        mock_compiled = MagicMock()
+        mock_compiled.ainvoke = AsyncMock(return_value={"rca_report": None})
+        mock_config = {"configurable": {"thread_id": inv_id}}
+        app_state.set_waiting_for_input(
+            inv_id,
+            pending_input="時間範囲を指定してください",
+            compiled_graph=mock_compiled,
+            config=mock_config,
+        )
+
+        response = client.post(
+            f"/api/v1/investigations/{inv_id}/input",
+            json={"value": "直近1時間"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "running"

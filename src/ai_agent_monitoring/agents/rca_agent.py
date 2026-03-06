@@ -316,9 +316,16 @@ class RCAAgent:
         try:
             json_str = self._extract_json(content)
             data = json.loads(json_str)
-            root_causes = [RootCause(**rc) for rc in data.get("root_causes", [])]
-        except (json.JSONDecodeError, ValueError):
-            logger.warning("RCAレポートのパースに失敗。LLM出力をそのまま使用。")
+            root_causes = []
+            for rc in data.get("root_causes", []):
+                # confidence を 0.0〜1.0 に正規化
+                conf = float(rc.get("confidence", 0.5))
+                if conf > 1.0:
+                    conf = conf / 100.0
+                rc["confidence"] = max(0.0, min(1.0, conf))
+                root_causes.append(RootCause(**rc))
+        except Exception:
+            logger.warning("RCAレポートのパースに失敗。LLM出力をそのまま使用。content=%.500s", content)
             root_causes = [RootCause(description=content, confidence=0.5)]
             data = {}
 
@@ -349,10 +356,22 @@ class RCAAgent:
     @staticmethod
     def _extract_json(text: str) -> str:
         """テキストからJSON部分を抽出."""
+        # ```json ... ``` ブロックを優先
         if "```json" in text:
             start = text.index("```json") + 7
             end = text.index("```", start)
             return text[start:end].strip()
+        if "```" in text:
+            start = text.index("```") + 3
+            # 言語指定行をスキップ
+            newline = text.find("\n", start)
+            if newline != -1:
+                start = newline + 1
+            end = text.index("```", start)
+            candidate = text[start:end].strip()
+            if candidate.startswith("{"):
+                return candidate
+        # { ... } を抽出
         start = text.index("{")
         end = text.rindex("}") + 1
         return text[start:end]

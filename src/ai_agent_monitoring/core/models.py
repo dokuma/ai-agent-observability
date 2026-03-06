@@ -107,6 +107,8 @@ class KubernetesResult(BaseModel):
 class RootCause(BaseModel):
     """特定された根本原因."""
 
+    model_config = {"extra": "ignore"}
+
     description: str
     confidence: float = Field(ge=0.0, le=1.0)
     evidence: list[str] = Field(default_factory=list)
