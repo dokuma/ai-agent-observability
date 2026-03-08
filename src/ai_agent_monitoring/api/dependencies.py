@@ -274,7 +274,7 @@ class AppState:
             vector_size = self.settings.embedding_dimensions
         else:
             try:
-                test_vec = embeddings.embed_query("dimension test")
+                test_vec = await embeddings.aembed_query("dimension test")
                 vector_size = len(test_vec)
                 logger.info("Detected embedding dimension: %d", vector_size)
             except Exception:

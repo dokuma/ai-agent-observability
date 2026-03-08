@@ -1,6 +1,6 @@
 """VectorStore のテスト."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -10,8 +10,8 @@ from ai_agent_monitoring.core.vector_store import VectorSearchResult, VectorStor
 @pytest.fixture
 def mock_embeddings():
     emb = MagicMock()
-    emb.embed_query.return_value = [0.1, 0.2, 0.3]
-    emb.embed_documents.return_value = [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
+    emb.aembed_query = AsyncMock(return_value=[0.1, 0.2, 0.3])
+    emb.aembed_documents = AsyncMock(return_value=[[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]])
     return emb
 
 
@@ -60,7 +60,7 @@ class TestVectorStoreUpsert:
     async def test_upsert_calls_embed_and_store(self, store, mock_qdrant_client, mock_embeddings):
         await store.upsert("doc-1", "test text", {"key": "value"})
 
-        mock_embeddings.embed_query.assert_called_once_with("test text")
+        mock_embeddings.aembed_query.assert_called_once_with("test text")
         mock_qdrant_client.upsert.assert_called_once()
         args = mock_qdrant_client.upsert.call_args
         assert args.kwargs["collection_name"] == "test_collection"
@@ -78,7 +78,7 @@ class TestVectorStoreUpsert:
         ]
         await store.upsert_batch(items)
 
-        mock_embeddings.embed_documents.assert_called_once_with(["text1", "text2"])
+        mock_embeddings.aembed_documents.assert_called_once_with(["text1", "text2"])
         mock_qdrant_client.upsert.assert_called_once()
         points = mock_qdrant_client.upsert.call_args.kwargs["points"]
         assert len(points) == 2
@@ -86,7 +86,7 @@ class TestVectorStoreUpsert:
     @pytest.mark.asyncio
     async def test_upsert_batch_empty(self, store, mock_qdrant_client, mock_embeddings):
         await store.upsert_batch([])
-        mock_embeddings.embed_documents.assert_not_called()
+        mock_embeddings.aembed_documents.assert_not_called()
         mock_qdrant_client.upsert.assert_not_called()
 
 
@@ -101,7 +101,7 @@ class TestVectorStoreSearch:
 
         results = await store.search("test query", top_k=3)
 
-        mock_embeddings.embed_query.assert_called_once_with("test query")
+        mock_embeddings.aembed_query.assert_called_once_with("test query")
         assert len(results) == 1
         assert isinstance(results[0], VectorSearchResult)
         assert results[0].doc_id == "doc-1"

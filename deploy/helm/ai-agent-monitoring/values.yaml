@@ -254,6 +254,10 @@ kubernetes-mcp-server:
 qdrant:
   enabled: false
   replicaCount: 1
+  # Qdrant 設定（production.yaml に書き出される）
+  config:
+    # 匿名利用統計の外部送信を無効化（クローズドネットワーク環境向け）
+    telemetry_disabled: true
   persistence:
     size: 5Gi
   resources:
