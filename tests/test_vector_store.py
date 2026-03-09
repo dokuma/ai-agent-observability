@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from openai import APIStatusError
+from openai import APIConnectionError, APIStatusError
 
 from ai_agent_monitoring.core.vector_store import VectorSearchResult, VectorStore
 
@@ -152,6 +152,21 @@ def _make_api_status_error(status_code: int, message: str) -> APIStatusError:
     return APIStatusError(message=message, response=response, body=None)
 
 
+def _make_api_connection_error_with_http_cause(status_code: int, body: str) -> APIConnectionError:
+    """503 等を __cause__ に持つ APIConnectionError を生成."""
+    http_err = httpx.HTTPStatusError(
+        message=f"Server error '{status_code}'",
+        request=httpx.Request("POST", "http://test/v1/embeddings"),
+        response=httpx.Response(status_code=status_code, text=body),
+    )
+    conn_err = APIConnectionError(
+        message="Connection error.",
+        request=httpx.Request("POST", "http://test/v1/embeddings"),
+    )
+    conn_err.__cause__ = http_err
+    return conn_err
+
+
 class TestVectorStoreEmbeddingError:
     @pytest.mark.asyncio
     async def test_upsert_logs_503_error(self, store, mock_embeddings, caplog):
@@ -182,6 +197,44 @@ class TestVectorStoreEmbeddingError:
             await store.search("query")
         assert "503" in caplog.text
         assert "search" in caplog.text
+
+
+class TestVectorStoreConnectionError:
+    """APIConnectionError（503 が __cause__ にラップされるケース）のテスト."""
+
+    @pytest.mark.asyncio
+    async def test_upsert_logs_underlying_503(self, store, mock_embeddings, caplog):
+        mock_embeddings.aembed_query = AsyncMock(
+            side_effect=_make_api_connection_error_with_http_cause(503, "Service Unavailable"),
+        )
+        with pytest.raises(APIConnectionError):
+            await store.upsert("doc-1", "text", {})
+        assert "503" in caplog.text
+        assert "upsert" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_search_logs_underlying_503(self, store, mock_embeddings, caplog):
+        mock_embeddings.aembed_query = AsyncMock(
+            side_effect=_make_api_connection_error_with_http_cause(503, "model loading"),
+        )
+        with pytest.raises(APIConnectionError):
+            await store.search("query")
+        assert "503" in caplog.text
+        assert "model loading" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_logs_cause_when_no_http_error(self, store, mock_embeddings, caplog):
+        """__cause__ が HTTPStatusError でない場合も原因を出力する."""
+        conn_err = APIConnectionError(
+            message="Connection refused",
+            request=httpx.Request("POST", "http://test/v1/embeddings"),
+        )
+        conn_err.__cause__ = ConnectionRefusedError("refused")
+        mock_embeddings.aembed_query = AsyncMock(side_effect=conn_err)
+        with pytest.raises(APIConnectionError):
+            await store.upsert("doc-1", "text", {})
+        assert "Connection refused" in caplog.text
+        assert "ConnectionRefusedError" in caplog.text
 
 
 class TestVectorStoreCount:

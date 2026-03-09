@@ -6,11 +6,37 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from openai import APIStatusError
+import httpx
+from openai import APIConnectionError, APIStatusError
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
 
 logger = logging.getLogger(__name__)
+
+
+def _log_connection_error(e: APIConnectionError, operation: str) -> None:
+    """APIConnectionError の原因チェーンを辿り、HTTP ステータス情報を含めてログ出力."""
+    cause = e.__cause__
+    # __cause__ チェーンを辿って httpx.HTTPStatusError を探す
+    while cause is not None:
+        if isinstance(cause, httpx.HTTPStatusError):
+            logger.error(
+                "Embedding API connection error during %s (underlying HTTP %d): %s — response: %s",
+                operation,
+                cause.response.status_code,
+                e.message,
+                cause.response.text[:500],
+            )
+            return
+        cause = getattr(cause, "__cause__", None)
+    # HTTP ステータス情報が見つからない場合は __cause__ の型も出力
+    cause_info = f"{type(e.__cause__).__name__}: {e.__cause__}" if e.__cause__ else "no cause"
+    logger.error(
+        "Embedding API connection error during %s: %s (cause: %s)",
+        operation,
+        e.message,
+        cause_info,
+    )
 
 
 @dataclass
@@ -80,6 +106,9 @@ class VectorStore:
                 e.message,
             )
             raise
+        except APIConnectionError as e:
+            _log_connection_error(e, "upsert")
+            raise
         point_id = self._to_point_id(doc_id)
 
         def _upsert() -> None:
@@ -114,6 +143,9 @@ class VectorStore:
                 e.message,
             )
             raise
+        except APIConnectionError as e:
+            _log_connection_error(e, "batch upsert")
+            raise
 
         def _upsert() -> None:
             points = [
@@ -137,6 +169,9 @@ class VectorStore:
                 e.status_code,
                 e.message,
             )
+            raise
+        except APIConnectionError as e:
+            _log_connection_error(e, "search")
             raise
 
         def _search() -> list[VectorSearchResult]:

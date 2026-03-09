@@ -11,7 +11,7 @@ from uuid import uuid4
 import httpx
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
-from openai import APIStatusError
+from openai import APIConnectionError, APIStatusError
 from pydantic import SecretStr
 
 from ai_agent_monitoring.agents.orchestrator import OrchestratorAgent
@@ -26,6 +26,38 @@ from ai_agent_monitoring.core.vector_store import VectorStore
 from ai_agent_monitoring.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
+
+
+def _log_emb_connection_error(
+    e: APIConnectionError,
+    endpoint: str,
+    model: str,
+    extra: str = "",
+) -> None:
+    """APIConnectionError の原因チェーンから HTTP ステータス情報を抽出してログ出力."""
+    cause = e.__cause__
+    while cause is not None:
+        if isinstance(cause, httpx.HTTPStatusError):
+            logger.error(
+                "Embedding API connection error (endpoint=%s, model=%s, underlying HTTP %d): %s — response: %s%s",
+                endpoint,
+                model,
+                cause.response.status_code,
+                e.message,
+                cause.response.text[:500],
+                f" ({extra})" if extra else "",
+            )
+            return
+        cause = getattr(cause, "__cause__", None)
+    cause_info = f"{type(e.__cause__).__name__}: {e.__cause__}" if e.__cause__ else "no cause"
+    logger.error(
+        "Embedding API connection error (endpoint=%s, model=%s): %s (cause: %s)%s",
+        endpoint,
+        model,
+        e.message,
+        cause_info,
+        f" ({extra})" if extra else "",
+    )
 
 
 def _log_llm_request(request: httpx.Request) -> None:
@@ -308,6 +340,9 @@ class AppState:
                     e.message,
                 )
                 vector_size = 1536
+            except APIConnectionError as e:
+                _log_emb_connection_error(e, emb_endpoint, self.settings.embedding_model)
+                vector_size = 1536
             except httpx.HTTPStatusError as e:
                 logger.error(
                     "Embedding API returned HTTP %d (endpoint=%s, model=%s): %s",
@@ -420,6 +455,13 @@ class AppState:
                 report_id,
                 e.status_code,
                 e.message,
+            )
+        except APIConnectionError as e:
+            _log_emb_connection_error(
+                e,
+                self.settings.embedding_endpoint or self.settings.llm_endpoint,
+                self.settings.embedding_model,
+                extra=f"report_id={report_id}",
             )
         except httpx.HTTPStatusError as e:
             logger.error(
