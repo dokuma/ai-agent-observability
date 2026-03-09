@@ -14,6 +14,21 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Langfuse observe デコレータ（未インストール時はno-op）
+try:
+    from langfuse import observe as _observe
+except ImportError:
+
+    def _observe(func: Any = None, **kwargs: Any) -> Any:
+        """No-op fallback when langfuse is not installed."""
+        if func is not None:
+            return func
+
+        def decorator(f: Any) -> Any:
+            return f
+
+        return decorator
+
 
 class ReportSearchAgent:
     """過去のRCAレポートを検索し、LLMで回答を生成するエージェント."""
@@ -23,6 +38,7 @@ class ReportSearchAgent:
         self._report_store = report_store
         self._hybrid_searcher = hybrid_searcher
 
+    @_observe(name="report_search_translate_keywords", as_type="span")
     async def _translate_query_to_keywords(self, query: str) -> str:
         """ユーザクエリから英語検索キーワードを生成."""
         messages = [
@@ -43,6 +59,7 @@ class ReportSearchAgent:
             logger.warning("Failed to translate query to English keywords")
             return ""
 
+    @_observe(name="report_search_and_answer", as_type="span")
     async def search_and_answer(self, query: str, top_k: int = 5) -> ReportSearchResponse:
         """クエリに基づいてレポートを検索し、LLMで回答を生成する."""
         total = self._report_store.count()
@@ -130,7 +147,30 @@ class ReportSearchAgent:
         ]
 
         response = await self._llm.ainvoke(messages)
-        answer = response.content if hasattr(response, "content") else str(response)
+        raw_content = response.content if hasattr(response, "content") else str(response)
+
+        # LLMプロバイダによっては content がリスト形式のコンテンツブロックで返る場合がある
+        # 例: [{"type": "text", "text": "..."}]
+        if isinstance(raw_content, list):
+            text_parts = []
+            for block in raw_content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    text_parts.append(block.get("text", ""))
+                elif isinstance(block, str):
+                    text_parts.append(block)
+            answer = "\n".join(text_parts)
+        else:
+            answer = str(raw_content)
+
+        # 空や JSON 構造だけの回答はフォールバック
+        stripped = answer.strip()
+        if not stripped or stripped in ("{}", "[]", "null"):
+            logger.warning("Report search returned empty/JSON-only answer: %r", stripped[:100])
+            answer = (
+                "過去のRCAレポートから情報が見つかりましたが、"
+                "回答の生成に失敗しました。別のキーワードでお試しください。"
+            )
+
         logger.info("Report search completed: answer_length=%d", len(answer))
 
         return ReportSearchResponse(
