@@ -497,9 +497,7 @@ async def _run_report_search(inv_id: str, query: str, timeout: int) -> None:
                 record.followup_investigation_id = followup_id
 
             # フォローアップ調査をバックグラウンドで開始
-            followup_task = asyncio.create_task(
-                _run_user_query_investigation(followup_id, user_query)
-            )
+            followup_task = asyncio.create_task(_run_user_query_investigation(followup_id, user_query))
             followup_record = app_state.get_investigation(followup_id)
             if followup_record:
                 followup_record.task = followup_task
