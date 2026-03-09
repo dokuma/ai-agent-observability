@@ -192,9 +192,46 @@ class TestUserQuery:
         data = response.json()
         assert data["routed_to"] == "investigation"
         assert data["status"] == "running"
+        # 検索不一致メッセージが含まれる
+        assert "見つからなかった" in data["message"]
 
         app_state.report_store = None
         app_state.report_search_agent = None
+
+    def test_query_hybrid_search_routes_to_report_search(self, client):
+        """ハイブリッド検索(RRF)でスコアが低くても結果があれば report_search にルーティング."""
+        mock_store = MagicMock()
+        mock_store.count.return_value = 3
+        mock_store.search.return_value = []  # BM25は使われない
+
+        mock_hybrid = AsyncMock()
+        mock_report = MagicMock()
+        # RRFスコアは0.033程度だが結果がある
+        mock_hybrid.search.return_value = [(mock_report, 0.033, ["highlight"])]
+
+        mock_search_agent = AsyncMock()
+        mock_search_agent.search_and_answer.return_value = ReportSearchResponse(
+            answer="RRF検索結果から回答します。",
+            results=[],
+            total_reports=3,
+        )
+
+        app_state.report_store = mock_store
+        app_state.report_search_agent = mock_search_agent
+        app_state.hybrid_searcher = mock_hybrid
+
+        response = client.post(
+            "/api/v1/query",
+            json={"query": "前回のOOMKillについて教えて"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["routed_to"] == "report_search"
+        assert data["status"] == "completed"
+
+        app_state.report_store = None
+        app_state.report_search_agent = None
+        app_state.hybrid_searcher = None
 
     def test_query_routed_to_investigation_no_reports(self, client):
         """レポートがない場合、常に新規調査を開始."""

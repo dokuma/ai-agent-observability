@@ -182,17 +182,25 @@ async def submit_query(
         # completed 調査が見つからない場合は新規調査にフォールスルー
 
     # ---- Step 2: レポート検索（Search-First） ----
+    search_miss_message: str | None = None
     if app_state.report_store and app_state.report_store.count() > 0 and app_state.report_search_agent:
         # BM25 + ベクトル検索で関連レポートを検索
         try:
+            is_hybrid = False
             search_results = app_state.report_store.search(request.query, top_k=5)
 
             # ハイブリッドサーチが利用可能ならそちらを使用
             if app_state.hybrid_searcher:
                 search_results = await app_state.hybrid_searcher.search(request.query, top_k=5)
+                is_hybrid = True
 
             # 検索結果のスコアが閾値を超えているか判定
-            has_relevant_results = any(score >= threshold for _, score, _ in search_results)
+            # ハイブリッド検索(RRF)はスコアスケールが異なる（最大~0.033）ため、
+            # 結果が存在すればスコア > 0 で十分と判断する
+            if is_hybrid:
+                has_relevant_results = bool(search_results) and any(score > 0 for _, score, _ in search_results)
+            else:
+                has_relevant_results = any(score >= threshold for _, score, _ in search_results)
 
             if has_relevant_results and search_results:
                 # ---- Step 3: 検索結果で回答生成 ----
@@ -258,13 +266,18 @@ async def submit_query(
                         ),
                     )
             else:
+                top_score = search_results[0][1] if search_results else 0
                 logger.info(
-                    "Search-first: no relevant results (top_score=%.3f, threshold=%.3f), starting investigation",
-                    search_results[0][1] if search_results else 0,
+                    "Search-first: no relevant results "
+                    "(top_score=%.3f, threshold=%.3f, hybrid=%s), starting investigation",
+                    top_score,
                     threshold,
+                    is_hybrid,
                 )
+                search_miss_message = "過去のレポートに関連する情報が見つからなかったため、新しく調査を開始します。"
         except Exception:
             logger.warning("Search-first: search failed, falling back to investigation", exc_info=True)
+            search_miss_message = None
 
     # ---- Step 4: 新規調査開始 ----
     user_query = UserQuery(
@@ -275,10 +288,13 @@ async def submit_query(
     inv_id = app_state.create_investigation("user_query")
     background_tasks.add_task(_run_user_query_investigation, inv_id, user_query)
 
+    # 検索不一致の場合はその旨をメッセージに含める
+    message = search_miss_message if search_miss_message else "調査を開始しました"
+
     return UserQueryResponse(
         investigation_id=inv_id,
         status="running",
-        message="調査を開始しました",
+        message=message,
     )
 
 

@@ -37,6 +37,37 @@ class TestSimpleTokenizer:
         # 角括弧がトークンに含まれる可能性がある
         assert any("http_requests_total" in t for t in tokens)
 
+    def test_tokenize_japanese_bigrams(self):
+        """日本語テキストがバイグラムに分割される."""
+        tokens = SimpleTokenizer.tokenize("メモリリーク")
+        # バイグラム: メモ, モリ, リリ, リー, ーク + ユニグラム
+        assert "メモ" in tokens
+        assert "モリ" in tokens
+        assert "リー" in tokens
+        assert "ーク" in tokens
+
+    def test_tokenize_japanese_search_match(self):
+        """日本語の部分一致検索が機能する."""
+        doc_tokens = SimpleTokenizer.tokenize("nginxポッドのメモリリークによるOOMKill")
+        query_tokens = SimpleTokenizer.tokenize("メモリリーク")
+        # クエリのバイグラムがドキュメントのバイグラムに含まれる
+        common = set(doc_tokens) & set(query_tokens)
+        assert len(common) > 0, f"No common tokens: doc={doc_tokens}, query={query_tokens}"
+
+    def test_tokenize_mixed_japanese_english(self):
+        """日本語+英語の混在テキストを正しく処理."""
+        tokens = SimpleTokenizer.tokenize("CPU使用率が高い")
+        assert "cpu" in tokens
+        # 日本語部分もトークン化される
+        assert any("使用" in t for t in tokens)
+
+    def test_tokenize_japanese_produces_bigrams(self):
+        """日本語テキストがバイグラム+ユニグラムに分割される."""
+        tokens = SimpleTokenizer.tokenize("テスト")
+        # バイグラム: テス, スト + ユニグラム: テ, ス, ト
+        assert "テス" in tokens
+        assert "スト" in tokens
+
 
 class TestBM25Index:
     """BM25Indexのテスト."""

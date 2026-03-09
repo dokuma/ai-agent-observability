@@ -151,17 +151,50 @@ class SimpleTokenizer:
         "された",
     }
 
+    # CJK Unicode ブロック検出用正規表現
+    _CJK_RE = re.compile(
+        r"[\u3040-\u309F"  # ひらがな
+        r"\u30A0-\u30FF"  # カタカナ
+        r"\u4E00-\u9FFF"  # CJK統合漢字
+        r"\u3400-\u4DBF"  # CJK統合漢字拡張A
+        r"\uF900-\uFAFF"  # CJK互換漢字
+        r"]+"
+    )
+
     @classmethod
     def tokenize(cls, text: str) -> list[str]:
-        """テキストをトークンに分割."""
+        """テキストをトークンに分割.
+
+        英語はスペース分割、日本語（CJK）はキャラクターバイグラムに分割する。
+        """
         # 小文字化
         text = text.lower()
         # 特殊文字を空白に置換（ただしPromQL/LogQL記号は保持）
         text = re.sub(r"[^\w\s{}\[\]|=~!<>\"']", " ", text)
-        # 空白で分割
-        tokens = text.split()
-        # ストップワードを除去
-        tokens = [t for t in tokens if t not in cls.STOP_WORDS and len(t) > 1]
+
+        tokens: list[str] = []
+        for word in text.split():
+            if word in cls.STOP_WORDS:
+                continue
+            # CJK 文字を含む場合はバイグラムに分割
+            cjk_parts = cls._CJK_RE.findall(word)
+            if cjk_parts:
+                # CJK部分をバイグラムに分割
+                non_cjk = cls._CJK_RE.sub(" ", word).split()
+                for part in non_cjk:
+                    if part not in cls.STOP_WORDS and len(part) > 1:
+                        tokens.append(part)
+                for cjk_text in cjk_parts:
+                    if len(cjk_text) == 1:
+                        tokens.append(cjk_text)
+                    else:
+                        for i in range(len(cjk_text) - 1):
+                            tokens.append(cjk_text[i : i + 2])
+                        # ユニグラムも追加（単一文字の検索にも対応）
+                        for ch in cjk_text:
+                            tokens.append(ch)
+            elif len(word) > 1:
+                tokens.append(word)
         return tokens
 
 
