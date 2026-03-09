@@ -179,6 +179,8 @@ class InvestigationRecord:
     graph_config: dict[str, Any] | None = None
     # asyncio.Task 参照（キャンセル用）
     task: Any = None
+    # report_search 結果（ポーリングで取得するため保持）
+    report_search_answer: str | None = None
 
 
 class AppState:

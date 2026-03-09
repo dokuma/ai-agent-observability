@@ -135,7 +135,7 @@ class TestUserQuery:
         assert data["status"] == "running"
 
     def test_query_routed_to_report_search(self, client):
-        """レポートがあり検索スコアが閾値以上の場合、report_search_agent にルーティング."""
+        """レポートがあり検索スコアが閾値以上の場合、report_search にルーティング（バックグラウンド）."""
         mock_store = MagicMock()
         mock_store.count.return_value = 3
         # search が閾値以上のスコアを返す
@@ -160,8 +160,8 @@ class TestUserQuery:
         assert response.status_code == 200
         data = response.json()
         assert data["routed_to"] == "report_search"
-        assert data["status"] == "completed"
-        assert "monitoring" in data["report_search_answer"]
+        # バックグラウンドタスクなので status=running で返る
+        assert data["status"] == "running"
 
         # cleanup
         app_state.report_store = None
@@ -227,7 +227,7 @@ class TestUserQuery:
         assert response.status_code == 200
         data = response.json()
         assert data["routed_to"] == "report_search"
-        assert data["status"] == "completed"
+        assert data["status"] == "running"
 
         app_state.report_store = None
         app_state.report_search_agent = None
@@ -313,7 +313,7 @@ class TestUserQuery:
         assert data["status"] == "running"
 
     def test_query_empty_search_answer_fallback(self, client):
-        """report_search_agent が空回答を返した場合のフォールバック."""
+        """report_search にルーティングされる（バックグラウンドで空回答フォールバック処理）."""
         mock_store = MagicMock()
         mock_store.count.return_value = 1
         mock_report = MagicMock()
@@ -337,9 +337,8 @@ class TestUserQuery:
         assert response.status_code == 200
         data = response.json()
         assert data["routed_to"] == "report_search"
-        # {} ではなく適切なメッセージが返る
-        assert data["report_search_answer"] != "{}"
-        assert "見つかりませんでした" in data["report_search_answer"]
+        # バックグラウンドタスクなので status=running で返る
+        assert data["status"] == "running"
 
         app_state.report_store = None
         app_state.report_search_agent = None
@@ -654,21 +653,15 @@ class TestReportEndpoints:
 class TestReportSearchTimeout:
     """report_search がタイムアウトした場合のテスト."""
 
-    def test_report_search_timeout_returns_message(self, client):
-        """report_search が遅い場合、タイムアウトしてユーザにメッセージを返す."""
-        import asyncio
-
+    def test_report_search_timeout_returns_running(self, client):
+        """report_search が遅い場合でも即座に running を返す（バックグラウンド）."""
         mock_store = MagicMock()
         mock_store.count.return_value = 3
         # 閾値以上のスコアを返す
         mock_report = MagicMock()
         mock_store.search.return_value = [(mock_report, 0.5, [])]
 
-        async def slow_search(**kwargs):
-            await asyncio.sleep(60)  # タイムアウトより長い
-
-        mock_search_agent = MagicMock()
-        mock_search_agent.search_and_answer = slow_search
+        mock_search_agent = AsyncMock()
 
         app_state.report_store = mock_store
         app_state.report_search_agent = mock_search_agent
@@ -680,10 +673,9 @@ class TestReportSearchTimeout:
         )
         assert response.status_code == 200
         data = response.json()
-        # タイムアウト後、フォールバックせずメッセージを返す
+        # バックグラウンドタスクなので即座に running で返る
         assert data["routed_to"] == "report_search"
-        assert data["status"] == "completed"
-        assert "時間がかかっています" in data["report_search_answer"]
+        assert data["status"] == "running"
 
         # cleanup
         app_state.report_store = None
@@ -757,7 +749,7 @@ class TestSecondQueryAfterReport:
         )
         asyncio.get_event_loop().run_until_complete(app_state.complete_investigation(inv_id_1, rca_report=report))
 
-        # --- 2回目: report_search で即時完了 ---
+        # --- 2回目: report_search でバックグラウンド実行 ---
         mock_store = MagicMock()
         mock_store.count.return_value = 1
         # 閾値以上のスコアを返す
@@ -781,8 +773,8 @@ class TestSecondQueryAfterReport:
         assert resp2.status_code == 200
         data2 = resp2.json()
         assert data2["routed_to"] == "report_search"
-        assert data2["status"] == "completed"
-        assert "OOMKilled" in data2["report_search_answer"]
+        # バックグラウンドタスクなので即座に running で返る
+        assert data2["status"] == "running"
 
         # cleanup
         app_state.report_store = None

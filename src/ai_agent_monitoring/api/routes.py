@@ -203,7 +203,7 @@ async def submit_query(
                 has_relevant_results = any(score >= threshold for _, score, _ in search_results)
 
             if has_relevant_results and search_results:
-                # ---- Step 3: 検索結果で回答生成 ----
+                # ---- Step 3: バックグラウンドで回答生成 ----
                 logger.info(
                     "Search-first: relevant results found (top_score=%.3f, threshold=%.3f), routing to report_search",
                     search_results[0][1] if search_results else 0,
@@ -211,60 +211,18 @@ async def submit_query(
                 )
                 inv_id = app_state.create_investigation("report_search")
                 app_state.update_investigation_stage(inv_id, "レポート検索中")
-                try:
-                    result = await asyncio.wait_for(
-                        app_state.report_search_agent.search_and_answer(
-                            query=request.query,
-                        ),
-                        timeout=report_search_timeout,
-                    )
-                    search_record = app_state.get_investigation(inv_id)
-                    if search_record:
-                        search_record.status = "completed"
-                        search_record.completed_at = datetime.now()
-
-                    answer = result.answer
-                    if not answer or answer.strip() == "{}":
-                        answer = "該当するRCAレポートが見つかりませんでした。新しく調査を開始してください。"
-
-                    return UserQueryResponse(
-                        investigation_id=inv_id,
-                        status="completed",
-                        message=answer,
-                        routed_to="report_search",
-                        report_search_answer=answer,
-                    )
-                except TimeoutError:
-                    logger.warning(
-                        "Report search timed out after %ds",
-                        report_search_timeout,
-                    )
-                    app_state.fail_investigation(inv_id, "レポート検索がタイムアウト")
-                    return UserQueryResponse(
-                        investigation_id=inv_id,
-                        status="completed",
-                        routed_to="report_search",
-                        message="レポート検索がタイムアウトしました",
-                        report_search_answer=(
-                            "⏰ 過去レポートの検索に時間がかかっています。\n\n"
-                            "以下のいずれかをお試しください:\n"
-                            "- もう少し具体的なキーワードで再度質問する\n"
-                            "- 「新しく調査して」と入力して新規調査を開始する"
-                        ),
-                    )
-                except Exception:
-                    logger.warning("Report search failed", exc_info=True)
-                    app_state.fail_investigation(inv_id, "レポート検索に失敗")
-                    return UserQueryResponse(
-                        investigation_id=inv_id,
-                        status="completed",
-                        routed_to="report_search",
-                        message="レポート検索に失敗しました",
-                        report_search_answer=(
-                            "❌ 過去レポートの検索中にエラーが発生しました。\n\n"
-                            "「新しく調査して」と入力して新規調査を開始できます。"
-                        ),
-                    )
+                background_tasks.add_task(
+                    _run_report_search,
+                    inv_id,
+                    request.query,
+                    report_search_timeout,
+                )
+                return UserQueryResponse(
+                    investigation_id=inv_id,
+                    status="running",
+                    message="過去のレポートから回答を検索中です...",
+                    routed_to="report_search",
+                )
             else:
                 top_score = search_results[0][1] if search_results else 0
                 logger.info(
@@ -320,6 +278,7 @@ async def get_investigation_status(investigation_id: str) -> InvestigationStatus
         completed_at=record.completed_at,
         mcp_status=record.mcp_status,
         pending_input=record.pending_input,
+        report_search_answer=record.report_search_answer,
     )
 
 
@@ -494,6 +453,51 @@ async def _refresh_orchestrator_health(inv_id: str) -> dict[str, bool]:
             record.mcp_status = mcp_status
 
         return mcp_status
+
+
+async def _run_report_search(inv_id: str, query: str, timeout: int) -> None:
+    """レポート検索をバックグラウンドで実行し、結果を InvestigationRecord に保存."""
+    if not app_state.report_search_agent:
+        app_state.fail_investigation(inv_id, "Report search agent not initialized")
+        return
+
+    try:
+        result = await asyncio.wait_for(
+            app_state.report_search_agent.search_and_answer(query=query),
+            timeout=timeout,
+        )
+        answer = result.answer
+        if not answer or answer.strip() in ("{}", "[]", "null"):
+            answer = "該当するRCAレポートが見つかりませんでした。新しく調査を開始してください。"
+
+        record = app_state.get_investigation(inv_id)
+        if record:
+            record.status = "completed"
+            record.completed_at = datetime.now()
+            record.report_search_answer = answer
+        logger.info("Report search completed for %s: answer_length=%d", inv_id, len(answer))
+    except TimeoutError:
+        logger.warning("Report search timed out after %ds: %s", timeout, inv_id)
+        record = app_state.get_investigation(inv_id)
+        if record:
+            record.status = "completed"
+            record.completed_at = datetime.now()
+            record.report_search_answer = (
+                "⏰ 過去レポートの検索に時間がかかりました。\n\n"
+                "以下のいずれかをお試しください:\n"
+                "- もう少し具体的なキーワードで再度質問する\n"
+                "- 「新しく調査して」と入力して新規調査を開始する"
+            )
+    except Exception:
+        logger.warning("Report search failed: %s", inv_id, exc_info=True)
+        record = app_state.get_investigation(inv_id)
+        if record:
+            record.status = "completed"
+            record.completed_at = datetime.now()
+            record.report_search_answer = (
+                "❌ 過去レポートの検索中にエラーが発生しました。\n\n"
+                "「新しく調査して」と入力して新規調査を開始できます。"
+            )
 
 
 def _check_interrupt(result: dict[str, Any], inv_id: str, compiled: Any, config: dict[str, Any]) -> bool:

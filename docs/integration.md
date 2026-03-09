@@ -29,7 +29,7 @@ Open WebUI のサイドバーにカスタムモデルとして表示され、チ
 """
 title: AI Agent Monitoring
 description: システム監視 AI Agent にクエリを送信し RCA レポートを取得する
-version: 0.8.0
+version: 0.9.0
 
 Note:
     - Open WebUI v0.6.43+ では AsyncGenerator を返すとUIがスタックする
@@ -321,14 +321,12 @@ class Pipe:
         data = res.json()
         inv_id = data["investigation_id"]
 
-        # report_search で即時完了した場合はポーリング不要
-        if data.get("status") == "completed" and data.get("report_search_answer"):
-            await self._emit_status(
-                __event_emitter__, "✅ 過去レポートから回答", done=True
-            )
-            return data["report_search_answer"]
+        routed_to = data.get("routed_to", "investigation")
 
-        await self._emit_status(__event_emitter__, f"🔍 調査中... (ID: {inv_id})")
+        if routed_to == "report_search":
+            await self._emit_status(__event_emitter__, "📚 過去のレポートを検索中...")
+        else:
+            await self._emit_status(__event_emitter__, f"🔍 調査中... (ID: {inv_id})")
 
         # 2. 完了までポーリング
         return await self._poll_until_done(inv_id, base, __event_emitter__)
@@ -377,6 +375,13 @@ class Pipe:
                 last_stage = stage_key
 
             if status.get("status") == "completed":
+                # report_search の場合は report_search_answer を直接返す
+                rs_answer = status.get("report_search_answer")
+                if rs_answer:
+                    await self._emit_status(
+                        emitter, "✅ 過去レポートから回答", done=True
+                    )
+                    return rs_answer
                 await self._emit_status(
                     emitter, "✅ 調査完了。レポート取得中..."
                 )
@@ -456,13 +461,17 @@ class Pipe:
         return "\n".join(lines) + marker
 ```
 
+> **Note (v0.9.0)**:
+> - report_search をバックグラウンドタスク化: LLM回答生成の同期awaitを廃止し、ポーリングで結果を取得する方式に変更。Open WebUIのpipe関数タイムアウトによる`{}`表示を解消
+> - ポーリング中に `report_search_answer` を検出して即座に回答を返す
+>
 > **Note (v0.8.0)**:
 > - 調査キャンセル対応: ユーザが「中止」「キャンセル」「停止」「cancel」「stop」と入力すると実行中の調査をキャンセル
 > - Search-First 対応: バックエンド側で LLM インテント分類を廃止し、まず検索 → 不足なら調査のフローに変更
 >
 > **Note (v0.7.0)**:
 > - `stage_detail` 対応: ポーリング中にサブエージェント内のReActステップ（ツール名、推論/要約フェーズ）をリアルタイム表示
-> - `report_search` 即時完了対応: 過去レポートから回答可能な場合、ポーリングなしで即座に結果を返す
+> - `report_search` 即時完了対応（v0.9.0でバックグラウンド化に置き換え）
 >
 > **Note (v0.6.0)**:
 > - `waiting_for_input` (interrupt) 対応: Orchestrator がユーザ入力を要求した場合、チャットメッセージとして問い合わせを表示し、次の発話で自動再開
