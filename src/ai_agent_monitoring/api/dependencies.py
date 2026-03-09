@@ -273,13 +273,53 @@ class AppState:
         if self.settings.embedding_dimensions > 0:
             vector_size = self.settings.embedding_dimensions
         else:
+            logger.info(
+                "Detecting embedding dimension: endpoint=%s, model=%s",
+                emb_endpoint,
+                self.settings.embedding_model,
+            )
             try:
                 test_vec = await embeddings.aembed_query("dimension test")
                 vector_size = len(test_vec)
                 logger.info("Detected embedding dimension: %d", vector_size)
-            except Exception:
-                logger.exception("Failed to detect embedding dimension, defaulting to 1536")
+            except httpx.ConnectError as e:
+                logger.error(
+                    "Embedding endpoint unreachable (endpoint=%s): %s",
+                    emb_endpoint,
+                    e,
+                )
                 vector_size = 1536
+            except httpx.TimeoutException as e:
+                logger.error(
+                    "Embedding request timed out (endpoint=%s): %s",
+                    emb_endpoint,
+                    e,
+                )
+                vector_size = 1536
+            except httpx.HTTPStatusError as e:
+                logger.error(
+                    "Embedding API returned HTTP %d (endpoint=%s, model=%s): %s",
+                    e.response.status_code,
+                    emb_endpoint,
+                    self.settings.embedding_model,
+                    e.response.text,
+                )
+                vector_size = 1536
+            except Exception as e:
+                logger.error(
+                    "Unexpected error detecting embedding dimension "
+                    "(endpoint=%s, model=%s, error_type=%s): %s",
+                    emb_endpoint,
+                    self.settings.embedding_model,
+                    type(e).__name__,
+                    e,
+                )
+                vector_size = 1536
+            if vector_size == 1536:
+                logger.warning(
+                    "Using default embedding dimension 1536. "
+                    "Set EMBEDDING_DIMENSIONS to skip auto-detection."
+                )
 
         self.vector_store = VectorStore(
             qdrant_url=self.settings.qdrant_url,
@@ -291,8 +331,14 @@ class AppState:
         try:
             await self.vector_store.ensure_collection()
             logger.info("Qdrant vector store initialized (collection: %s)", self.settings.qdrant_reports_collection)
-        except Exception:
-            logger.exception("Failed to initialize Qdrant, disabling vector search")
+        except Exception as e:
+            logger.error(
+                "Failed to initialize Qdrant collection (url=%s, collection=%s, error_type=%s): %s",
+                self.settings.qdrant_url,
+                self.settings.qdrant_reports_collection,
+                type(e).__name__,
+                e,
+            )
             self.vector_store = None
 
         if self.vector_store and self.report_store:
@@ -335,8 +381,12 @@ class AppState:
             if batch:
                 await self.vector_store.upsert_batch(batch)
             logger.info("Migrated %d reports to Qdrant", len(reports))
-        except Exception:
-            logger.exception("Failed to migrate reports to Qdrant")
+        except Exception as e:
+            logger.error(
+                "Failed to migrate reports to Qdrant (error_type=%s): %s",
+                type(e).__name__,
+                e,
+            )
 
     async def _upsert_report_vector(self, report_id: str, inv_id: str, rca_report: RCAReport) -> None:
         """レポートを Qdrant にベクトル保存（失敗時はログのみ）."""
@@ -354,8 +404,20 @@ class AppState:
                 metadata["alert_name"] = rca_report.alert.alert_name
             await self.vector_store.upsert(report_id, text, metadata)
             logger.info("Report %s upserted to Qdrant", report_id)
-        except Exception:
-            logger.exception("Failed to upsert report %s to Qdrant", report_id)
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                "Failed to upsert report %s: embedding API returned HTTP %d: %s",
+                report_id,
+                e.response.status_code,
+                e.response.text,
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to upsert report %s to Qdrant (error_type=%s): %s",
+                report_id,
+                type(e).__name__,
+                e,
+            )
 
     async def shutdown(self) -> None:
         """アプリケーション終了時のクリーンアップ."""
