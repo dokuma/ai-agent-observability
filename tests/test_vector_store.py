@@ -7,6 +7,25 @@ import pytest
 from ai_agent_monitoring.core.vector_store import VectorSearchResult, VectorStore
 
 
+class TestToPointId:
+    def test_converts_hex_string_to_uuid(self):
+        point_id = VectorStore._to_point_id("bf7e39fd513e")
+        # UUID 形式であることを確認
+        import uuid
+
+        uuid.UUID(point_id)  # 不正な場合は ValueError
+
+    def test_same_input_produces_same_uuid(self):
+        assert VectorStore._to_point_id("abc123") == VectorStore._to_point_id("abc123")
+
+    def test_different_inputs_produce_different_uuids(self):
+        assert VectorStore._to_point_id("doc-1") != VectorStore._to_point_id("doc-2")
+
+    def test_valid_uuid_passes_through(self):
+        original = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        assert VectorStore._to_point_id(original) == original
+
+
 @pytest.fixture
 def mock_embeddings():
     emb = MagicMock()
@@ -66,7 +85,7 @@ class TestVectorStoreUpsert:
         assert args.kwargs["collection_name"] == "test_collection"
         points = args.kwargs["points"]
         assert len(points) == 1
-        assert points[0].id == "doc-1"
+        assert points[0].id == VectorStore._to_point_id("doc-1")
         assert points[0].vector == [0.1, 0.2, 0.3]
         assert points[0].payload == {"key": "value"}
 

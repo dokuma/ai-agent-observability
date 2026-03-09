@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import uuid
 from dataclasses import dataclass
 from typing import Any
 
@@ -35,6 +36,19 @@ class VectorStore:
         self._embeddings = embeddings
         self._vector_size = vector_size
 
+    @staticmethod
+    def _to_point_id(doc_id: str) -> str:
+        """doc_id を Qdrant 互換の UUID 文字列に変換.
+
+        Qdrant はポイント ID として UUID または符号なし整数のみ受け付ける。
+        UUID v5 を使用することで同じ doc_id に対して常に同じ UUID が生成される。
+        """
+        try:
+            # 既に有効な UUID ならそのまま使用
+            return str(uuid.UUID(doc_id))
+        except ValueError:
+            return str(uuid.uuid5(uuid.UUID("a1b2c3d4-e5f6-7890-abcd-ef1234567890"), doc_id))
+
     async def ensure_collection(self) -> None:
         """コレクションが存在しなければ作成."""
 
@@ -56,13 +70,14 @@ class VectorStore:
     async def upsert(self, doc_id: str, text: str, metadata: dict[str, Any]) -> None:
         """テキストを embedding してポイントを upsert."""
         vector = await self._embeddings.aembed_query(text)
+        point_id = self._to_point_id(doc_id)
 
         def _upsert() -> None:
             self._client.upsert(
                 collection_name=self._collection_name,
                 points=[
                     PointStruct(
-                        id=doc_id,
+                        id=point_id,
                         vector=vector,
                         payload=metadata,
                     )
@@ -83,7 +98,7 @@ class VectorStore:
 
         def _upsert() -> None:
             points = [
-                PointStruct(id=doc_id, vector=vec, payload=meta)
+                PointStruct(id=self._to_point_id(doc_id), vector=vec, payload=meta)
                 for (doc_id, _, meta), vec in zip(items, vectors, strict=True)
             ]
             self._client.upsert(
