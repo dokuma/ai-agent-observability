@@ -138,6 +138,7 @@ class TestUserQuery:
         """レポートがある場合、search インテントで report_search_agent にルーティング."""
         mock_store = MagicMock()
         mock_store.count.return_value = 3
+        mock_store.list_reports.return_value = ([], 0)
 
         mock_search_agent = AsyncMock()
         mock_search_agent.search_and_answer.return_value = ReportSearchResponse(
@@ -468,6 +469,7 @@ class TestReportSearchTimeout:
 
         mock_store = MagicMock()
         mock_store.count.return_value = 3
+        mock_store.list_reports.return_value = ([], 0)
 
         async def slow_search(**kwargs):
             await asyncio.sleep(60)  # タイムアウトより長い
@@ -571,6 +573,7 @@ class TestSecondQueryAfterReport:
         # --- 2回目: report_search で即時完了 ---
         mock_store = MagicMock()
         mock_store.count.return_value = 1
+        mock_store.list_reports.return_value = ([], 0)
         mock_search_agent = AsyncMock()
         mock_search_agent.search_and_answer.return_value = ReportSearchResponse(
             answer="前回の調査では OOMKilled が検出されました。",

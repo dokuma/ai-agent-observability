@@ -22,6 +22,7 @@ data:
   # Agent
   MAX_ITERATIONS: {{ .Values.config.maxIterations | quote }}
   INVESTIGATION_TIMEOUT_SECONDS: {{ .Values.config.investigationTimeoutSeconds | quote }}
+  REPORT_SEARCH_TIMEOUT_SECONDS: {{ .Values.config.reportSearchTimeoutSeconds | quote }}
   CORS_ALLOWED_ORIGINS: {{ .Values.config.corsAllowedOrigins | quote }}
   # MCP Transport
   MCP_TRANSPORT: {{ .Values.config.mcpTransport | quote }}

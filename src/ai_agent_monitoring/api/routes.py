@@ -646,6 +646,29 @@ async def _retry_investigation(
 # ---- クエリインテント分類 ----
 
 
+def _build_report_summary(max_reports: int = 10) -> str:
+    """直近のRCAレポートの軽量サマリーを構築（インテント分類用）."""
+    if not app_state.report_store:
+        return ""
+    reports, total = app_state.report_store.list_reports(offset=0, limit=max_reports)
+    if not reports:
+        return ""
+    lines = [f"既存レポート数: {total}件（直近{len(reports)}件を表示）\n"]
+    for i, report in enumerate(reports, 1):
+        rca = report.report
+        trigger = ""
+        if rca.alert:
+            trigger = f"アラート: {rca.alert.alert_name}"
+        elif rca.user_query:
+            trigger = f"ユーザクエリ: {rca.user_query.raw_input[:80]}"
+        root_causes = "; ".join(rc.description[:100] for rc in rca.root_causes[:3]) if rca.root_causes else "不明"
+        lines.append(
+            f"レポート {i} (ID: {report.id}, {report.created_at.strftime('%Y-%m-%d %H:%M')}): "
+            f"{trigger} → 根本原因: {root_causes}"
+        )
+    return "\n".join(lines)
+
+
 async def _classify_query_intent(query: str) -> str:
     """ユーザクエリのインテントを分類する.
 
@@ -665,12 +688,21 @@ async def _classify_query_intent(query: str) -> str:
 
     try:
         llm = app_state.orchestrator.llm
+
+        # 直近レポートのサマリーをコンテキストに含める
+        report_summary = _build_report_summary()
+        user_content = query
+        if report_summary:
+            user_content = f"## 既存レポートの概要\n{report_summary}\n\n## ユーザクエリ\n{query}"
+
         messages = [
             SystemMessage(content=QUERY_INTENT_CLASSIFICATION_PROMPT),
-            HumanMessage(content=query),
+            HumanMessage(content=user_content),
         ]
         response = await asyncio.wait_for(llm.ainvoke(messages), timeout=30)
-        intent = response.content.strip().lower()
+        raw_intent = response.content.strip()
+        intent = raw_intent.lower()
+        logger.info("Intent classification: query=%s, raw_response=%s", query[:100], raw_intent)
         # retry:* インテントを優先チェック
         for retry_intent in (
             "retry:regenerate_rca",
