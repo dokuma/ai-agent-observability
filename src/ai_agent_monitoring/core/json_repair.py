@@ -6,6 +6,61 @@ LLM 出力からJSONを抽出し、不完全なJSON（閉じ忘れ、末尾カ�
 import re
 
 
+def strip_json_comments(text: str) -> str:
+    """JSON文字列から行コメント (//) とブロックコメント (/* */) を除去.
+
+    文字列リテラル内のコメント記号はそのまま保持する。
+    """
+    result: list[str] = []
+    i = 0
+    in_string = False
+    length = len(text)
+
+    while i < length:
+        ch = text[i]
+
+        # 文字列リテラル内のエスケープ
+        if in_string:
+            if ch == "\\" and i + 1 < length:
+                result.append(text[i : i + 2])
+                i += 2
+                continue
+            if ch == '"':
+                in_string = False
+            result.append(ch)
+            i += 1
+            continue
+
+        # 文字列リテラル開始
+        if ch == '"':
+            in_string = True
+            result.append(ch)
+            i += 1
+            continue
+
+        # 行コメント //
+        if ch == "/" and i + 1 < length and text[i + 1] == "/":
+            # 行末までスキップ
+            end = text.find("\n", i)
+            if end == -1:
+                break  # 残り全てコメント
+            i = end  # \n は保持
+            continue
+
+        # ブロックコメント /* */
+        if ch == "/" and i + 1 < length and text[i + 1] == "*":
+            end = text.find("*/", i + 2)
+            if end == -1:
+                break  # 閉じられていないブロックコメント
+            i = end + 2
+            continue
+
+        result.append(ch)
+        i += 1
+
+    return "".join(result)
+
+
 def extract_json(text: str) -> str:
     """テキストからJSON部分を抽出.
 
@@ -56,8 +111,11 @@ def repair_truncated_json(text: str) -> str:
     """LLM出力が途中で切れた不完全なJSONを修復する.
 
     未閉じの文字列・配列・オブジェクトを閉じて有効なJSONにする。
-    末尾カンマも除去する。
+    コメント除去、末尾カンマ除去も行う。
     """
+    # まずコメントを除去
+    text = strip_json_comments(text)
+
     in_string = False
     escape_next = False
     stack: list[str] = []  # '{' or '['

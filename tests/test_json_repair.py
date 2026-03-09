@@ -4,7 +4,11 @@ import json
 
 import pytest
 
-from ai_agent_monitoring.core.json_repair import extract_json, repair_truncated_json
+from ai_agent_monitoring.core.json_repair import (
+    extract_json,
+    repair_truncated_json,
+    strip_json_comments,
+)
 
 
 class TestExtractJson:
@@ -87,3 +91,81 @@ class TestRepairTruncatedJson:
         result = repair_truncated_json(text)
         parsed = json.loads(result)
         assert parsed["key"] == "value"
+
+    def test_line_comments(self):
+        """行コメント (//) が含まれるJSONの修復."""
+        text = '{\n  "key": "value", // これはコメント\n  "num": 42\n}'
+        result = repair_truncated_json(text)
+        parsed = json.loads(result)
+        assert parsed == {"key": "value", "num": 42}
+
+    def test_block_comments(self):
+        """ブロックコメント (/* */) が含まれるJSONの修復."""
+        text = '{\n  /* メトリクス */\n  "key": "value"\n}'
+        result = repair_truncated_json(text)
+        parsed = json.loads(result)
+        assert parsed == {"key": "value"}
+
+    def test_comments_and_trailing_comma(self):
+        """コメント + 末尾カンマの組み合わせ."""
+        text = '{\n  "a": 1, // first\n  "b": 2, // second\n}'
+        result = repair_truncated_json(text)
+        parsed = json.loads(result)
+        assert parsed == {"a": 1, "b": 2}
+
+    def test_comment_in_string_preserved(self):
+        """文字列内のコメント記号は保持される."""
+        text = '{"url": "http://example.com/path"}'
+        result = repair_truncated_json(text)
+        parsed = json.loads(result)
+        assert parsed["url"] == "http://example.com/path"
+
+
+class TestStripJsonComments:
+    def test_line_comment(self):
+        text = '{"key": "value"} // comment'
+        result = strip_json_comments(text)
+        assert json.loads(result.strip()) == {"key": "value"}
+
+    def test_multiline_comments(self):
+        text = '{\n  "a": 1, // comment 1\n  "b": 2 // comment 2\n}'
+        result = strip_json_comments(text)
+        parsed = json.loads(result)
+        assert parsed == {"a": 1, "b": 2}
+
+    def test_block_comment(self):
+        text = '{"key": /* block */ "value"}'
+        result = strip_json_comments(text)
+        parsed = json.loads(result)
+        assert parsed == {"key": "value"}
+
+    def test_comment_in_string_preserved(self):
+        text = '{"url": "http://example.com"}'
+        result = strip_json_comments(text)
+        assert json.loads(result) == {"url": "http://example.com"}
+
+    def test_no_comments(self):
+        text = '{"key": "value"}'
+        result = strip_json_comments(text)
+        assert result == text
+
+    def test_investigation_plan_with_comments(self):
+        """調査計画の典型的な LLM 出力（コメント付き）."""
+        text = """{
+  "promql_queries": [
+    "up{namespace=\\"monitoring\\"}", // ノードの稼働状態
+    "rate(container_cpu_usage_seconds_total{namespace=\\"monitoring\\"}[5m])" // CPU使用率
+  ],
+  "logql_queries": [
+    "{namespace=\\"monitoring\\"} |= \\"error\\"" // エラーログ
+  ],
+  "target_instances": [],
+  "time_range": {
+    "start": "2026-03-09T00:00:00Z",
+    "end": "2026-03-09T12:00:00Z"
+  }
+}"""
+        result = strip_json_comments(text)
+        parsed = json.loads(result)
+        assert len(parsed["promql_queries"]) == 2
+        assert len(parsed["logql_queries"]) == 1

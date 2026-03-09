@@ -1815,8 +1815,17 @@ class OrchestratorAgent:
                     json_str[:500],
                 )
                 repaired = repair_truncated_json(json_str)
-                data = json.loads(repaired)
-                logger.info("切り詰められたJSONを修復してパースしました")
+                try:
+                    data = json.loads(repaired)
+                except json.JSONDecodeError:
+                    # コメント除去のみで再試行（repair が逆効果の場合）
+                    from ai_agent_monitoring.core.json_repair import strip_json_comments
+
+                    stripped = strip_json_comments(json_str)
+                    # trailing comma も除去
+                    stripped = re.sub(r",\s*([}\]])", r"\1", stripped)
+                    data = json.loads(stripped)
+                logger.info("JSONを修復してパースしました")
 
             if not isinstance(data, dict):
                 raise ValueError(f"Expected dict, got {type(data).__name__}: {str(data)[:200]}")
