@@ -135,10 +135,12 @@ class TestUserQuery:
         assert data["status"] == "running"
 
     def test_query_routed_to_report_search(self, client):
-        """レポートがある場合、search インテントで report_search_agent にルーティング."""
+        """レポートがあり検索スコアが閾値以上の場合、report_search_agent にルーティング."""
         mock_store = MagicMock()
         mock_store.count.return_value = 3
-        mock_store.list_reports.return_value = ([], 0)
+        # search が閾値以上のスコアを返す
+        mock_report = MagicMock()
+        mock_store.search.return_value = [(mock_report, 0.5, ["highlight"])]
 
         mock_search_agent = AsyncMock()
         mock_search_agent.search_and_answer.return_value = ReportSearchResponse(
@@ -149,13 +151,7 @@ class TestUserQuery:
 
         app_state.report_store = mock_store
         app_state.report_search_agent = mock_search_agent
-
-        # orchestrator の LLM を mock して "search" と返す
-        mock_llm = AsyncMock()
-        mock_llm.ainvoke.return_value = MagicMock(content="search")
-        mock_orchestrator = MagicMock()
-        mock_orchestrator.llm = mock_llm
-        app_state.orchestrator = mock_orchestrator
+        app_state.hybrid_searcher = None
 
         response = client.post(
             "/api/v1/query",
@@ -168,6 +164,35 @@ class TestUserQuery:
         assert "monitoring" in data["report_search_answer"]
 
         # cleanup
+        app_state.report_store = None
+        app_state.report_search_agent = None
+
+    def test_query_routed_to_investigation_low_score(self, client):
+        """検索スコアが閾値未満の場合、新規調査を開始."""
+        mock_store = MagicMock()
+        mock_store.count.return_value = 3
+        # search が閾値未満のスコアを返す
+        mock_report = MagicMock()
+        mock_store.search.return_value = [(mock_report, 0.1, [])]
+
+        app_state.report_store = mock_store
+        app_state.report_search_agent = MagicMock()
+        app_state.hybrid_searcher = None
+
+        app_state.orchestrator = MagicMock()
+        compiled = MagicMock()
+        compiled.ainvoke = AsyncMock(return_value={"rca_report": None})
+        app_state.orchestrator.compile.return_value = compiled
+
+        response = client.post(
+            "/api/v1/query",
+            json={"query": "今のクラスタ状態を確認して"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["routed_to"] == "investigation"
+        assert data["status"] == "running"
+
         app_state.report_store = None
         app_state.report_search_agent = None
 
@@ -198,6 +223,89 @@ class TestUserQuery:
             json={"query": ""},
         )
         assert response.status_code == 422  # validation error
+
+    def test_query_retry_pattern_reinvestigate(self, client):
+        """retry パターン（再調査系）が検出される."""
+        inv_id = app_state.create_investigation("user_query")
+        report = RCAReport(
+            trigger_type=TriggerType.USER_QUERY,
+            root_causes=[RootCause(description="test", confidence=0.8)],
+            markdown="# Test",
+        )
+        asyncio.get_event_loop().run_until_complete(app_state.complete_investigation(inv_id, rca_report=report))
+
+        mock_compiled = MagicMock()
+        mock_compiled.update_state = MagicMock()
+        mock_compiled.ainvoke = AsyncMock(return_value={"rca_report": None})
+        record = app_state.get_investigation(inv_id)
+        record.compiled_graph = mock_compiled
+        record.graph_config = {"configurable": {"thread_id": inv_id}}
+
+        response = client.post(
+            "/api/v1/query",
+            json={"query": "再調査してください"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "running"
+
+    def test_query_retry_pattern_continue(self, client):
+        """retry パターン（深掘り系）が検出される."""
+        inv_id = app_state.create_investigation("user_query")
+        report = RCAReport(
+            trigger_type=TriggerType.USER_QUERY,
+            root_causes=[RootCause(description="test", confidence=0.8)],
+            markdown="# Test",
+        )
+        asyncio.get_event_loop().run_until_complete(app_state.complete_investigation(inv_id, rca_report=report))
+
+        mock_compiled = MagicMock()
+        mock_compiled.update_state = MagicMock()
+        mock_compiled.get_state = MagicMock(return_value=MagicMock(values={"max_iterations": 3}))
+        mock_compiled.ainvoke = AsyncMock(return_value={"rca_report": None})
+        record = app_state.get_investigation(inv_id)
+        record.compiled_graph = mock_compiled
+        record.graph_config = {"configurable": {"thread_id": inv_id}}
+
+        response = client.post(
+            "/api/v1/query",
+            json={"query": "もっと詳しく調べて"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "running"
+
+    def test_query_empty_search_answer_fallback(self, client):
+        """report_search_agent が空回答を返した場合のフォールバック."""
+        mock_store = MagicMock()
+        mock_store.count.return_value = 1
+        mock_report = MagicMock()
+        mock_store.search.return_value = [(mock_report, 0.5, [])]
+
+        mock_search_agent = AsyncMock()
+        mock_search_agent.search_and_answer.return_value = ReportSearchResponse(
+            answer="{}",
+            results=[],
+            total_reports=1,
+        )
+
+        app_state.report_store = mock_store
+        app_state.report_search_agent = mock_search_agent
+        app_state.hybrid_searcher = None
+
+        response = client.post(
+            "/api/v1/query",
+            json={"query": "前回の結果を教えて"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["routed_to"] == "report_search"
+        # {} ではなく適切なメッセージが返る
+        assert data["report_search_answer"] != "{}"
+        assert "見つかりませんでした" in data["report_search_answer"]
+
+        app_state.report_store = None
+        app_state.report_search_agent = None
 
 
 class TestInvestigationStatus:
@@ -398,6 +506,52 @@ class TestUserInput:
         assert data["pending_input"]["type"] == "datasource_selection"
 
 
+class TestCancelInvestigation:
+    """調査キャンセルエンドポイントのテスト."""
+
+    def test_cancel_not_found(self, client):
+        """存在しない調査IDでは404."""
+        response = client.post("/api/v1/investigations/nonexistent/cancel")
+        assert response.status_code == 404
+
+    def test_cancel_not_running(self, client):
+        """completed 状態の調査では409."""
+        inv_id = app_state.create_investigation("user_query")
+        report = RCAReport(
+            trigger_type=TriggerType.USER_QUERY,
+            root_causes=[RootCause(description="test", confidence=0.8)],
+            markdown="# Test",
+        )
+        asyncio.get_event_loop().run_until_complete(app_state.complete_investigation(inv_id, rca_report=report))
+
+        response = client.post(f"/api/v1/investigations/{inv_id}/cancel")
+        assert response.status_code == 409
+
+    def test_cancel_running(self, client):
+        """running 状態の調査をキャンセル."""
+        inv_id = app_state.create_investigation("user_query")
+
+        response = client.post(f"/api/v1/investigations/{inv_id}/cancel")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "cancelled"
+
+        # ステータスが cancelled に更新されている
+        record = app_state.get_investigation(inv_id)
+        assert record.status == "cancelled"
+
+    def test_cancel_with_task(self, client):
+        """asyncio.Task がある場合、cancel() が呼ばれる."""
+        inv_id = app_state.create_investigation("user_query")
+        record = app_state.get_investigation(inv_id)
+        mock_task = MagicMock()
+        record.task = mock_task
+
+        response = client.post(f"/api/v1/investigations/{inv_id}/cancel")
+        assert response.status_code == 200
+        mock_task.cancel.assert_called_once()
+
+
 class TestReportEndpoints:
     """RCAレポート検索・一覧エンドポイントのテスト."""
 
@@ -469,7 +623,9 @@ class TestReportSearchTimeout:
 
         mock_store = MagicMock()
         mock_store.count.return_value = 3
-        mock_store.list_reports.return_value = ([], 0)
+        # 閾値以上のスコアを返す
+        mock_report = MagicMock()
+        mock_store.search.return_value = [(mock_report, 0.5, [])]
 
         async def slow_search(**kwargs):
             await asyncio.sleep(60)  # タイムアウトより長い
@@ -479,13 +635,7 @@ class TestReportSearchTimeout:
 
         app_state.report_store = mock_store
         app_state.report_search_agent = mock_search_agent
-
-        # "search" を返すLLM
-        mock_llm = AsyncMock()
-        mock_llm.ainvoke.return_value = MagicMock(content="search")
-        mock_orchestrator = MagicMock()
-        mock_orchestrator.llm = mock_llm
-        app_state.orchestrator = mock_orchestrator
+        app_state.hybrid_searcher = None
 
         response = client.post(
             "/api/v1/query",
@@ -573,7 +723,10 @@ class TestSecondQueryAfterReport:
         # --- 2回目: report_search で即時完了 ---
         mock_store = MagicMock()
         mock_store.count.return_value = 1
-        mock_store.list_reports.return_value = ([], 0)
+        # 閾値以上のスコアを返す
+        mock_report_obj = MagicMock()
+        mock_store.search.return_value = [(mock_report_obj, 0.5, [])]
+
         mock_search_agent = AsyncMock()
         mock_search_agent.search_and_answer.return_value = ReportSearchResponse(
             answer="前回の調査では OOMKilled が検出されました。",
@@ -582,10 +735,7 @@ class TestSecondQueryAfterReport:
         )
         app_state.report_store = mock_store
         app_state.report_search_agent = mock_search_agent
-
-        mock_llm = AsyncMock()
-        mock_llm.ainvoke.return_value = MagicMock(content="search")
-        app_state.orchestrator.llm = mock_llm
+        app_state.hybrid_searcher = None
 
         resp2 = client.post(
             "/api/v1/query",
@@ -769,3 +919,29 @@ class TestRetryInvestigation:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "running"
+
+
+class TestDetectRetryPattern:
+    """_detect_retry_pattern のユニットテスト."""
+
+    def test_reinvestigate_patterns(self):
+        from ai_agent_monitoring.api.routes import _detect_retry_pattern
+
+        assert _detect_retry_pattern("再調査してください") == "retry:reinvestigate"
+        assert _detect_retry_pattern("やり直して") == "retry:reinvestigate"
+        assert _detect_retry_pattern("別の角度から見て") == "retry:reinvestigate"
+
+    def test_continue_patterns(self):
+        from ai_agent_monitoring.api.routes import _detect_retry_pattern
+
+        assert _detect_retry_pattern("もっと詳しく調べて") == "retry:continue_investigation"
+        assert _detect_retry_pattern("深掘りして") == "retry:continue_investigation"
+        assert _detect_retry_pattern("追加で調査して") == "retry:continue_investigation"
+        assert _detect_retry_pattern("続けて調べて") == "retry:continue_investigation"
+
+    def test_no_match(self):
+        from ai_agent_monitoring.api.routes import _detect_retry_pattern
+
+        assert _detect_retry_pattern("CPU使用率を教えて") is None
+        assert _detect_retry_pattern("前回の結果は？") is None
+        assert _detect_retry_pattern("クラスタの状態") is None

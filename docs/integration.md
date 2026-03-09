@@ -29,7 +29,7 @@ Open WebUI のサイドバーにカスタムモデルとして表示され、チ
 """
 title: AI Agent Monitoring
 description: システム監視 AI Agent にクエリを送信し RCA レポートを取得する
-version: 0.7.0
+version: 0.8.0
 
 Note:
     - Open WebUI v0.6.43+ では AsyncGenerator を返すとUIがスタックする
@@ -79,6 +79,9 @@ class Pipe:
 
     # Investigation ID を埋め込むマーカー（アシスタントメッセージに含める）
     _RESUME_MARKER = "<!-- investigation_id:"
+
+    # キャンセルキーワード
+    _CANCEL_KEYWORDS = ["中止", "キャンセル", "停止", "cancel", "stop"]
 
     async def _emit_status(
         self,
@@ -143,6 +146,46 @@ class Pipe:
             # 汎用（時間範囲指定など、valueが文字列の場合）
             prompt = pending_input if isinstance(pending_input, str) else message
             return f"{prompt}\n\n{marker}"
+
+    def _extract_inv_id_from_messages(self, messages: list) -> Optional[str]:
+        """メッセージ履歴から直近の investigation_id を抽出."""
+        for msg in reversed(messages[:-1]):
+            if msg.get("role") == "assistant":
+                content = msg.get("content", "")
+                if self._RESUME_MARKER in content:
+                    try:
+                        start = content.index(self._RESUME_MARKER) + len(self._RESUME_MARKER)
+                        end = content.index("-->", start)
+                        return content[start:end].strip()
+                    except ValueError:
+                        pass
+        return None
+
+    async def _cancel_investigation(
+        self,
+        inv_id: str,
+        emitter: Optional[Callable[[dict], Awaitable[None]]],
+    ) -> str:
+        """調査をキャンセルする."""
+        base = self.valves.API_BASE_URL.rstrip("/")
+        await self._emit_status(emitter, f"🛑 調査をキャンセル中... (ID: {inv_id})")
+        try:
+            res = requests.post(
+                f"{base}/investigations/{inv_id}/cancel",
+                timeout=10,
+            )
+            if res.status_code == 200:
+                await self._emit_status(emitter, "🛑 調査をキャンセルしました", done=True)
+                return f"🛑 調査をキャンセルしました (ID: {inv_id})"
+            elif res.status_code == 409:
+                await self._emit_status(emitter, "ℹ️ 調査は既に完了しています", done=True)
+                return f"ℹ️ 調査は既に完了または停止しています (ID: {inv_id})"
+            else:
+                await self._emit_status(emitter, "❌ キャンセル失敗", done=True)
+                return f"❌ キャンセルに失敗しました (status: {res.status_code})"
+        except Exception as e:
+            await self._emit_status(emitter, f"❌ キャンセル失敗: {e}", done=True)
+            return f"❌ キャンセルに失敗しました: {e}"
 
     async def _try_resume(
         self,
@@ -227,6 +270,14 @@ class Pipe:
         messages = body.get("messages", [])
         if not messages:
             return "クエリを入力してください。"
+
+        # キャンセルキーワード検出
+        user_msg = messages[-1].get("content", "").strip().lower()
+        if any(kw in user_msg for kw in self._CANCEL_KEYWORDS):
+            # 直前のアシスタントメッセージから investigation_id を抽出
+            cancel_inv_id = self._extract_inv_id_from_messages(messages)
+            if cancel_inv_id:
+                return await self._cancel_investigation(cancel_inv_id, __event_emitter__)
 
         # waiting_for_input で中断した調査の再開チェック
         # 直前のアシスタントメッセージに investigation_id が含まれている場合、
@@ -405,6 +456,10 @@ class Pipe:
         return "\n".join(lines) + marker
 ```
 
+> **Note (v0.8.0)**:
+> - 調査キャンセル対応: ユーザが「中止」「キャンセル」「停止」「cancel」「stop」と入力すると実行中の調査をキャンセル
+> - Search-First 対応: バックエンド側で LLM インテント分類を廃止し、まず検索 → 不足なら調査のフローに変更
+>
 > **Note (v0.7.0)**:
 > - `stage_detail` 対応: ポーリング中にサブエージェント内のReActステップ（ツール名、推論/要約フェーズ）をリアルタイム表示
 > - `report_search` 即時完了対応: 過去レポートから回答可能な場合、ポーリングなしで即座に結果を返す
@@ -562,5 +617,6 @@ curl http://localhost:8000/api/v1/investigations/{id}/report
 | POST | `/api/v1/webhook/alertmanager` | AlertManager Webhook |
 | GET | `/api/v1/investigations/{id}` | 調査ステータス取得 |
 | POST | `/api/v1/investigations/{id}/input` | 中断した調査にユーザ入力を送信 |
+| POST | `/api/v1/investigations/{id}/cancel` | 実行中の調査をキャンセル |
 | GET | `/api/v1/investigations/{id}/report` | RCA レポート取得 |
 | GET | `/docs` | OpenAPI (Swagger UI) |

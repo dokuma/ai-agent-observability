@@ -130,7 +130,7 @@ class InvestigationRecord:
     """調査の実行記録."""
 
     investigation_id: str
-    status: str  # "running" | "completed" | "failed" | "waiting_for_input"
+    status: str  # "running" | "completed" | "failed" | "waiting_for_input" | "cancelled"
     trigger_type: str
     iteration_count: int = 0
     current_stage: str = ""  # 現在のステージ（例: "環境発見中", "メトリクス調査中"）
@@ -144,6 +144,8 @@ class InvestigationRecord:
     pending_input: dict[str, Any] | str | None = None
     compiled_graph: Any = None
     graph_config: dict[str, Any] | None = None
+    # asyncio.Task 参照（キャンセル用）
+    task: Any = None
 
 
 class AppState:

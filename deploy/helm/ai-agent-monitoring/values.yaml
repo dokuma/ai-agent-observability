@@ -324,6 +324,8 @@ config:
   embeddingEndpoint: ""  # 空の場合は LLM_ENDPOINT を使用
   embeddingModel: "text-embedding-3-small"
   embeddingDimensions: "0"
+  # Search-First: レポート検索のスコア閾値（BM25スコアがこの値を超えれば検索結果で回答）
+  searchRelevanceThreshold: "0.3"
 
 # ===========================================================
 # Secret 設定値（機密）

@@ -90,6 +90,9 @@ class Settings(BaseSettings):
     qdrant_reports_collection: str = "rca_reports"
     qdrant_checkpoints_collection: str = "checkpoint_outputs"
 
+    # Search-First
+    search_relevance_threshold: float = 0.3
+
     # Hybrid Search
     rrf_k: int = 60
 

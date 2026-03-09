@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
@@ -30,6 +31,11 @@ from ai_agent_monitoring.core.tracing import build_runnable_config
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# retry パターン検出用正規表現
+_RETRY_PATTERN = re.compile(r"再調査|やり直|別の角度|深掘|もっと詳しく|追加で調査|続けて")
+_REINVESTIGATE_PATTERN = re.compile(r"再調査|やり直|別の角度")
+_CONTINUE_PATTERN = re.compile(r"深掘|もっと詳しく|追加で調査|続けて")
 
 # ヘルスチェック再実行の並行呼び出し保護
 _health_refresh_lock = asyncio.Lock()
@@ -109,108 +115,158 @@ async def receive_alert(
 # ---- ユーザクエリ ----
 
 
+def _detect_retry_pattern(query: str) -> str | None:
+    """正規表現で retry 系パターンを検出.
+
+    Returns:
+        "retry:reinvestigate" or "retry:continue_investigation" or None
+    """
+    if not _RETRY_PATTERN.search(query):
+        return None
+    if _REINVESTIGATE_PATTERN.search(query):
+        return "retry:reinvestigate"
+    return "retry:continue_investigation"
+
+
 @router.post("/query", response_model=UserQueryResponse)
 async def submit_query(
     request: UserQueryRequest,
     background_tasks: BackgroundTasks,
 ) -> UserQueryResponse:
-    """ユーザの自然言語クエリを受け付け、レポート検索または新規調査にルーティング."""
-    # 既存レポートがある場合、インテント分類を実行
+    """ユーザの自然言語クエリを受け付け、Search-First フローで処理.
+
+    1. retry パターン検出 → 該当すれば既存の retry 処理へ
+    2. レポートストアで検索実行（BM25 + ベクトル検索）
+    3. 検索結果が十分（スコア閾値超え）→ report_search_agent で回答生成
+    4. 検索結果が不十分 → 新規調査開始
+    """
     report_search_timeout = app_state.settings.report_search_timeout_seconds
+    threshold = app_state.settings.search_relevance_threshold
+
+    # ---- Step 1: retry パターン検出 ----
+    retry_intent = _detect_retry_pattern(request.query)
+    if retry_intent:
+        retry_type_str = retry_intent.split(":", 1)[1]
+        try:
+            retry_type = RetryType(retry_type_str)
+        except ValueError:
+            retry_type = RetryType.REGENERATE_RCA
+
+        # 直近の completed 調査を探す
+        target_record = None
+        for record in reversed(list(app_state.investigations.values())):
+            if record.status == "completed" and record.compiled_graph and record.graph_config:
+                target_record = record
+                break
+
+        if target_record and target_record.graph_config is not None:
+            target_record.status = "running"
+            target_record.completed_at = None
+            target_record.error = ""
+            target_record.current_stage = "やり直し中"
+
+            background_tasks.add_task(
+                _retry_investigation,
+                target_record.investigation_id,
+                target_record.compiled_graph,
+                target_record.graph_config,
+                retry_type,
+                request.query,
+            )
+
+            return UserQueryResponse(
+                investigation_id=target_record.investigation_id,
+                status="running",
+                message=f"調査をやり直します ({retry_type.value})",
+            )
+        # completed 調査が見つからない場合は新規調査にフォールスルー
+
+    # ---- Step 2: レポート検索（Search-First） ----
     if app_state.report_store and app_state.report_store.count() > 0 and app_state.report_search_agent:
-        intent = await _classify_query_intent(request.query)
+        # BM25 + ベクトル検索で関連レポートを検索
+        try:
+            search_results = app_state.report_store.search(request.query, top_k=5)
 
-        # retry インテント: 直近の completed 調査をやり直す
-        if intent.startswith("retry:"):
-            retry_type_str = intent.split(":", 1)[1]
-            try:
-                retry_type = RetryType(retry_type_str)
-            except ValueError:
-                retry_type = RetryType.REGENERATE_RCA
+            # ハイブリッドサーチが利用可能ならそちらを使用
+            if app_state.hybrid_searcher:
+                search_results = await app_state.hybrid_searcher.search(request.query, top_k=5)
 
-            # 直近の completed 調査を探す
-            target_record = None
-            for record in reversed(list(app_state.investigations.values())):
-                if record.status == "completed" and record.compiled_graph and record.graph_config:
-                    target_record = record
-                    break
+            # 検索結果のスコアが閾値を超えているか判定
+            has_relevant_results = any(score >= threshold for _, score, _ in search_results)
 
-            if target_record and target_record.graph_config is not None:
-                target_record.status = "running"
-                target_record.completed_at = None
-                target_record.error = ""
-                target_record.current_stage = "やり直し中"
+            if has_relevant_results and search_results:
+                # ---- Step 3: 検索結果で回答生成 ----
+                logger.info(
+                    "Search-first: relevant results found (top_score=%.3f, threshold=%.3f), routing to report_search",
+                    search_results[0][1] if search_results else 0,
+                    threshold,
+                )
+                inv_id = app_state.create_investigation("report_search")
+                app_state.update_investigation_stage(inv_id, "レポート検索中")
+                try:
+                    result = await asyncio.wait_for(
+                        app_state.report_search_agent.search_and_answer(
+                            query=request.query,
+                        ),
+                        timeout=report_search_timeout,
+                    )
+                    search_record = app_state.get_investigation(inv_id)
+                    if search_record:
+                        search_record.status = "completed"
+                        search_record.completed_at = datetime.now()
 
-                background_tasks.add_task(
-                    _retry_investigation,
-                    target_record.investigation_id,
-                    target_record.compiled_graph,
-                    target_record.graph_config,
-                    retry_type,
-                    request.query,
-                )
+                    answer = result.answer
+                    if not answer or answer.strip() == "{}":
+                        answer = "該当するRCAレポートが見つかりませんでした。新しく調査を開始してください。"
 
-                return UserQueryResponse(
-                    investigation_id=target_record.investigation_id,
-                    status="running",
-                    message=f"調査をやり直します ({retry_type.value})",
+                    return UserQueryResponse(
+                        investigation_id=inv_id,
+                        status="completed",
+                        message=answer,
+                        routed_to="report_search",
+                        report_search_answer=answer,
+                    )
+                except TimeoutError:
+                    logger.warning(
+                        "Report search timed out after %ds",
+                        report_search_timeout,
+                    )
+                    app_state.fail_investigation(inv_id, "レポート検索がタイムアウト")
+                    return UserQueryResponse(
+                        investigation_id=inv_id,
+                        status="completed",
+                        routed_to="report_search",
+                        message="レポート検索がタイムアウトしました",
+                        report_search_answer=(
+                            "⏰ 過去レポートの検索に時間がかかっています。\n\n"
+                            "以下のいずれかをお試しください:\n"
+                            "- もう少し具体的なキーワードで再度質問する\n"
+                            "- 「新しく調査して」と入力して新規調査を開始する"
+                        ),
+                    )
+                except Exception:
+                    logger.warning("Report search failed", exc_info=True)
+                    app_state.fail_investigation(inv_id, "レポート検索に失敗")
+                    return UserQueryResponse(
+                        investigation_id=inv_id,
+                        status="completed",
+                        routed_to="report_search",
+                        message="レポート検索に失敗しました",
+                        report_search_answer=(
+                            "❌ 過去レポートの検索中にエラーが発生しました。\n\n"
+                            "「新しく調査して」と入力して新規調査を開始できます。"
+                        ),
+                    )
+            else:
+                logger.info(
+                    "Search-first: no relevant results (top_score=%.3f, threshold=%.3f), starting investigation",
+                    search_results[0][1] if search_results else 0,
+                    threshold,
                 )
-            # completed 調査が見つからない場合は新規調査にフォールスルー
+        except Exception:
+            logger.warning("Search-first: search failed, falling back to investigation", exc_info=True)
 
-        if intent == "search":
-            logger.info("Query routed to report_search: %s", request.query[:100])
-            inv_id = app_state.create_investigation("report_search")
-            app_state.update_investigation_stage(inv_id, "レポート検索中")
-            try:
-                result = await asyncio.wait_for(
-                    app_state.report_search_agent.search_and_answer(
-                        query=request.query,
-                    ),
-                    timeout=report_search_timeout,
-                )
-                search_record = app_state.get_investigation(inv_id)
-                if search_record:
-                    search_record.status = "completed"
-                    search_record.completed_at = datetime.now()
-                return UserQueryResponse(
-                    investigation_id=inv_id,
-                    status="completed",
-                    message=result.answer,
-                    routed_to="report_search",
-                    report_search_answer=result.answer,
-                )
-            except TimeoutError:
-                logger.warning(
-                    "Report search timed out after %ds",
-                    report_search_timeout,
-                )
-                app_state.fail_investigation(inv_id, "レポート検索がタイムアウト")
-                return UserQueryResponse(
-                    investigation_id=inv_id,
-                    status="completed",
-                    routed_to="report_search",
-                    message="レポート検索がタイムアウトしました",
-                    report_search_answer=(
-                        "⏰ 過去レポートの検索に時間がかかっています。\n\n"
-                        "以下のいずれかをお試しください:\n"
-                        "- もう少し具体的なキーワードで再度質問する\n"
-                        "- 「新しく調査して」と入力して新規調査を開始する"
-                    ),
-                )
-            except Exception:
-                logger.warning("Report search failed", exc_info=True)
-                app_state.fail_investigation(inv_id, "レポート検索に失敗")
-                return UserQueryResponse(
-                    investigation_id=inv_id,
-                    status="completed",
-                    routed_to="report_search",
-                    message="レポート検索に失敗しました",
-                    report_search_answer=(
-                        "❌ 過去レポートの検索中にエラーが発生しました。\n\n"
-                        "「新しく調査して」と入力して新規調査を開始できます。"
-                    ),
-                )
-
+    # ---- Step 4: 新規調査開始 ----
     user_query = UserQuery(
         raw_input=request.query,
         target_instances=request.target_instances,
@@ -293,6 +349,34 @@ async def submit_user_input(
         status="running",
         message="ユーザ入力を受理しました。調査を再開します。",
     )
+
+
+# ---- 調査キャンセル ----
+
+
+@router.post("/investigations/{investigation_id}/cancel")
+async def cancel_investigation(investigation_id: str) -> dict[str, str]:
+    """実行中の調査をキャンセルする."""
+    record = app_state.get_investigation(investigation_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Investigation not found")
+    if record.status not in ("running", "waiting_for_input"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Investigation is not running (status={record.status})",
+        )
+
+    # asyncio.Task をキャンセル
+    if record.task is not None:
+        record.task.cancel()
+
+    record.status = "cancelled"
+    record.completed_at = datetime.now()
+    record.error = "ユーザによりキャンセルされました"
+    record.current_stage = "キャンセル済み"
+
+    logger.info("Investigation cancelled by user: %s", investigation_id)
+    return {"status": "cancelled"}
 
 
 # ---- チェックポイントやり直し ----
@@ -426,6 +510,12 @@ async def _run_investigation_loop(
 
     try:
         task = asyncio.create_task(compiled.ainvoke(initial_state, config=config))
+
+        # タスク参照を保存（キャンセル用）
+        record = app_state.get_investigation(inv_id)
+        if record:
+            record.task = task
+
         try:
             result = await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
 
@@ -446,7 +536,10 @@ async def _run_investigation_loop(
             app_state.fail_investigation(inv_id, f"調査がタイムアウトしました ({timeout}秒)")
     except asyncio.CancelledError:
         logger.info("Investigation cancelled: %s", inv_id)
-        app_state.fail_investigation(inv_id, "調査がキャンセルされました")
+        # キャンセルエンドポイントから呼ばれた場合は既に cancelled 状態
+        inv_record = app_state.get_investigation(inv_id)
+        if inv_record and inv_record.status != "cancelled":
+            app_state.fail_investigation(inv_id, "調査がキャンセルされました")
     except RateLimitError as e:
         logger.warning("Investigation rate-limited: %s - %s", inv_id, e)
         app_state.fail_investigation(
@@ -641,82 +734,6 @@ async def _retry_investigation(
     except Exception as e:
         logger.exception("Investigation failed after retry: %s", inv_id)
         app_state.fail_investigation(inv_id, str(e))
-
-
-# ---- クエリインテント分類 ----
-
-
-def _build_report_summary(max_reports: int = 10) -> str:
-    """直近のRCAレポートの軽量サマリーを構築（インテント分類用）."""
-    if not app_state.report_store:
-        return ""
-    reports, total = app_state.report_store.list_reports(offset=0, limit=max_reports)
-    if not reports:
-        return ""
-    lines = [f"既存レポート数: {total}件（直近{len(reports)}件を表示）\n"]
-    for i, report in enumerate(reports, 1):
-        rca = report.report
-        trigger = ""
-        if rca.alert:
-            trigger = f"アラート: {rca.alert.alert_name}"
-        elif rca.user_query:
-            trigger = f"ユーザクエリ: {rca.user_query.raw_input[:80]}"
-        root_causes = "; ".join(rc.description[:100] for rc in rca.root_causes[:3]) if rca.root_causes else "不明"
-        lines.append(
-            f"レポート {i} (ID: {report.id}, {report.created_at.strftime('%Y-%m-%d %H:%M')}): "
-            f"{trigger} → 根本原因: {root_causes}"
-        )
-    return "\n".join(lines)
-
-
-async def _classify_query_intent(query: str) -> str:
-    """ユーザクエリのインテントを分類する.
-
-    Returns:
-        "search" — 過去レポートで回答可能
-        "investigate" — 新規調査が必要
-        "retry:regenerate_rca" — RCAレポート再生成
-        "retry:reinvestigate" — データソース変更して再調査
-        "retry:continue_investigation" — 追加調査
-    """
-    from langchain_core.messages import HumanMessage, SystemMessage
-
-    from ai_agent_monitoring.agents.prompts import QUERY_INTENT_CLASSIFICATION_PROMPT
-
-    if not app_state.orchestrator:
-        return "investigate"
-
-    try:
-        llm = app_state.orchestrator.llm
-
-        # 直近レポートのサマリーをコンテキストに含める
-        report_summary = _build_report_summary()
-        user_content = query
-        if report_summary:
-            user_content = f"## 既存レポートの概要\n{report_summary}\n\n## ユーザクエリ\n{query}"
-
-        messages = [
-            SystemMessage(content=QUERY_INTENT_CLASSIFICATION_PROMPT),
-            HumanMessage(content=user_content),
-        ]
-        response = await asyncio.wait_for(llm.ainvoke(messages), timeout=30)
-        raw_intent = response.content.strip()
-        intent = raw_intent.lower()
-        logger.info("Intent classification: query=%s, raw_response=%s", query[:100], raw_intent)
-        # retry:* インテントを優先チェック
-        for retry_intent in (
-            "retry:regenerate_rca",
-            "retry:reinvestigate",
-            "retry:continue_investigation",
-        ):
-            if retry_intent in intent:
-                return retry_intent
-        if "search" in intent:
-            return "search"
-        return "investigate"
-    except (TimeoutError, Exception):
-        logger.warning("Intent classification failed, falling back to investigate", exc_info=True)
-        return "investigate"
 
 
 # ---- RCAレポート検索・一覧 ----
