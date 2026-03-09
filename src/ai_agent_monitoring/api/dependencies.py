@@ -307,8 +307,7 @@ class AppState:
                 vector_size = 1536
             except Exception as e:
                 logger.error(
-                    "Unexpected error detecting embedding dimension "
-                    "(endpoint=%s, model=%s, error_type=%s): %s",
+                    "Unexpected error detecting embedding dimension (endpoint=%s, model=%s, error_type=%s): %s",
                     emb_endpoint,
                     self.settings.embedding_model,
                     type(e).__name__,
@@ -317,8 +316,7 @@ class AppState:
                 vector_size = 1536
             if vector_size == 1536:
                 logger.warning(
-                    "Using default embedding dimension 1536. "
-                    "Set EMBEDDING_DIMENSIONS to skip auto-detection."
+                    "Using default embedding dimension 1536. Set EMBEDDING_DIMENSIONS to skip auto-detection."
                 )
 
         self.vector_store = VectorStore(
