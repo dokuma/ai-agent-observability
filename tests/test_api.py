@@ -184,9 +184,11 @@ class TestUserQuery:
         compiled.ainvoke = AsyncMock(return_value={"rca_report": None})
         app_state.orchestrator.compile.return_value = compiled
 
+        # 「状態を教えて」は質問形式なので report_search へ
+        # スコア閾値未満なら新規調査にフォールスルー
         response = client.post(
             "/api/v1/query",
-            json={"query": "今のクラスタ状態を確認して"},
+            json={"query": "今のクラスタ状態はどうなっていますか"},
         )
         assert response.status_code == 200
         data = response.json()
@@ -194,6 +196,43 @@ class TestUserQuery:
         assert data["status"] == "running"
         # 検索不一致メッセージが含まれる
         assert "見つからなかった" in data["message"]
+
+        app_state.report_store = None
+        app_state.report_search_agent = None
+
+    def test_report_search_needs_investigation_starts_followup(self, client):
+        """report_search が [NEEDS_INVESTIGATION] を返した場合、自動的にフォローアップ調査を開始."""
+        mock_store = MagicMock()
+        mock_store.count.return_value = 3
+        mock_report = MagicMock()
+        mock_store.search.return_value = [(mock_report, 0.9, ["highlight"])]
+
+        mock_search_agent = AsyncMock()
+        mock_search_agent.search_and_answer.return_value = ReportSearchResponse(
+            answer="過去にCPU問題がありました。[NEEDS_INVESTIGATION]",
+            results=[],
+            total_reports=1,
+        )
+
+        app_state.report_store = mock_store
+        app_state.report_search_agent = mock_search_agent
+        app_state.hybrid_searcher = None
+
+        # フォローアップ調査用のオーケストレータをセットアップ
+        app_state.orchestrator = MagicMock()
+        compiled = MagicMock()
+        compiled.ainvoke = AsyncMock(return_value={"rca_report": None})
+        app_state.orchestrator.compile.return_value = compiled
+
+        response = client.post(
+            "/api/v1/query",
+            json={"query": "CPU使用率が高い原因は？"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        # 最初は report_search にルーティング
+        assert data["routed_to"] == "report_search"
+        assert data["status"] == "running"
 
         app_state.report_store = None
         app_state.report_search_agent = None

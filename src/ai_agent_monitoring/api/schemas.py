@@ -73,6 +73,7 @@ class InvestigationStatus(BaseModel):
     mcp_status: dict[str, bool] = Field(default_factory=dict)
     pending_input: dict[str, Any] | str | None = None  # interrupt時のユーザ入力要求
     report_search_answer: str | None = None  # report_search完了時の回答
+    followup_investigation_id: str | None = None  # 調査自動移行時のフォローアップ調査ID
 
 
 # ---- RCAレポート ----

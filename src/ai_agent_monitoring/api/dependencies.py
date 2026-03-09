@@ -181,6 +181,8 @@ class InvestigationRecord:
     task: Any = None
     # report_search 結果（ポーリングで取得するため保持）
     report_search_answer: str | None = None
+    # report_search → 調査自動移行時のフォローアップ調査ID
+    followup_investigation_id: str | None = None
 
 
 class AppState:

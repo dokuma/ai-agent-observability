@@ -203,7 +203,7 @@ async def submit_query(
                 has_relevant_results = any(score >= threshold for _, score, _ in search_results)
 
             if has_relevant_results and search_results:
-                # ---- Step 3: バックグラウンドで回答生成 ----
+                # ---- Step 3: バックグラウンドでレポート検索 → 不十分なら調査へ自動移行 ----
                 logger.info(
                     "Search-first: relevant results found (top_score=%.3f, threshold=%.3f), routing to report_search",
                     search_results[0][1] if search_results else 0,
@@ -279,6 +279,7 @@ async def get_investigation_status(investigation_id: str) -> InvestigationStatus
         mcp_status=record.mcp_status,
         pending_input=record.pending_input,
         report_search_answer=record.report_search_answer,
+        followup_investigation_id=record.followup_investigation_id,
     )
 
 
@@ -455,8 +456,15 @@ async def _refresh_orchestrator_health(inv_id: str) -> dict[str, bool]:
         return mcp_status
 
 
+_NEEDS_INVESTIGATION_MARKER = "[NEEDS_INVESTIGATION]"
+
+
 async def _run_report_search(inv_id: str, query: str, timeout: int) -> None:
-    """レポート検索をバックグラウンドで実行し、結果を InvestigationRecord に保存."""
+    """レポート検索をバックグラウンドで実行し、結果を InvestigationRecord に保存.
+
+    回答に [NEEDS_INVESTIGATION] マーカーが含まれる場合は、
+    過去レポートの部分回答を保持しつつ新規調査を自動開始する。
+    """
     if not app_state.report_search_agent:
         app_state.fail_investigation(inv_id, "Report search agent not initialized")
         return
@@ -469,6 +477,33 @@ async def _run_report_search(inv_id: str, query: str, timeout: int) -> None:
         answer = result.answer
         if not answer or answer.strip() in ("{}", "[]", "null"):
             answer = "該当するRCAレポートが見つかりませんでした。新しく調査を開始してください。"
+
+        # [NEEDS_INVESTIGATION] マーカー検出 → 調査へ自動移行
+        if _NEEDS_INVESTIGATION_MARKER in answer:
+            stripped_answer = answer.replace(_NEEDS_INVESTIGATION_MARKER, "").rstrip()
+            logger.info(
+                "Report search flagged [NEEDS_INVESTIGATION] for %s, starting followup investigation",
+                inv_id,
+            )
+            # 新規調査を開始
+            followup_id = app_state.create_investigation("user_query")
+            user_query = UserQuery(raw_input=query)
+
+            record = app_state.get_investigation(inv_id)
+            if record:
+                record.status = "completed"
+                record.completed_at = datetime.now()
+                record.report_search_answer = stripped_answer
+                record.followup_investigation_id = followup_id
+
+            # フォローアップ調査をバックグラウンドで開始
+            followup_task = asyncio.create_task(
+                _run_user_query_investigation(followup_id, user_query)
+            )
+            followup_record = app_state.get_investigation(followup_id)
+            if followup_record:
+                followup_record.task = followup_task
+            return
 
         record = app_state.get_investigation(inv_id)
         if record:

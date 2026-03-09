@@ -375,6 +375,25 @@ class Pipe:
                 last_stage = stage_key
 
             if status.get("status") == "completed":
+                # report_search → 調査自動移行の場合
+                followup_id = status.get("followup_investigation_id")
+                if followup_id:
+                    rs_answer = status.get("report_search_answer", "")
+                    prefix = ""
+                    if rs_answer:
+                        prefix = (
+                            f"📋 **過去レポートからの情報:**\n{rs_answer}\n\n"
+                            "---\n\n🔍 さらに詳しく調査を開始します...\n\n"
+                        )
+                    await self._emit_status(
+                        emitter, "🔍 過去レポートでは不十分なため調査を開始..."
+                    )
+                    # フォローアップ調査をポーリング
+                    followup_result = await self._poll_until_done(
+                        base, followup_id, emitter
+                    )
+                    return prefix + followup_result
+
                 # report_search の場合は report_search_answer を直接返す
                 rs_answer = status.get("report_search_answer")
                 if rs_answer:
@@ -461,6 +480,10 @@ class Pipe:
         return "\n".join(lines) + marker
 ```
 
+> **Note (v0.10.0)**:
+> - Search-First + 自動調査移行: レポート検索で `[NEEDS_INVESTIGATION]` マーカーが検出された場合、過去レポートの部分回答を保持しつつ自動的に新規調査を開始
+> - `followup_investigation_id` によるシームレスな調査ポーリング遷移
+>
 > **Note (v0.9.0)**:
 > - report_search をバックグラウンドタスク化: LLM回答生成の同期awaitを廃止し、ポーリングで結果を取得する方式に変更。Open WebUIのpipe関数タイムアウトによる`{}`表示を解消
 > - ポーリング中に `report_search_answer` を検出して即座に回答を返す
