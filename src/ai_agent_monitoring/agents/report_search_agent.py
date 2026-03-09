@@ -46,14 +46,17 @@ class ReportSearchAgent:
     async def search_and_answer(self, query: str, top_k: int = 5) -> ReportSearchResponse:
         """クエリに基づいてレポートを検索し、LLMで回答を生成する."""
         total = self._report_store.count()
+        logger.info("Report search started: query=%s, total_reports=%d", query[:100], total)
 
         en_query = await self._translate_query_to_keywords(query)
         combined_query = f"{en_query} {query}".strip() if en_query else query
+        logger.info("Translated keywords: %s", en_query[:200] if en_query else "(empty)")
 
         if self._hybrid_searcher:
             results = await self._hybrid_searcher.search(combined_query, top_k=top_k)
         else:
             results = self._report_store.search(combined_query, top_k=top_k)
+        logger.info("Search returned %d results", len(results))
 
         if not results and en_query:
             if self._hybrid_searcher:
@@ -120,6 +123,7 @@ class ReportSearchAgent:
         context = "\n".join(context_parts)
 
         # Generate answer with LLM
+        logger.info("Generating LLM answer for report search")
         messages = [
             SystemMessage(content=REPORT_SEARCH_SYSTEM_PROMPT),
             HumanMessage(content=f"## 検索クエリ\n{query}\n\n## 検索結果\n{context}"),
@@ -127,6 +131,7 @@ class ReportSearchAgent:
 
         response = await self._llm.ainvoke(messages)
         answer = response.content if hasattr(response, "content") else str(response)
+        logger.info("Report search completed: answer_length=%d", len(answer))
 
         return ReportSearchResponse(
             answer=answer,
