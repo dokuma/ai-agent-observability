@@ -55,6 +55,12 @@ ignore = [
     "S107",  # テスト用ハードコードパスワードを許可
     "S108",  # テスト用の /tmp パスを許可
 ]
+"integration/**/*.py" = [
+    "S110",  # try-except-pass を許可（ヘルスチェック失敗は無視する設計）
+    "S113",  # requests の timeout 未指定を許可（Open WebUI 用スクリプト）
+    "N806",  # 関数内の大文字変数名を許可（定数的な用途）
+    "RUF012",  # ClassVar アノテーション不要（Open WebUI の Pipe クラス規約）
+]
 
 [tool.mypy]
 python_version = "3.12"

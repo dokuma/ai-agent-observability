@@ -1,47 +1,26 @@
-"""Pipe Function (docs/integration.md) のテスト.
+"""Pipe Function (integration/pipe_function.py) のテスト.
 
-docs/integration.md 内のコードブロックから Pipe クラスの
-ロジックをテストする。Open WebUI 依存のない純粋なユニットテスト。
+integration/pipe_function.py から Pipe クラスをインポートしてテストする。
+Open WebUI 依存のない純粋なユニットテスト。
 """
 
-import re
+import sys
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-# ---- Pipe クラスを docs/integration.md から動的にロード ----
+# integration/ を sys.path に追加して Pipe クラスをインポート
+_INTEGRATION_DIR = str(Path(__file__).parent.parent / "integration")
+if _INTEGRATION_DIR not in sys.path:
+    sys.path.insert(0, _INTEGRATION_DIR)
 
-_PIPE_MODULE = None
-
-
-def _load_pipe_class():
-    """integration.md 内の Python コードブロックから Pipe クラスをロード."""
-    global _PIPE_MODULE
-    if _PIPE_MODULE is not None:
-        return _PIPE_MODULE
-
-    md_path = Path(__file__).parent.parent / "docs" / "integration.md"
-    content = md_path.read_text()
-
-    # ```python ... ``` ブロックを抽出
-    match = re.search(r"```python\n(.*?)```", content, re.DOTALL)
-    assert match, "integration.md に Python コードブロックが見つかりません"
-
-    code = match.group(1)
-    module_dict: dict[str, Any] = {}
-    exec(compile(code, "integration.md", "exec"), module_dict)  # noqa: S102
-
-    _PIPE_MODULE = module_dict
-    return module_dict
+from pipe_function import Pipe  # noqa: E402
 
 
 def _make_pipe():
     """Pipe インスタンスを生成."""
-    module = _load_pipe_class()
-    pipe_cls = module["Pipe"]
-    pipe = pipe_cls()
+    pipe = Pipe()
     # テスト用に短い間隔に設定
     pipe.valves.POLL_INTERVAL = 0
     pipe.valves.POLL_TIMEOUT = 10
@@ -135,6 +114,117 @@ class TestFormatInputRequest:
         assert "<!-- investigation_id: inv-000 -->" in result
 
 
+# ---- _extract_inv_id_from_messages テスト ----
+
+
+class TestExtractInvIdFromMessages:
+    """_extract_inv_id_from_messages のテスト."""
+
+    def test_extract_from_assistant_message(self):
+        """アシスタントメッセージから investigation_id を抽出."""
+        pipe = _make_pipe()
+        messages = [
+            {"role": "user", "content": "調査して"},
+            {"role": "assistant", "content": "結果\n<!-- investigation_id: inv-abc -->"},
+            {"role": "user", "content": "次の質問"},
+        ]
+        result = pipe._extract_inv_id_from_messages(messages)
+        assert result == "inv-abc"
+
+    def test_no_marker(self):
+        """マーカーがない場合は None."""
+        pipe = _make_pipe()
+        messages = [
+            {"role": "assistant", "content": "普通の応答"},
+            {"role": "user", "content": "次"},
+        ]
+        result = pipe._extract_inv_id_from_messages(messages)
+        assert result is None
+
+    def test_multiple_assistants_returns_latest(self):
+        """複数のアシスタントメッセージがある場合、直近のものを返す."""
+        pipe = _make_pipe()
+        messages = [
+            {"role": "assistant", "content": "古い\n<!-- investigation_id: old-id -->"},
+            {"role": "user", "content": "入力"},
+            {"role": "assistant", "content": "新しい\n<!-- investigation_id: new-id -->"},
+            {"role": "user", "content": "次"},
+        ]
+        result = pipe._extract_inv_id_from_messages(messages)
+        assert result == "new-id"
+
+
+# ---- キャンセルキーワード検出テスト ----
+
+
+class TestCancelKeywords:
+    """キャンセルキーワード検出のテスト."""
+
+    @pytest.mark.asyncio
+    async def test_cancel_keyword_triggers_cancel(self):
+        """キャンセルキーワードで _cancel_investigation が呼ばれる."""
+        pipe = _make_pipe()
+        messages = [
+            {"role": "assistant", "content": "調査中\n<!-- investigation_id: inv-cancel -->"},
+            {"role": "user", "content": "キャンセル"},
+        ]
+        body = {"messages": messages}
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+
+        with patch("pipe_function.requests.post", return_value=mock_response):
+            result = await pipe.pipe(body)
+
+        assert "キャンセルしました" in result
+
+    @pytest.mark.asyncio
+    async def test_cancel_english_keyword(self):
+        """英語の cancel キーワードでもキャンセルされる."""
+        pipe = _make_pipe()
+        messages = [
+            {"role": "assistant", "content": "調査中\n<!-- investigation_id: inv-cancel2 -->"},
+            {"role": "user", "content": "cancel"},
+        ]
+        body = {"messages": messages}
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+
+        with patch("pipe_function.requests.post", return_value=mock_response):
+            result = await pipe.pipe(body)
+
+        assert "キャンセルしました" in result
+
+    @pytest.mark.asyncio
+    async def test_no_cancel_without_marker(self):
+        """マーカーがない場合はキャンセルせず通常処理."""
+        pipe = _make_pipe()
+        messages = [
+            {"role": "assistant", "content": "普通の応答"},
+            {"role": "user", "content": "キャンセル"},
+        ]
+        body = {"messages": messages}
+
+        # キャンセル対象がないので新規クエリとして処理される
+        with patch("pipe_function.requests.get") as mock_get, patch("pipe_function.requests.post") as mock_post:
+            mock_get.return_value = MagicMock(status_code=200, json=MagicMock(return_value={"mcp_servers": {}}))
+            mock_post.return_value = MagicMock(
+                status_code=200,
+                json=MagicMock(return_value={"investigation_id": "new-inv", "routed_to": "investigation"}),
+            )
+            mock_post.return_value.raise_for_status = MagicMock()
+            # ポーリングで completed を返す
+            status_resp = MagicMock(json=MagicMock(return_value={"status": "completed"}))
+            status_resp.raise_for_status = MagicMock()
+            report_resp = MagicMock(status_code=200, json=MagicMock(return_value={"markdown": "# Report"}))
+            mock_get.side_effect = [mock_get.return_value, status_resp, report_resp]
+
+            result = await pipe.pipe(body)
+
+        assert "# Report" in result
+
+
 # ---- _try_resume テスト ----
 
 
@@ -181,12 +271,16 @@ class TestTryResume:
 
         mock_get_response = MagicMock()
         mock_get_response.json.return_value = {"status": "completed"}
+        mock_get_response.raise_for_status = MagicMock()
 
         mock_report_response = MagicMock()
         mock_report_response.status_code = 200
         mock_report_response.json.return_value = {"markdown": "# レポート"}
 
-        with patch("requests.post", return_value=mock_post_response) as mock_post, patch("requests.get") as mock_get:
+        with (
+            patch("pipe_function.requests.post", return_value=mock_post_response) as mock_post,
+            patch("pipe_function.requests.get") as mock_get,
+        ):
             mock_get.side_effect = [mock_get_response, mock_report_response]
             result = await pipe._try_resume(body, None)
 
@@ -216,7 +310,7 @@ class TestTryResume:
         mock_response = MagicMock()
         mock_response.status_code = 409
 
-        with patch("requests.post", return_value=mock_response):
+        with patch("pipe_function.requests.post", return_value=mock_response):
             result = await pipe._try_resume(body, None)
 
         assert result is None
@@ -248,13 +342,14 @@ class TestPollUntilDone:
             "status": "waiting_for_input",
             "pending_input": pending_input,
         }
+        mock_response.raise_for_status = MagicMock()
 
         emitted = []
 
         async def mock_emitter(event):
             emitted.append(event)
 
-        with patch("requests.get", return_value=mock_response):
+        with patch("pipe_function.requests.get", return_value=mock_response):
             result = await pipe._poll_until_done("inv-poll", "http://test:8000/api/v1", mock_emitter)
 
         # データソース選択フォーマットが返されること
@@ -272,12 +367,13 @@ class TestPollUntilDone:
 
         status_response = MagicMock()
         status_response.json.return_value = {"status": "completed"}
+        status_response.raise_for_status = MagicMock()
 
         report_response = MagicMock()
         report_response.status_code = 200
         report_response.json.return_value = {"markdown": "# RCA Report"}
 
-        with patch("requests.get", side_effect=[status_response, report_response]):
+        with patch("pipe_function.requests.get", side_effect=[status_response, report_response]):
             result = await pipe._poll_until_done("inv-done", "http://test:8000/api/v1", None)
 
         assert "# RCA Report" in result
@@ -293,11 +389,45 @@ class TestPollUntilDone:
             "status": "failed",
             "error": "MCP connection failed",
         }
+        mock_response.raise_for_status = MagicMock()
 
-        with patch("requests.get", return_value=mock_response):
+        with patch("pipe_function.requests.get", return_value=mock_response):
             result = await pipe._poll_until_done("inv-fail", "http://test:8000/api/v1", None)
 
         assert "MCP connection failed" in result
+
+    @pytest.mark.asyncio
+    async def test_consecutive_errors_abort(self):
+        """連続エラーが上限に達するとポーリングを中断する."""
+        pipe = _make_pipe()
+        pipe.valves.POLL_TIMEOUT = 100  # 十分なタイムアウト
+
+        with patch("pipe_function.requests.get", side_effect=ConnectionError("refused")):
+            result = await pipe._poll_until_done("inv-err", "http://test:8000/api/v1", None)
+
+        assert "エラーが続きました" in result
+        assert "inv-err" in result
+
+
+# ---- pipe メソッド テスト ----
+
+
+class TestPipeMethod:
+    """pipe メソッドのテスト."""
+
+    @pytest.mark.asyncio
+    async def test_task_skip(self):
+        """__task__ が設定されている場合は空文字を返す."""
+        pipe = _make_pipe()
+        result = await pipe.pipe({"messages": [{"role": "user", "content": "test"}]}, __task__="title_generation")
+        assert result == ""
+
+    @pytest.mark.asyncio
+    async def test_empty_messages(self):
+        """メッセージが空の場合はプロンプトを返す."""
+        pipe = _make_pipe()
+        result = await pipe.pipe({"messages": []})
+        assert "クエリを入力してください" in result
 
 
 # ---- _check_interrupt テスト (API 側) ----

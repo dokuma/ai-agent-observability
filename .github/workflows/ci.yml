@@ -27,10 +27,10 @@ jobs:
         run: uv sync --all-extras
 
       - name: Ruff check
-        run: uv run ruff check src/ tests/
+        run: uv run ruff check src/ tests/ integration/
 
       - name: Ruff format check
-        run: uv run ruff format --check src/ tests/
+        run: uv run ruff format --check src/ tests/ integration/
 
       - name: Mypy
         run: uv run mypy src/
