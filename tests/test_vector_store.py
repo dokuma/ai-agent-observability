@@ -123,7 +123,8 @@ class TestVectorStoreSearch:
         mock_embeddings.aembed_query.assert_called_once_with("test query")
         assert len(results) == 1
         assert isinstance(results[0], VectorSearchResult)
-        assert results[0].doc_id == "doc-1"
+        # payload に report_id があればそちらが doc_id として返される
+        assert results[0].doc_id == "r1"
         assert results[0].score == 0.95
         assert results[0].payload == {"report_id": "r1"}
 

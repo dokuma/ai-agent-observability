@@ -120,7 +120,8 @@ class VectorStore:
             ).points
             return [
                 VectorSearchResult(
-                    doc_id=str(hit.id),
+                    # payload に report_id があればそれを使用（RRF 統合で BM25 側の ID と一致させる）
+                    doc_id=(hit.payload or {}).get("report_id", str(hit.id)),
                     score=hit.score,
                     payload=hit.payload or {},
                 )
