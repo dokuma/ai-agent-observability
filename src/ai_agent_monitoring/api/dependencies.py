@@ -11,6 +11,7 @@ from uuid import uuid4
 import httpx
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
+from openai import APIStatusError
 from pydantic import SecretStr
 
 from ai_agent_monitoring.agents.orchestrator import OrchestratorAgent
@@ -298,6 +299,15 @@ class AppState:
                     e,
                 )
                 vector_size = 1536
+            except APIStatusError as e:
+                logger.error(
+                    "Embedding API returned HTTP %d (endpoint=%s, model=%s): %s",
+                    e.status_code,
+                    emb_endpoint,
+                    self.settings.embedding_model,
+                    e.message,
+                )
+                vector_size = 1536
             except httpx.HTTPStatusError as e:
                 logger.error(
                     "Embedding API returned HTTP %d (endpoint=%s, model=%s): %s",
@@ -404,6 +414,13 @@ class AppState:
                 metadata["alert_name"] = rca_report.alert.alert_name
             await self.vector_store.upsert(report_id, text, metadata)
             logger.info("Report %s upserted to Qdrant", report_id)
+        except APIStatusError as e:
+            logger.error(
+                "Failed to upsert report %s: embedding API returned HTTP %d: %s",
+                report_id,
+                e.status_code,
+                e.message,
+            )
         except httpx.HTTPStatusError as e:
             logger.error(
                 "Failed to upsert report %s: embedding API returned HTTP %d: %s",

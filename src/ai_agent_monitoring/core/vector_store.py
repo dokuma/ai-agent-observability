@@ -6,6 +6,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
+from openai import APIStatusError
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
 
@@ -69,7 +70,16 @@ class VectorStore:
 
     async def upsert(self, doc_id: str, text: str, metadata: dict[str, Any]) -> None:
         """テキストを embedding してポイントを upsert."""
-        vector = await self._embeddings.aembed_query(text)
+        try:
+            vector = await self._embeddings.aembed_query(text)
+        except APIStatusError as e:
+            logger.error(
+                "Embedding API error during upsert (doc_id=%s, status=%d): %s",
+                doc_id,
+                e.status_code,
+                e.message,
+            )
+            raise
         point_id = self._to_point_id(doc_id)
 
         def _upsert() -> None:
@@ -94,7 +104,16 @@ class VectorStore:
         if not items:
             return
         texts = [text for _, text, _ in items]
-        vectors = await self._embeddings.aembed_documents(texts)
+        try:
+            vectors = await self._embeddings.aembed_documents(texts)
+        except APIStatusError as e:
+            logger.error(
+                "Embedding API error during batch upsert (count=%d, status=%d): %s",
+                len(texts),
+                e.status_code,
+                e.message,
+            )
+            raise
 
         def _upsert() -> None:
             points = [
@@ -110,7 +129,15 @@ class VectorStore:
 
     async def search(self, query: str, top_k: int = 5) -> list[VectorSearchResult]:
         """クエリテキストでベクトル検索."""
-        vector = await self._embeddings.aembed_query(query)
+        try:
+            vector = await self._embeddings.aembed_query(query)
+        except APIStatusError as e:
+            logger.error(
+                "Embedding API error during search (status=%d): %s",
+                e.status_code,
+                e.message,
+            )
+            raise
 
         def _search() -> list[VectorSearchResult]:
             hits = self._client.query_points(

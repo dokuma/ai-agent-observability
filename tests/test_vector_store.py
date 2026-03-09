@@ -2,7 +2,9 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+from openai import APIStatusError
 
 from ai_agent_monitoring.core.vector_store import VectorSearchResult, VectorStore
 
@@ -138,6 +140,48 @@ class TestVectorStoreHealth:
     async def test_health_check_failure(self, store, mock_qdrant_client):
         mock_qdrant_client.get_collections.side_effect = Exception("connection error")
         assert await store.health_check() is False
+
+
+def _make_api_status_error(status_code: int, message: str) -> APIStatusError:
+    """テスト用の APIStatusError を生成."""
+    response = httpx.Response(
+        status_code=status_code,
+        json={"error": {"message": message}},
+        request=httpx.Request("POST", "http://test/v1/embeddings"),
+    )
+    return APIStatusError(message=message, response=response, body=None)
+
+
+class TestVectorStoreEmbeddingError:
+    @pytest.mark.asyncio
+    async def test_upsert_logs_503_error(self, store, mock_embeddings, caplog):
+        mock_embeddings.aembed_query = AsyncMock(
+            side_effect=_make_api_status_error(503, "Service Unavailable"),
+        )
+        with pytest.raises(APIStatusError):
+            await store.upsert("doc-1", "text", {})
+        assert "503" in caplog.text
+        assert "Service Unavailable" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_upsert_batch_logs_503_error(self, store, mock_embeddings, caplog):
+        mock_embeddings.aembed_documents = AsyncMock(
+            side_effect=_make_api_status_error(503, "Service Unavailable"),
+        )
+        with pytest.raises(APIStatusError):
+            await store.upsert_batch([("doc-1", "text", {})])
+        assert "503" in caplog.text
+        assert "batch upsert" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_search_logs_503_error(self, store, mock_embeddings, caplog):
+        mock_embeddings.aembed_query = AsyncMock(
+            side_effect=_make_api_status_error(503, "Service Unavailable"),
+        )
+        with pytest.raises(APIStatusError):
+            await store.search("query")
+        assert "503" in caplog.text
+        assert "search" in caplog.text
 
 
 class TestVectorStoreCount:
