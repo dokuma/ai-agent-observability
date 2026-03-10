@@ -1776,9 +1776,7 @@ class OrchestratorAgent:
         "resource_kinds": "k8s_resource_kinds",
     }
 
-    async def _invoke_structured_plan(
-        self, messages: list[Any]
-    ) -> InvestigationPlan:
+    async def _invoke_structured_plan(self, messages: list[Any]) -> InvestigationPlan:
         """Structured Output でLLMを呼び出し、InvestigationPlanを取得.
 
         LLMのStructured Output機能を使い、スキーマに沿ったJSONを直接生成させる。
