@@ -403,6 +403,38 @@ class TestOrchestratorPopulateSystemFields:
         assert plan.prometheus_datasource_uid == "correct-prom"
         assert plan.loki_datasource_uid == "correct-loki"
 
+    def test_time_range_carried_forward_from_previous_plan(self):
+        """前回のイテレーションで解決済みの time_range が新しい plan に引き継がれる."""
+        previous_time_range = TimeRange(
+            start=datetime(2025, 1, 1, 0, 0, tzinfo=UTC),
+            end=datetime(2025, 1, 1, 1, 0, tzinfo=UTC),
+        )
+        previous_plan = InvestigationPlan(
+            promql_queries=["up"],
+            time_range=previous_time_range,
+        )
+        new_plan = InvestigationPlan(promql_queries=["rate(cpu[5m])"])
+        state = AgentState(
+            messages=[],
+            trigger_type=TriggerType.USER_QUERY,
+            plan=previous_plan,
+        )
+
+        self.agent._populate_system_fields(new_plan, state)
+
+        assert new_plan.time_range is not None
+        assert new_plan.time_range.start == previous_time_range.start
+        assert new_plan.time_range.end == previous_time_range.end
+
+    def test_time_range_not_carried_when_no_previous_plan(self):
+        """前回の plan がない場合、time_range は None のまま."""
+        new_plan = InvestigationPlan(promql_queries=["up"])
+        state = AgentState(messages=[], trigger_type=TriggerType.USER_QUERY)
+
+        self.agent._populate_system_fields(new_plan, state)
+
+        assert new_plan.time_range is None
+
 
 class TestOrchestratorExtractJson:
     """Orchestrator 経由の JSON 抽出テスト（共通ユーティリティに委譲）."""

@@ -1775,9 +1775,14 @@ class OrchestratorAgent:
     def _populate_system_fields(self, plan: InvestigationPlan, state: AgentState) -> None:
         """システム固有フィールドをコンテキストから設定.
 
-        datasource_uid, target_instances, target_namespaces, target_pods は
-        LLM が生成すべきでないため、alert / user_query / environment から設定する。
+        datasource_uid, target_instances, target_namespaces, target_pods, time_range は
+        LLM が生成すべきでないため、alert / user_query / environment / 前回の plan から設定する。
         """
+        # time_range: 前回のイテレーションで解決済みなら引き継ぐ
+        previous_plan = state.get("plan")
+        if previous_plan is not None and previous_plan.time_range is not None:
+            plan.time_range = previous_plan.time_range
+
         env = state.get("environment")
 
         # datasource UID: ユーザ選択値を強制設定
