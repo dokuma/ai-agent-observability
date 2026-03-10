@@ -314,9 +314,7 @@ class TestOrchestratorStructuredOutput:
     @pytest.mark.asyncio
     async def test_structured_output_fallback_to_text_parse(self):
         """Structured output が失敗した場合、テキストパースにフォールバック."""
-        self.llm.with_structured_output = MagicMock(
-            side_effect=Exception("Structured output not supported")
-        )
+        self.llm.with_structured_output = MagicMock(side_effect=Exception("Structured output not supported"))
         response = MagicMock()
         response.content = '{"promql_queries": ["up"], "logql_queries": [], "target_instances": []}'
         self.llm.ainvoke = AsyncMock(return_value=response)
@@ -331,9 +329,7 @@ class TestOrchestratorStructuredOutput:
     async def test_structured_output_ainvoke_fails_fallback(self):
         """Structured LLM の ainvoke が失敗した場合、テキストパースにフォールバック."""
         structured_llm = MagicMock()
-        structured_llm.ainvoke = AsyncMock(
-            side_effect=Exception("LLM structured call failed")
-        )
+        structured_llm.ainvoke = AsyncMock(side_effect=Exception("LLM structured call failed"))
         self.llm.with_structured_output = MagicMock(return_value=structured_llm)
         response = MagicMock()
         response.content = '{"promql_queries": ["up"], "logql_queries": [], "target_instances": []}'
