@@ -74,6 +74,16 @@ class RateLimitRetryWrapper:
             wait_max=self._wait_max,
         )
 
+    def with_structured_output(self, *args: Any, **kwargs: Any) -> RateLimitRetryWrapper:
+        """内部 LLM の with_structured_output に委譲し、結果をラッパーで再度包む."""
+        structured = self._llm.with_structured_output(*args, **kwargs)
+        return RateLimitRetryWrapper(
+            structured,
+            max_attempts=self._max_attempts,
+            wait_min=self._wait_min,
+            wait_max=self._wait_max,
+        )
+
     def __getattr__(self, name: str) -> Any:
         """未定義属性は内部 LLM に委譲."""
         return getattr(self._llm, name)

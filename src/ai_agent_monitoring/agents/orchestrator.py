@@ -1364,9 +1364,8 @@ class OrchestratorAgent:
             *state["messages"],
             HumanMessage(content=plan_prompt),
         ]
-        response = await self.llm.ainvoke(messages)
 
-        plan = self._parse_plan(response.content)
+        plan = await self._invoke_structured_plan(messages)
 
         # 環境コンテキストからdatasource UIDを自動設定
         if env:
@@ -1376,7 +1375,6 @@ class OrchestratorAgent:
                 plan.loki_datasource_uid = env.loki_datasource_uid
 
         return {
-            "messages": [response],
             "plan": plan,
             "iteration_count": state.get("iteration_count", 0) + 1,
         }
@@ -1412,7 +1410,6 @@ class OrchestratorAgent:
         # バリデーション→修正ループ
         candidate_promql = list(plan.promql_queries)
         candidate_logql = list(plan.logql_queries)
-        last_response = None
 
         for attempt in range(self._MAX_VALIDATION_RETRIES + 1):
             valid_promql, invalid_promql = self._validate_query_list(
@@ -1436,10 +1433,7 @@ class OrchestratorAgent:
                         len(valid_promql) + len(valid_logql),
                         len(all_errors),
                     )
-                result: dict[str, Any] = {"plan": plan}
-                if last_response:
-                    result["messages"] = [last_response]
-                return result
+                return {"plan": plan}
 
             # 全てエラーかつリトライ回数が残っている場合、LLMに修正を依頼
             if attempt >= self._MAX_VALIDATION_RETRIES:
@@ -1451,13 +1445,13 @@ class OrchestratorAgent:
                 self._MAX_VALIDATION_RETRIES,
             )
 
-            last_response, new_plan = await self._request_query_regeneration(
+            regenerated_plan = await self._request_query_regeneration(
                 state,
                 all_errors,
                 attempt,
             )
-            candidate_promql = new_plan.promql_queries
-            candidate_logql = new_plan.logql_queries
+            candidate_promql = regenerated_plan.promql_queries
+            candidate_logql = regenerated_plan.logql_queries
 
         # 最大リトライ到達 — 空のまま返す
         logger.error(
@@ -1466,10 +1460,7 @@ class OrchestratorAgent:
         )
         plan.promql_queries = []
         plan.logql_queries = []
-        result = {"plan": plan}
-        if last_response:
-            result["messages"] = [last_response]
-        return result
+        return {"plan": plan}
 
     def _fix_datasource_uids(
         self,
@@ -1557,11 +1548,11 @@ class OrchestratorAgent:
         state: AgentState,
         validation_errors: list[str],
         attempt: int,
-    ) -> tuple[Any, InvestigationPlan]:
+    ) -> InvestigationPlan:
         """バリデーションエラーを伝えてLLMにクエリ再生成を依頼.
 
         Returns:
-            tuple[AIMessage, InvestigationPlan]: LLMのレスポンスとパースされたプラン
+            InvestigationPlan: パースされたプラン
         """
         # RAGから関連ドキュメントを取得
         error_keywords = " ".join(q.split(":")[0] for q in validation_errors)
@@ -1583,10 +1574,8 @@ class OrchestratorAgent:
             *state["messages"],
             HumanMessage(content=retry_content),
         ]
-        response = await self.llm.ainvoke(messages)
-        new_plan = self._parse_plan(response.content)
 
-        return response, new_plan
+        return await self._invoke_structured_plan(messages)
 
     async def _resolve_time_range_node(self, state: AgentState) -> dict[str, Any]:
         """時間範囲を確定させるノード.
@@ -1786,6 +1775,35 @@ class OrchestratorAgent:
         "pods": "target_pods",
         "resource_kinds": "k8s_resource_kinds",
     }
+
+    async def _invoke_structured_plan(
+        self, messages: list[Any]
+    ) -> InvestigationPlan:
+        """Structured Output でLLMを呼び出し、InvestigationPlanを取得.
+
+        LLMのStructured Output機能を使い、スキーマに沿ったJSONを直接生成させる。
+        Structured Output が失敗した場合は、従来のテキストパースにフォールバックする。
+        """
+        try:
+            structured_llm = self.llm.with_structured_output(InvestigationPlan)
+            plan = await structured_llm.ainvoke(messages)
+            if isinstance(plan, InvestigationPlan):
+                logger.info("Structured output で調査計画を取得しました")
+                return plan
+            # with_structured_output が dict を返すケース（LangChain バージョン差異）
+            if isinstance(plan, dict):
+                logger.info("Structured output が dict を返却、InvestigationPlan に変換")
+                return InvestigationPlan(**plan)
+            raise TypeError(f"Unexpected type from structured output: {type(plan)}")
+        except Exception as e:
+            logger.warning(
+                "Structured output 失敗、テキストパースにフォールバック: %s: %s",
+                type(e).__name__,
+                e,
+            )
+            # フォールバック: 従来のテキスト出力 → JSONパース
+            response = await self.llm.ainvoke(messages)
+            return self._parse_plan(response.content)
 
     def _parse_plan(self, content: str) -> InvestigationPlan:
         """LLM出力から調査計画をパース.

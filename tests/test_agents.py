@@ -268,6 +268,84 @@ class TestOrchestratorParsePlan:
         ]
 
 
+class TestOrchestratorStructuredOutput:
+    """_invoke_structured_plan の structured output テスト."""
+
+    def setup_method(self):
+        self.agent, self.llm = _make_orchestrator()
+
+    @pytest.mark.asyncio
+    async def test_structured_output_success(self):
+        """Structured output が InvestigationPlan を直接返すケース."""
+        expected_plan = InvestigationPlan(
+            promql_queries=["up"],
+            logql_queries=['{job="app"} |= "error"'],
+            target_instances=["web-01"],
+        )
+        structured_llm = MagicMock()
+        structured_llm.ainvoke = AsyncMock(return_value=expected_plan)
+        self.llm.with_structured_output = MagicMock(return_value=structured_llm)
+
+        messages = [HumanMessage(content="テスト")]
+        plan = await self.agent._invoke_structured_plan(messages)
+
+        assert plan.promql_queries == ["up"]
+        assert plan.logql_queries == ['{job="app"} |= "error"']
+        self.llm.with_structured_output.assert_called_once_with(InvestigationPlan)
+
+    @pytest.mark.asyncio
+    async def test_structured_output_returns_dict(self):
+        """Structured output が dict を返すケース（LangChain バージョン差異）."""
+        structured_llm = MagicMock()
+        structured_llm.ainvoke = AsyncMock(
+            return_value={
+                "promql_queries": ["rate(cpu[5m])"],
+                "logql_queries": [],
+                "target_instances": [],
+            }
+        )
+        self.llm.with_structured_output = MagicMock(return_value=structured_llm)
+
+        messages = [HumanMessage(content="テスト")]
+        plan = await self.agent._invoke_structured_plan(messages)
+
+        assert plan.promql_queries == ["rate(cpu[5m])"]
+
+    @pytest.mark.asyncio
+    async def test_structured_output_fallback_to_text_parse(self):
+        """Structured output が失敗した場合、テキストパースにフォールバック."""
+        self.llm.with_structured_output = MagicMock(
+            side_effect=Exception("Structured output not supported")
+        )
+        response = MagicMock()
+        response.content = '{"promql_queries": ["up"], "logql_queries": [], "target_instances": []}'
+        self.llm.ainvoke = AsyncMock(return_value=response)
+
+        messages = [HumanMessage(content="テスト")]
+        plan = await self.agent._invoke_structured_plan(messages)
+
+        assert plan.promql_queries == ["up"]
+        self.llm.ainvoke.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_structured_output_ainvoke_fails_fallback(self):
+        """Structured LLM の ainvoke が失敗した場合、テキストパースにフォールバック."""
+        structured_llm = MagicMock()
+        structured_llm.ainvoke = AsyncMock(
+            side_effect=Exception("LLM structured call failed")
+        )
+        self.llm.with_structured_output = MagicMock(return_value=structured_llm)
+        response = MagicMock()
+        response.content = '{"promql_queries": ["up"], "logql_queries": [], "target_instances": []}'
+        self.llm.ainvoke = AsyncMock(return_value=response)
+
+        messages = [HumanMessage(content="テスト")]
+        plan = await self.agent._invoke_structured_plan(messages)
+
+        assert plan.promql_queries == ["up"]
+        self.llm.ainvoke.assert_called_once()
+
+
 class TestOrchestratorExtractJson:
     """Orchestrator 経由の JSON 抽出テスト（共通ユーティリティに委譲）."""
 
