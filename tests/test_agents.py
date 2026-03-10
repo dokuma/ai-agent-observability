@@ -716,6 +716,26 @@ class TestOrchestratorResolveTimeRangeNode:
         assert result["plan"].time_range.start.hour == 16
 
     @pytest.mark.asyncio
+    async def test_already_resolved_time_range_skips(self):
+        """前回のイテレーションで解決済みの time_range があればスキップする."""
+        existing_tr = TimeRange(
+            start=datetime(2026, 3, 1, 10, 0, 0, tzinfo=UTC),
+            end=datetime(2026, 3, 1, 11, 0, 0, tzinfo=UTC),
+        )
+        uq = UserQuery(raw_input="サーバの状態を確認して")
+        plan = InvestigationPlan(promql_queries=["up"], time_range=existing_tr)
+        state = AgentState(
+            messages=[],
+            trigger_type=TriggerType.USER_QUERY,
+            user_query=uq,
+            plan=plan,
+        )
+        result = await self.agent._resolve_time_range_node(state)
+
+        # 空の dict が返り、interrupt は呼ばれない
+        assert result == {}
+
+    @pytest.mark.asyncio
     async def test_user_query_interrupt_parse_fail_fallback(self):
         """LLMのパースに失敗した場合、直近1時間にフォールバック."""
         response = MagicMock()

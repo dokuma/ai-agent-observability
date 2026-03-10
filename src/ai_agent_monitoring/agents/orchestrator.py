@@ -1583,8 +1583,9 @@ class OrchestratorAgent:
         コンテキストから時間範囲を解決し、解決できない場合のみユーザに問い合わせる。
         優先順位:
         1. Alert起動: アラート時刻から自動推定
-        2. ユーザクエリ: 解析済みの時間範囲を使用
-        3. interrupt でユーザに問い合わせ → LLM で ISO 8601 に変換
+        2. 前回のイテレーションで解決済み: そのまま使用
+        3. ユーザクエリ: 解析済みの時間範囲を使用
+        4. interrupt でユーザに問い合わせ → LLM で ISO 8601 に変換
         """
         self._update_stage(state, "時間範囲を確定中")
 
@@ -1592,7 +1593,7 @@ class OrchestratorAgent:
         if not plan:
             return {}
 
-        # 1. Alert起動: アラート時刻から自動推定（人間の介入不要）
+        # 1. Alert起動: アラート時刻から自動推定（人間の介入不要、毎回再計算）
         alert = state.get("alert")
         if state["trigger_type"] == TriggerType.ALERT and alert is not None:
             alert_time = alert.starts_at
@@ -1602,7 +1603,12 @@ class OrchestratorAgent:
             )
             return {"plan": plan}
 
-        # 2. ユーザクエリ: 解析済み時間範囲があればそれを使用
+        # 2. 前回のイテレーションで既に解決済みならスキップ
+        if plan.time_range is not None:
+            logger.debug("time_range は既に解決済み: %s", plan.time_range)
+            return {}
+
+        # 3. ユーザクエリ: 解析済み時間範囲があればそれを使用
         user_query = state.get("user_query")
         if user_query:
             if user_query.time_range_start and user_query.time_range_end:
@@ -1618,7 +1624,7 @@ class OrchestratorAgent:
                 )
                 return {"plan": plan}
 
-        # 3. コンテキストから解決できない → ユーザに問い合わせ
+        # 4. コンテキストから解決できない → ユーザに問い合わせ
         user_answer = interrupt(
             "調査対象の時間範囲を特定できませんでした。\n"
             "調査したい時間範囲を教えてください。\n"
