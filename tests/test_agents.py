@@ -2310,20 +2310,36 @@ class TestDiscoverDatasources:
         assert env.prometheus_datasource_uid == ""
         assert env.loki_datasource_uid == ""
 
-    def test_select_or_ask_single_ds_interrupts(self):
-        """単一データソースでもinterruptで確認を求める."""
+    def test_select_or_ask_user_query_specifies_ds(self):
+        """ユーザクエリでDS名を指定 → interruptなしで自動選択."""
         agent, _ = _make_orchestrator()
-        candidates = [DatasourceInfo(uid="prom-1", name="Prometheus", type="prometheus")]
+        candidates = [
+            DatasourceInfo(uid="prom-1", name="Prometheus Main", type="prometheus"),
+            DatasourceInfo(uid="prom-2", name="Prometheus Dev", type="prometheus"),
+        ]
 
         with patch("ai_agent_monitoring.agents.orchestrator.interrupt") as mock_interrupt:
-            mock_interrupt.return_value = "prom-1"
-            result = agent._select_or_ask("prometheus", candidates)
+            result = agent._select_or_ask(
+                "prometheus", candidates, user_query_text="prometheusのデータソースはPrometheus Devを使ってください"
+            )
+            mock_interrupt.assert_not_called()
+            assert result == "prom-2"
 
-            mock_interrupt.assert_called_once()
-            assert result == "prom-1"
+    def test_select_or_ask_user_query_specifies_uid(self):
+        """ユーザクエリでUID指定 → interruptなしで自動選択."""
+        agent, _ = _make_orchestrator()
+        candidates = [
+            DatasourceInfo(uid="prom-1", name="Prometheus 1", type="prometheus"),
+            DatasourceInfo(uid="prom-2", name="Prometheus 2", type="prometheus"),
+        ]
 
-    def test_select_or_ask_with_preference_recommended(self, tmp_path):
-        """プリファレンスあり → interruptでrecommendedフラグ付き."""
+        with patch("ai_agent_monitoring.agents.orchestrator.interrupt") as mock_interrupt:
+            result = agent._select_or_ask("prometheus", candidates, user_query_text="prometheusはprom-2を使って")
+            mock_interrupt.assert_not_called()
+            assert result == "prom-2"
+
+    def test_select_or_ask_preference_auto_selects(self, tmp_path):
+        """プリファレンスあり → interruptなしで自動選択."""
         agent, _ = _make_orchestrator()
         store = DatasourcePreferenceStore(tmp_path / "prefs.json")
         store.save("prometheus", "prom-2")
@@ -2335,33 +2351,29 @@ class TestDiscoverDatasources:
         ]
 
         with patch("ai_agent_monitoring.agents.orchestrator.interrupt") as mock_interrupt:
-            mock_interrupt.return_value = "prom-2"
-            agent._select_or_ask("prometheus", candidates)
+            result = agent._select_or_ask("prometheus", candidates)
+            mock_interrupt.assert_not_called()
+            assert result == "prom-2"
 
-            call_args = mock_interrupt.call_args[0][0]
-            options = call_args["options"]
-            assert options[0]["recommended"] is False  # prom-1: not preferred
-            assert options[1]["recommended"] is True  # prom-2: preferred
-
-    def test_select_or_ask_with_default_recommended(self):
-        """isDefault → interruptでrecommendedフラグ付き."""
+    def test_select_or_ask_preference_not_in_candidates_interrupts(self, tmp_path):
+        """プリファレンスが候補にない → interrupt で問い合わせ."""
         agent, _ = _make_orchestrator()
+        store = DatasourcePreferenceStore(tmp_path / "prefs.json")
+        store.save("prometheus", "prom-deleted")
+        agent.ds_preference_store = store
+
         candidates = [
-            DatasourceInfo(uid="prom-1", name="Prometheus 1", type="prometheus", is_default=False),
-            DatasourceInfo(uid="prom-2", name="Prometheus 2", type="prometheus", is_default=True),
+            DatasourceInfo(uid="prom-1", name="Prometheus 1", type="prometheus"),
         ]
 
         with patch("ai_agent_monitoring.agents.orchestrator.interrupt") as mock_interrupt:
-            mock_interrupt.return_value = "prom-2"
-            agent._select_or_ask("prometheus", candidates)
+            mock_interrupt.return_value = "prom-1"
+            result = agent._select_or_ask("prometheus", candidates)
+            mock_interrupt.assert_called_once()
+            assert result == "prom-1"
 
-            call_args = mock_interrupt.call_args[0][0]
-            options = call_args["options"]
-            assert options[0]["recommended"] is False
-            assert options[1]["recommended"] is True
-
-    def test_select_or_ask_multiple_ds_no_preference(self):
-        """複数DS + プリファレンスなし → interrupt呼び出し."""
+    def test_select_or_ask_no_preference_no_query_interrupts(self):
+        """プリファレンスなし + クエリ指定なし → interrupt で問い合わせ."""
         agent, _ = _make_orchestrator()
         candidates = [
             DatasourceInfo(uid="prom-1", name="Prometheus 1", type="prometheus"),
@@ -2382,6 +2394,56 @@ class TestDiscoverDatasources:
         """空候補では空文字を返す（interrupt なし）."""
         agent, _ = _make_orchestrator()
         assert agent._select_or_ask("prometheus", []) == ""
+
+    def test_select_or_ask_saves_preference_on_interrupt(self, tmp_path):
+        """interrupt選択後にプリファレンスが保存される."""
+        agent, _ = _make_orchestrator()
+        store = DatasourcePreferenceStore(tmp_path / "prefs.json")
+        agent.ds_preference_store = store
+
+        candidates = [DatasourceInfo(uid="prom-1", name="Prometheus", type="prometheus")]
+
+        with patch("ai_agent_monitoring.agents.orchestrator.interrupt", return_value="prom-1"):
+            agent._select_or_ask("prometheus", candidates)
+
+        assert store.get_preferred_uid("prometheus") == "prom-1"
+
+    def test_match_datasource_from_query_name(self):
+        """クエリ内のDS名で照合."""
+        candidates = [
+            DatasourceInfo(uid="prom-1", name="Prometheus Main", type="prometheus"),
+            DatasourceInfo(uid="prom-2", name="Prometheus Dev", type="prometheus"),
+        ]
+        result = OrchestratorAgent._match_datasource_from_query(
+            "prometheus", candidates, "prometheusはPrometheus Devを使ってください"
+        )
+        assert result is not None
+        assert result.uid == "prom-2"
+
+    def test_match_datasource_from_query_uid(self):
+        """クエリ内のUIDで照合."""
+        candidates = [
+            DatasourceInfo(uid="abc123", name="Prom", type="prometheus"),
+        ]
+        result = OrchestratorAgent._match_datasource_from_query(
+            "prometheus", candidates, "prometheusのデータソースはabc123を使って"
+        )
+        assert result is not None
+        assert result.uid == "abc123"
+
+    def test_match_datasource_from_query_no_type_mention(self):
+        """クエリにDS種別の言及がない → None."""
+        candidates = [DatasourceInfo(uid="prom-1", name="Prom", type="prometheus")]
+        result = OrchestratorAgent._match_datasource_from_query("prometheus", candidates, "CPUの使用率を調べて")
+        assert result is None
+
+    def test_match_datasource_from_query_no_match(self):
+        """DS種別の言及はあるが名前/UIDが一致しない → None."""
+        candidates = [DatasourceInfo(uid="prom-1", name="Prom Main", type="prometheus")]
+        result = OrchestratorAgent._match_datasource_from_query(
+            "prometheus", candidates, "prometheusのデータソースはNonExistentを使って"
+        )
+        assert result is None
 
     def test_ask_datasource_retry_interrupts(self):
         """_ask_datasource_retry が interrupt を呼ぶ."""

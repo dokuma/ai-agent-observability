@@ -85,7 +85,8 @@ def select_datasource(
 ) -> DatasourceInfo | None:
     """候補からデータソースを選択.
 
-    優先順位: 1.プリファレンス一致 → 2.isDefault → 3.先頭
+    優先順位: 1.プリファレンス一致 → 2.先頭
+    Grafana の isDefault は信頼しない（ユーザの意図と一致しない場合がある）。
     """
     if not candidates:
         return None
@@ -96,10 +97,5 @@ def select_datasource(
             if ds.uid == preferred_uid:
                 return ds
 
-    # 2. isDefault
-    for ds in candidates:
-        if ds.is_default:
-            return ds
-
-    # 3. 先頭
+    # 2. 先頭
     return candidates[0]

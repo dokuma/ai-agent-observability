@@ -509,12 +509,13 @@ class OrchestratorAgent:
         except Exception as e:
             self._log_discovery_error("datasource listing", e)
 
-        # Phase 2: interrupt でデータソース選択（セッション外で実行）
+        # Phase 2: データソース選択（自動選択優先、解決できない場合のみinterrupt）
         # GraphBubbleUp がセッション cleanup に巻き込まれないようにする
+        query_text = self._get_query_text(state)
         if env.prometheus_datasources:
-            env.prometheus_datasource_uid = self._select_or_ask("prometheus", env.prometheus_datasources)
+            env.prometheus_datasource_uid = self._select_or_ask("prometheus", env.prometheus_datasources, query_text)
         if env.loki_datasources:
-            env.loki_datasource_uid = self._select_or_ask("loki", env.loki_datasources)
+            env.loki_datasource_uid = self._select_or_ask("loki", env.loki_datasources, query_text)
 
         # Phase 3: 選択されたデータソースで詳細情報を取得（失敗時はリトライ）
         try:
@@ -617,16 +618,37 @@ class OrchestratorAgent:
         self,
         ds_type: str,
         candidates: list[DatasourceInfo],
+        user_query_text: str = "",
     ) -> str:
-        """データソース選択を必ずinterruptでユーザに問い合わせ."""
+        """データソースを自動選択し、解決できない場合のみinterruptで問い合わせ.
+
+        優先順位:
+        1. ユーザクエリ内の明示的指定（名前/UID一致）
+        2. プリファレンスストア（前回の選択記録）
+        3. 上記で解決できない場合のみ interrupt
+        """
         if not candidates:
             return ""
 
-        # プリファレンスから推奨UIDを取得
-        preferred_uid = ""
+        # 1. ユーザクエリ内のDS指定を照合
+        matched = self._match_datasource_from_query(ds_type, candidates, user_query_text)
+        if matched:
+            logger.info("ユーザ指定で %s データソースを自動選択: %s (%s)", ds_type, matched.name, matched.uid)
+            if self.ds_preference_store:
+                self.ds_preference_store.save(ds_type, matched.uid)
+            return matched.uid
+
+        # 2. プリファレンスストアから前回の選択を取得
         if self.ds_preference_store:
             preferred_uid = self.ds_preference_store.get_preferred_uid(ds_type)
+            if preferred_uid:
+                for ds in candidates:
+                    if ds.uid == preferred_uid:
+                        logger.info("プリファレンスで %s データソースを自動選択: %s (%s)", ds_type, ds.name, ds.uid)
+                        return ds.uid
+                logger.info("プリファレンス %s=%s は候補に存在しない、ユーザに問い合わせ", ds_type, preferred_uid)
 
+        # 3. 自動選択できない → interrupt でユーザに問い合わせ
         logger.info("Requesting user selection for %s datasource (%d candidates)", ds_type, len(candidates))
         user_choice = interrupt(
             {
@@ -638,7 +660,6 @@ class OrchestratorAgent:
                         "uid": ds.uid,
                         "name": ds.name,
                         "is_default": ds.is_default,
-                        "recommended": ds.uid == preferred_uid or ds.is_default,
                     }
                     for ds in candidates
                 ],
@@ -649,6 +670,43 @@ class OrchestratorAgent:
         if self.ds_preference_store and resolved_uid:
             self.ds_preference_store.save(ds_type, resolved_uid)
         return resolved_uid
+
+    @staticmethod
+    def _match_datasource_from_query(
+        ds_type: str,
+        candidates: list[DatasourceInfo],
+        user_query_text: str,
+    ) -> DatasourceInfo | None:
+        """ユーザクエリテキストからデータソース指定を照合.
+
+        クエリ内にDS名またはUIDが含まれていれば一致する候補を返す。
+        """
+        if not user_query_text:
+            return None
+
+        query_lower = user_query_text.lower()
+
+        # ds_type に関連する記述があるかチェック（「prometheusはXXX」「lokiのデータソースはYYY」等）
+        type_keywords = {
+            "prometheus": ["prometheus", "prom"],
+            "loki": ["loki"],
+        }
+        keywords = type_keywords.get(ds_type, [ds_type])
+        has_type_mention = any(kw in query_lower for kw in keywords)
+        if not has_type_mention:
+            return None
+
+        # UID完全一致
+        for ds in candidates:
+            if ds.uid and ds.uid in user_query_text:
+                return ds
+
+        # 名前一致（大文字小文字無視）
+        for ds in candidates:
+            if ds.name and ds.name.lower() in query_lower:
+                return ds
+
+        return None
 
     def _resolve_user_choice(
         self,

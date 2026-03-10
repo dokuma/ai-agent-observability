@@ -144,19 +144,19 @@ class TestSelectDatasource:
         result = select_datasource([ds1, ds2], preferred_uid="uid-2")
         assert result == ds2
 
-    def test_preference_not_found_falls_to_default(self):
-        """プリファレンスが見つからない場合はisDefaultにフォールバック."""
+    def test_preference_not_found_falls_to_first(self):
+        """プリファレンスが見つからない場合は先頭にフォールバック（isDefaultは信用しない）."""
         ds1 = self._make_ds("uid-1", "DS 1", is_default=False)
         ds2 = self._make_ds("uid-2", "DS 2", is_default=True)
         result = select_datasource([ds1, ds2], preferred_uid="uid-nonexistent")
-        assert result == ds2
+        assert result == ds1
 
-    def test_is_default_fallback(self):
-        """プリファレンスなしでisDefaultにフォールバック."""
+    def test_no_preference_falls_to_first(self):
+        """プリファレンスなしでは先頭にフォールバック（isDefaultは信用しない）."""
         ds1 = self._make_ds("uid-1", "DS 1")
         ds2 = self._make_ds("uid-2", "DS 2", is_default=True)
         result = select_datasource([ds1, ds2])
-        assert result == ds2
+        assert result == ds1
 
     def test_fallback_to_first(self):
         """プリファレンスもisDefaultもない場合は先頭にフォールバック."""
