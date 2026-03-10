@@ -1632,12 +1632,15 @@ class OrchestratorAgent:
         )
 
         # ユーザの回答をLLMでISO 8601に変換
+        now = datetime.now(UTC)
         messages = [
             HumanMessage(
                 content=(
+                    f"現在時刻(UTC): {now.isoformat()}\n"
                     f"ユーザが指定した時間範囲: 「{user_answer}」\n\n"
-                    "この時間表現をISO 8601形式のstart/endに変換してJSON出力してください。\n"
-                    '例: {{"start": "2026-02-01T16:00:00+09:00", "end": "2026-02-01T17:00:00+09:00"}}'
+                    "この時間表現をISO 8601形式のstart/endに変換してJSON **のみ** 出力してください。\n"
+                    "質問や説明は不要です。タイムゾーンが不明な場合はUTCとしてください。\n"
+                    '出力形式: {{"start": "2026-02-01T16:00:00+00:00", "end": "2026-02-01T17:00:00+00:00"}}'
                 )
             ),
         ]
@@ -1650,9 +1653,8 @@ class OrchestratorAgent:
                 start=datetime.fromisoformat(data["start"]),
                 end=datetime.fromisoformat(data["end"]),
             )
-        except (json.JSONDecodeError, ValueError, KeyError):
+        except Exception:
             # パース失敗時は最終フォールバック
-            now = datetime.now(UTC)
             logger.warning("ユーザ回答のパースに失敗。直近1時間をフォールバックとして使用。")
             plan.time_range = TimeRange(start=now - timedelta(hours=1), end=now)
 
