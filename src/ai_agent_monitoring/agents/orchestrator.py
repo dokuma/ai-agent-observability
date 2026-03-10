@@ -1605,7 +1605,11 @@ class OrchestratorAgent:
 
         # 2. 前回のイテレーションで既に解決済みならスキップ
         if plan.time_range is not None:
-            logger.debug("time_range は既に解決済み: %s", plan.time_range)
+            logger.info(
+                "time_range は既に解決済み、スキップ: %s 〜 %s",
+                plan.time_range.start,
+                plan.time_range.end,
+            )
             return {}
 
         # 3. ユーザクエリ: 解析済み時間範囲があればそれを使用
@@ -1653,11 +1657,20 @@ class OrchestratorAgent:
                 start=datetime.fromisoformat(data["start"]),
                 end=datetime.fromisoformat(data["end"]),
             )
+            logger.info(
+                "ユーザ回答から time_range を解決: %s 〜 %s",
+                plan.time_range.start,
+                plan.time_range.end,
+            )
         except Exception:
             # パース失敗時は最終フォールバック
-            logger.warning("ユーザ回答のパースに失敗。直近1時間をフォールバックとして使用。")
+            logger.warning(
+                "ユーザ回答のパースに失敗 (LLM応答: %.200s)。直近1時間をフォールバックとして使用。",
+                response.content,
+            )
             plan.time_range = TimeRange(start=now - timedelta(hours=1), end=now)
 
+        logger.info("resolve_time_range 完了: plan.time_range=%s", plan.time_range)
         return {
             "messages": [response],
             "plan": plan,
@@ -1789,7 +1802,17 @@ class OrchestratorAgent:
         # time_range: 前回のイテレーションで解決済みなら引き継ぐ
         previous_plan = state.get("plan")
         if previous_plan is not None and previous_plan.time_range is not None:
+            logger.info(
+                "前回の time_range を引き継ぎ: %s 〜 %s",
+                previous_plan.time_range.start,
+                previous_plan.time_range.end,
+            )
             plan.time_range = previous_plan.time_range
+        else:
+            logger.info(
+                "前回の plan に time_range なし (plan=%s)",
+                "None" if previous_plan is None else f"time_range={previous_plan.time_range}",
+            )
 
         env = state.get("environment")
 
