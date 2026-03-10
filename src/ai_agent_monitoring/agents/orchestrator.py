@@ -1808,53 +1808,86 @@ class OrchestratorAgent:
                 )
                 return {"plan": plan}
 
-        # 4. コンテキストから解決できない → ユーザに問い合わせ
-        user_answer = interrupt(
-            "調査対象の時間範囲を特定できませんでした。\n"
-            "調査したい時間範囲を教えてください。\n"
-            "例: 「昨日の16時から17時」「直近1時間」「2026-02-01 09:00 〜 10:00」"
-        )
+        # 4. ユーザクエリのテキストに時間表現が含まれていればLLMで変換
+        time_hint = self._extract_time_hint_from_context(state)
+        if time_hint:
+            resolved = await self._resolve_time_from_text(time_hint)
+            if resolved:
+                plan.time_range = resolved
+                logger.info(
+                    "テキストから time_range を自動解決: %s 〜 %s",
+                    plan.time_range.start,
+                    plan.time_range.end,
+                )
+                return {"plan": plan}
 
-        # ユーザの回答をLLMでISO 8601に変換
+        # 5. デフォルト: 直近1時間（interrupt しない）
+        now = datetime.now(UTC)
+        plan.time_range = TimeRange(start=now - timedelta(hours=1), end=now)
+        logger.info("time_range をデフォルト（直近1時間）に設定: %s 〜 %s", plan.time_range.start, plan.time_range.end)
+
+        return {"plan": plan}
+
+    @staticmethod
+    def _extract_time_hint_from_context(state: AgentState) -> str:
+        """ステートからtime_range解決に使えるテキストヒントを抽出.
+
+        ユーザクエリのテキストや time_reference から時間表現を取得する。
+        """
+        user_query = state.get("user_query")
+        if user_query:
+            # time_reference が明示的に設定されていればそれを優先
+            if user_query.time_reference:
+                return user_query.time_reference
+            # raw_input に時間表現が含まれているかチェック
+            raw = user_query.raw_input
+            time_keywords = [
+                "直近",
+                "最近",
+                "過去",
+                "昨日",
+                "今日",
+                "時間",
+                "分前",
+                "時",
+                "hour",
+                "minute",
+                "ago",
+                "last",
+                "recent",
+                "yesterday",
+                "today",
+            ]
+            if any(kw in raw for kw in time_keywords):
+                return raw
+        return ""
+
+    async def _resolve_time_from_text(self, text: str) -> TimeRange | None:
+        """テキスト内の時間表現をLLMでISO 8601に変換."""
         now = datetime.now(UTC)
         messages = [
             HumanMessage(
                 content=(
                     f"現在時刻(UTC): {now.isoformat()}\n"
-                    f"ユーザが指定した時間範囲: 「{user_answer}」\n\n"
-                    "この時間表現をISO 8601形式のstart/endに変換してJSON **のみ** 出力してください。\n"
-                    "質問や説明は不要です。タイムゾーンが不明な場合はUTCとしてください。\n"
+                    f"以下のテキストから調査対象の時間範囲を抽出してISO 8601形式に変換してください: "
+                    f"「{text}」\n\n"
+                    "JSON **のみ** 出力してください。質問や説明は不要です。\n"
+                    "タイムゾーンが不明な場合はUTCとしてください。\n"
                     '出力形式: {{"start": "2026-02-01T16:00:00+00:00", "end": "2026-02-01T17:00:00+00:00"}}'
                 )
             ),
         ]
-        response = await self.llm.ainvoke(messages)
-
         try:
+            response = await self.llm.ainvoke(messages)
             json_str = extract_json(response.content)
             data = json.loads(json_str)
-            plan.time_range = TimeRange(
+            return TimeRange(
                 start=datetime.fromisoformat(data["start"]),
                 end=datetime.fromisoformat(data["end"]),
             )
-            logger.info(
-                "ユーザ回答から time_range を解決: %s 〜 %s",
-                plan.time_range.start,
-                plan.time_range.end,
-            )
         except Exception:
-            # パース失敗時は最終フォールバック
-            logger.warning(
-                "ユーザ回答のパースに失敗 (LLM応答: %.200s)。直近1時間をフォールバックとして使用。",
-                response.content,
-            )
-            plan.time_range = TimeRange(start=now - timedelta(hours=1), end=now)
-
-        logger.info("resolve_time_range 完了: plan.time_range=%s", plan.time_range)
-        return {
-            "messages": [response],
-            "plan": plan,
-        }
+            logger.warning("テキストからのtime_range解決に失敗: %.200s", text)
+            return None
 
     @_observe(name="evaluate_results", as_type="span")
     async def _evaluate_results(self, state: AgentState) -> dict[str, Any]:

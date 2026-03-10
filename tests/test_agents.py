@@ -701,12 +701,8 @@ class TestOrchestratorResolveTimeRangeNode:
         assert result["plan"].time_range.end == start + timedelta(hours=1)
 
     @pytest.mark.asyncio
-    async def test_user_query_interrupt_success(self):
-        """ユーザに時間範囲を問い合わせ、LLMがパースに成功するケース."""
-        response = MagicMock()
-        response.content = '{"start": "2026-02-01T16:00:00+00:00", "end": "2026-02-01T17:00:00+00:00"}'
-        self.llm.ainvoke = AsyncMock(return_value=response)
-
+    async def test_user_query_no_time_expression_defaults_to_last_hour(self):
+        """時間表現がないユーザクエリでは直近1時間にデフォルト（interruptなし）."""
         uq = UserQuery(raw_input="サーバの状態を確認して")
         plan = InvestigationPlan(promql_queries=["up"], time_range=None)
         state = AgentState(
@@ -715,8 +711,32 @@ class TestOrchestratorResolveTimeRangeNode:
             user_query=uq,
             plan=plan,
         )
-        with patch("ai_agent_monitoring.agents.orchestrator.interrupt", return_value="昨日の16時から17時"):
+        with patch("ai_agent_monitoring.agents.orchestrator.interrupt") as mock_interrupt:
             result = await self.agent._resolve_time_range_node(state)
+            mock_interrupt.assert_not_called()
+
+        assert result["plan"].time_range is not None
+        diff = result["plan"].time_range.end - result["plan"].time_range.start
+        assert timedelta(minutes=59) <= diff <= timedelta(minutes=61)
+
+    @pytest.mark.asyncio
+    async def test_user_query_with_time_expression_auto_resolves(self):
+        """時間表現を含むユーザクエリではLLMで自動解決（interruptなし）."""
+        response = MagicMock()
+        response.content = '{"start": "2026-02-01T16:00:00+00:00", "end": "2026-02-01T17:00:00+00:00"}'
+        self.llm.ainvoke = AsyncMock(return_value=response)
+
+        uq = UserQuery(raw_input="昨日の16時ごろのCPU使用率を確認して")
+        plan = InvestigationPlan(promql_queries=["up"], time_range=None)
+        state = AgentState(
+            messages=[],
+            trigger_type=TriggerType.USER_QUERY,
+            user_query=uq,
+            plan=plan,
+        )
+        with patch("ai_agent_monitoring.agents.orchestrator.interrupt") as mock_interrupt:
+            result = await self.agent._resolve_time_range_node(state)
+            mock_interrupt.assert_not_called()
 
         assert result["plan"].time_range is not None
         assert result["plan"].time_range.start.hour == 16
@@ -742,13 +762,13 @@ class TestOrchestratorResolveTimeRangeNode:
         assert result == {}
 
     @pytest.mark.asyncio
-    async def test_user_query_interrupt_parse_fail_fallback(self):
-        """LLMのパースに失敗した場合、直近1時間にフォールバック."""
+    async def test_user_query_time_llm_parse_fail_fallback(self):
+        """時間表現のLLMパース失敗時も直近1時間にフォールバック（interruptなし）."""
         response = MagicMock()
         response.content = "パースできない内容"
         self.llm.ainvoke = AsyncMock(return_value=response)
 
-        uq = UserQuery(raw_input="サーバの状態を確認して")
+        uq = UserQuery(raw_input="直近30分のサーバ状態を確認して")
         plan = InvestigationPlan(promql_queries=["up"], time_range=None)
         state = AgentState(
             messages=[],
@@ -756,11 +776,12 @@ class TestOrchestratorResolveTimeRangeNode:
             user_query=uq,
             plan=plan,
         )
-        with patch("ai_agent_monitoring.agents.orchestrator.interrupt", return_value="わからない"):
+        with patch("ai_agent_monitoring.agents.orchestrator.interrupt") as mock_interrupt:
             result = await self.agent._resolve_time_range_node(state)
+            mock_interrupt.assert_not_called()
 
         assert result["plan"].time_range is not None
-        # フォールバック: 直近1時間なので end - start ≈ 1時間
+        # フォールバック: 直近1時間
         diff = result["plan"].time_range.end - result["plan"].time_range.start
         assert timedelta(minutes=59) <= diff <= timedelta(minutes=61)
 
