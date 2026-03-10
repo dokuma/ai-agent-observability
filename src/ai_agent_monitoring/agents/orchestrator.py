@@ -34,6 +34,7 @@ from ai_agent_monitoring.core.state import (
     EnvironmentContext,
     EvaluationFeedback,
     InvestigationPlan,
+    InvestigationPlanSchema,
     PanelQuery,
     TimeRange,
 )
@@ -1340,22 +1341,21 @@ class OrchestratorAgent:
             )
 
         # 最終指示
+        # LLM が生成するのは promql_queries, logql_queries, k8s_resource_kinds のみ
         if feedback is not None:
             plan_prompt_parts.append(
                 "上記のフィードバックとリファレンスを踏まえ、前回とは異なるアプローチで"
                 "調査計画をJSON形式で出力してください。\n"
-                "promql_queries, logql_queries, target_instances, time_range を含めてください。\n"
-                "Kubernetes関連の調査が必要な場合は target_namespaces, target_pods, "
-                "k8s_resource_kinds も含めてください。\n"
-                "time_rangeは必ずISO 8601絶対時刻のstart/endで指定してください。"
+                "promql_queries, logql_queries, k8s_resource_kinds を含めてください。\n"
+                "注意: time_range, target_instances, target_namespaces, target_pods, "
+                "datasource_uid はシステムが自動設定するため出力しないでください。"
             )
         else:
             plan_prompt_parts.append(
                 "上記の分析に基づき、調査計画をJSON形式で出力してください。\n"
-                "promql_queries, logql_queries, target_instances, time_range を含めてください。\n"
-                "Kubernetes関連の調査が必要な場合は target_namespaces, target_pods, "
-                "k8s_resource_kinds も含めてください。\n"
-                "time_rangeは必ずISO 8601絶対時刻のstart/endで指定してください。"
+                "promql_queries, logql_queries, k8s_resource_kinds を含めてください。\n"
+                "注意: time_range, target_instances, target_namespaces, target_pods, "
+                "datasource_uid はシステムが自動設定するため出力しないでください。"
             )
 
         plan_prompt = "\n\n".join(plan_prompt_parts)
@@ -1367,12 +1367,8 @@ class OrchestratorAgent:
 
         plan = await self._invoke_structured_plan(messages)
 
-        # 環境コンテキストからdatasource UIDを自動設定
-        if env:
-            if not plan.prometheus_datasource_uid and env.prometheus_datasource_uid:
-                plan.prometheus_datasource_uid = env.prometheus_datasource_uid
-            if not plan.loki_datasource_uid and env.loki_datasource_uid:
-                plan.loki_datasource_uid = env.loki_datasource_uid
+        # システム固有の値はコンテキストから強制設定（LLM生成値は信頼しない）
+        self._populate_system_fields(plan, state)
 
         return {
             "plan": plan,
@@ -1467,34 +1463,38 @@ class OrchestratorAgent:
         plan: InvestigationPlan,
         env: EnvironmentContext | None,
     ) -> None:
-        """datasource_uid を検証し、環境コンテキストで自動修正."""
-        if not self.query_validator.is_valid_datasource_uid(plan.prometheus_datasource_uid):
-            if env and env.prometheus_datasource_uid:
+        """datasource_uid をユーザ選択値（env）で強制設定.
+
+        datasource_uid はユーザが interrupt で選択した値を使うべきであり、
+        LLM が生成した値は信頼しない。env に値があれば常に env の値を使う。
+        """
+        if env and env.prometheus_datasource_uid:
+            if plan.prometheus_datasource_uid != env.prometheus_datasource_uid:
                 logger.info(
-                    "Invalid prometheus_datasource_uid '%s', using env value: %s",
+                    "Overriding prometheus_datasource_uid '%s' with env value: %s",
                     plan.prometheus_datasource_uid,
                     env.prometheus_datasource_uid,
                 )
                 plan.prometheus_datasource_uid = env.prometheus_datasource_uid
-            else:
-                logger.warning(
-                    "Invalid prometheus_datasource_uid and no env fallback: %s",
-                    plan.prometheus_datasource_uid,
-                )
+        elif not self.query_validator.is_valid_datasource_uid(plan.prometheus_datasource_uid):
+            logger.warning(
+                "Invalid prometheus_datasource_uid and no env fallback: %s",
+                plan.prometheus_datasource_uid,
+            )
 
-        if not self.query_validator.is_valid_datasource_uid(plan.loki_datasource_uid):
-            if env and env.loki_datasource_uid:
+        if env and env.loki_datasource_uid:
+            if plan.loki_datasource_uid != env.loki_datasource_uid:
                 logger.info(
-                    "Invalid loki_datasource_uid '%s', using env value: %s",
+                    "Overriding loki_datasource_uid '%s' with env value: %s",
                     plan.loki_datasource_uid,
                     env.loki_datasource_uid,
                 )
                 plan.loki_datasource_uid = env.loki_datasource_uid
-            else:
-                logger.warning(
-                    "Invalid loki_datasource_uid and no env fallback: %s",
-                    plan.loki_datasource_uid,
-                )
+        elif not self.query_validator.is_valid_datasource_uid(plan.loki_datasource_uid):
+            logger.warning(
+                "Invalid loki_datasource_uid and no env fallback: %s",
+                plan.loki_datasource_uid,
+            )
 
     def _validate_query_list(
         self,
@@ -1580,11 +1580,11 @@ class OrchestratorAgent:
     async def _resolve_time_range_node(self, state: AgentState) -> dict[str, Any]:
         """時間範囲を確定させるノード.
 
-        LLMが調査計画でtime_rangeを出力できた場合はそのまま通過。
-        できなかった場合:
-        - Alert起動: アラート時刻から自動推定
-        - ユーザクエリ起動: UserQueryの解析済み時間があればそれを使用、
-          なければinterruptでユーザに問い合わせる
+        コンテキストから時間範囲を解決し、解決できない場合のみユーザに問い合わせる。
+        優先順位:
+        1. Alert起動: アラート時刻から自動推定
+        2. ユーザクエリ: 解析済みの時間範囲を使用
+        3. interrupt でユーザに問い合わせ → LLM で ISO 8601 に変換
         """
         self._update_stage(state, "時間範囲を確定中")
 
@@ -1592,11 +1592,7 @@ class OrchestratorAgent:
         if not plan:
             return {}
 
-        # LLMがtime_rangeを出力済みなら何もしない
-        if plan.time_range is not None:
-            return {}
-
-        # Alert起動: アラート時刻から自動推定（人間の介入不要）
+        # 1. Alert起動: アラート時刻から自動推定（人間の介入不要）
         alert = state.get("alert")
         if state["trigger_type"] == TriggerType.ALERT and alert is not None:
             alert_time = alert.starts_at
@@ -1606,7 +1602,7 @@ class OrchestratorAgent:
             )
             return {"plan": plan}
 
-        # ユーザクエリ: 解析済み時間範囲があればそれを使用
+        # 2. ユーザクエリ: 解析済み時間範囲があればそれを使用
         user_query = state.get("user_query")
         if user_query:
             if user_query.time_range_start and user_query.time_range_end:
@@ -1622,7 +1618,7 @@ class OrchestratorAgent:
                 )
                 return {"plan": plan}
 
-        # ユーザクエリで時間範囲が不明 → ユーザに問い合わせ
+        # 3. コンテキストから解決できない → ユーザに問い合わせ
         user_answer = interrupt(
             "調査対象の時間範囲を特定できませんでした。\n"
             "調査したい時間範囲を教えてください。\n"
@@ -1776,23 +1772,62 @@ class OrchestratorAgent:
         "resource_kinds": "k8s_resource_kinds",
     }
 
+    def _populate_system_fields(self, plan: InvestigationPlan, state: AgentState) -> None:
+        """システム固有フィールドをコンテキストから設定.
+
+        datasource_uid, target_instances, target_namespaces, target_pods は
+        LLM が生成すべきでないため、alert / user_query / environment から設定する。
+        """
+        env = state.get("environment")
+
+        # datasource UID: ユーザ選択値を強制設定
+        if env:
+            if env.prometheus_datasource_uid:
+                plan.prometheus_datasource_uid = env.prometheus_datasource_uid
+            if env.loki_datasource_uid:
+                plan.loki_datasource_uid = env.loki_datasource_uid
+
+        # target_instances / target_namespaces / target_pods: コンテキストから抽出
+        alert = state.get("alert")
+        user_query = state.get("user_query")
+
+        if alert is not None:
+            # アラートの labels から namespace, pod, instance を抽出
+            labels = alert.labels or {}
+            if not plan.target_namespaces:
+                ns = labels.get("namespace", "")
+                if ns:
+                    plan.target_namespaces = [ns]
+            if not plan.target_pods:
+                pod = labels.get("pod", "") or labels.get("pod_name", "")
+                if pod:
+                    plan.target_pods = [pod]
+            if not plan.target_instances:
+                instance = alert.instance
+                if instance:
+                    plan.target_instances = [instance]
+
+        if user_query is not None and user_query.target_instances:
+            plan.target_instances = user_query.target_instances
+
     async def _invoke_structured_plan(self, messages: list[Any]) -> InvestigationPlan:
         """Structured Output でLLMを呼び出し、InvestigationPlanを取得.
 
         LLMのStructured Output機能を使い、スキーマに沿ったJSONを直接生成させる。
+        datasource_uid はスキーマから除外し、LLM に生成させない。
         Structured Output が失敗した場合は、従来のテキストパースにフォールバックする。
         """
         try:
-            structured_llm = self.llm.with_structured_output(InvestigationPlan)
-            plan = await structured_llm.ainvoke(messages)
-            if isinstance(plan, InvestigationPlan):
+            structured_llm = self.llm.with_structured_output(InvestigationPlanSchema)
+            result = await structured_llm.ainvoke(messages)
+            if isinstance(result, InvestigationPlanSchema):
                 logger.info("Structured output で調査計画を取得しました")
-                return plan
+                return InvestigationPlan(**result.model_dump())
             # with_structured_output が dict を返すケース（LangChain バージョン差異）
-            if isinstance(plan, dict):
+            if isinstance(result, dict):
                 logger.info("Structured output が dict を返却、InvestigationPlan に変換")
-                return InvestigationPlan(**plan)
-            raise TypeError(f"Unexpected type from structured output: {type(plan)}")
+                return InvestigationPlan(**result)
+            raise TypeError(f"Unexpected type from structured output: {type(result)}")
         except Exception as e:
             logger.warning(
                 "Structured output 失敗、テキストパースにフォールバック: %s: %s",

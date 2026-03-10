@@ -48,12 +48,15 @@ Metrics Agent・Logs Agentに調査を委任し、最終的にRCAレポートを
 ## 調査計画の出力形式
 以下のJSON形式で調査計画を出力してください。
 **重要**:
-- promql_queries, logql_queries, target_instancesは、
+- promql_queries, logql_queriesは、
   上記「監視環境」で示された利用可能なメトリクス・ラベル・インスタンスを使用
 - 上記「クエリ文法」に従った正しい構文でクエリを記述
-- promql_queries, logql_queries, target_instancesは**純粋な文字列の配列**です。
+- promql_queries, logql_queriesは**純粋な文字列の配列**です。
   各要素はクエリ文字列そのものを直接記述してください。
   オブジェクト（{{"id": ..., "query": ...}}）で囲まないでください。
+- **以下のフィールドはシステムが自動設定するため出力しないでください**:
+  time_range, target_instances, target_namespaces, target_pods,
+  prometheus_datasource_uid, loki_datasource_uid
 
 正しい例:
 {{
@@ -62,15 +65,8 @@ Metrics Agent・Logs Agentに調査を委任し、最終的にRCAレポートを
     "sum(rate(container_cpu_usage_seconds_total{{namespace=\"myns\"}}[5m])) by (pod)"
   ],
   "logql_queries": ["{{namespace=\"myns\"}} |= \"error\""],
-  "target_instances": ["pod-abc-123"],
-  "target_namespaces": ["myns"],
-  "target_pods": ["pod-abc-123"],
-  "k8s_resource_kinds": ["Pod", "Deployment", "Event"],
-  "time_range": {{"start": "<ISO 8601絶対時刻>", "end": "<ISO 8601絶対時刻>"}}
+  "k8s_resource_kinds": ["Pod", "Deployment", "Event"]
 }}
-
-Kubernetes関連の調査が必要な場合は target_namespaces, target_pods, k8s_resource_kinds も含めてください。
-クラスタ全体の健康状態を調査する場合は target_namespaces を空にしてください。
 
 間違った例（オブジェクトの配列にしないでください）:
 {{

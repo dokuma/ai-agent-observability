@@ -188,12 +188,25 @@ class EvaluationFeedback(BaseModel):
     reasoning: str = ""
 
 
+class InvestigationPlanSchema(BaseModel):
+    """LLM Structured Output 用スキーマ.
+
+    LLM が生成すべきフィールドのみを含む。
+    システム固有の値（datasource_uid, target_instances, target_namespaces,
+    target_pods, time_range）は環境やアラート等のコンテキストから設定するため除外する。
+    """
+
+    promql_queries: list[str] = Field(default_factory=list)
+    logql_queries: list[str] = Field(default_factory=list)
+    k8s_resource_kinds: list[str] = Field(default_factory=list)  # ["Deployment", "Service"] 等
+
+
 class InvestigationPlan(BaseModel):
     """Orchestratorが生成する調査計画."""
 
     model_config = {"extra": "ignore"}
 
-    # データソースUID（クエリ実行時に必須）
+    # データソースUID（クエリ実行時に必須、ユーザ選択値を強制設定）
     prometheus_datasource_uid: str = ""
     loki_datasource_uid: str = ""
 

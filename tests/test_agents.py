@@ -27,7 +27,9 @@ from ai_agent_monitoring.core.state import (
     DashboardInfo,
     EnvironmentContext,
     InvestigationPlan,
+    InvestigationPlanSchema,
     PanelQuery,
+    TimeRange,
 )
 from ai_agent_monitoring.tools.registry import MCPConnection, ToolRegistry
 
@@ -276,22 +278,26 @@ class TestOrchestratorStructuredOutput:
 
     @pytest.mark.asyncio
     async def test_structured_output_success(self):
-        """Structured output が InvestigationPlan を直接返すケース."""
-        expected_plan = InvestigationPlan(
+        """Structured output が InvestigationPlanSchema を返すケース."""
+        schema_result = InvestigationPlanSchema(
             promql_queries=["up"],
             logql_queries=['{job="app"} |= "error"'],
             target_instances=["web-01"],
         )
         structured_llm = MagicMock()
-        structured_llm.ainvoke = AsyncMock(return_value=expected_plan)
+        structured_llm.ainvoke = AsyncMock(return_value=schema_result)
         self.llm.with_structured_output = MagicMock(return_value=structured_llm)
 
         messages = [HumanMessage(content="テスト")]
         plan = await self.agent._invoke_structured_plan(messages)
 
+        assert isinstance(plan, InvestigationPlan)
         assert plan.promql_queries == ["up"]
         assert plan.logql_queries == ['{job="app"} |= "error"']
-        self.llm.with_structured_output.assert_called_once_with(InvestigationPlan)
+        # datasource_uid はスキーマに含まれないため空
+        assert plan.prometheus_datasource_uid == ""
+        assert plan.loki_datasource_uid == ""
+        self.llm.with_structured_output.assert_called_once_with(InvestigationPlanSchema)
 
     @pytest.mark.asyncio
     async def test_structured_output_returns_dict(self):
@@ -340,6 +346,62 @@ class TestOrchestratorStructuredOutput:
 
         assert plan.promql_queries == ["up"]
         self.llm.ainvoke.assert_called_once()
+
+
+class TestOrchestratorPopulateSystemFields:
+    """_populate_system_fields のテスト."""
+
+    def setup_method(self):
+        self.agent, self.llm = _make_orchestrator()
+
+    def test_datasource_uid_from_env(self):
+        """env の datasource_uid が plan に設定される."""
+        plan = InvestigationPlan(promql_queries=["up"])
+        env = EnvironmentContext(prometheus_datasource_uid="prom-uid-123", loki_datasource_uid="loki-uid-456")
+        state = AgentState(messages=[], trigger_type=TriggerType.USER_QUERY, environment=env)
+
+        self.agent._populate_system_fields(plan, state)
+
+        assert plan.prometheus_datasource_uid == "prom-uid-123"
+        assert plan.loki_datasource_uid == "loki-uid-456"
+
+    def test_alert_labels_populate_targets(self, sample_alert):
+        """アラートの labels から namespace, pod, instance が設定される."""
+        sample_alert.labels = {"namespace": "monitoring", "pod": "prometheus-0"}
+        sample_alert.instance = "prometheus-0:9090"
+        plan = InvestigationPlan(promql_queries=["up"])
+        state = AgentState(messages=[], trigger_type=TriggerType.ALERT, alert=sample_alert)
+
+        self.agent._populate_system_fields(plan, state)
+
+        assert plan.target_namespaces == ["monitoring"]
+        assert plan.target_pods == ["prometheus-0"]
+        assert plan.target_instances == ["prometheus-0:9090"]
+
+    def test_user_query_target_instances(self, sample_user_query):
+        """UserQuery の target_instances が plan に設定される."""
+        sample_user_query.target_instances = ["web-01", "web-02"]
+        plan = InvestigationPlan(promql_queries=["up"])
+        state = AgentState(messages=[], trigger_type=TriggerType.USER_QUERY, user_query=sample_user_query)
+
+        self.agent._populate_system_fields(plan, state)
+
+        assert plan.target_instances == ["web-01", "web-02"]
+
+    def test_env_overrides_llm_datasource_uid(self):
+        """LLM が出力した不正な datasource_uid が env で上書きされる."""
+        plan = InvestigationPlan(
+            promql_queries=["up"],
+            prometheus_datasource_uid="wrong-uid",
+            loki_datasource_uid="also-wrong",
+        )
+        env = EnvironmentContext(prometheus_datasource_uid="correct-prom", loki_datasource_uid="correct-loki")
+        state = AgentState(messages=[], trigger_type=TriggerType.USER_QUERY, environment=env)
+
+        self.agent._populate_system_fields(plan, state)
+
+        assert plan.prometheus_datasource_uid == "correct-prom"
+        assert plan.loki_datasource_uid == "correct-loki"
 
 
 class TestOrchestratorExtractJson:
@@ -537,10 +599,20 @@ class TestOrchestratorResolveTimeRangeNode:
         assert result == {}
 
     @pytest.mark.asyncio
-    async def test_plan_already_has_time_range(self, sample_plan):
-        state = AgentState(messages=[], plan=sample_plan)
+    async def test_alert_overrides_existing_time_range(self, sample_alert):
+        """アラート起動時はアラート時刻が常に優先される."""
+        existing_tr = TimeRange(
+            start=datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC),
+            end=datetime(2026, 1, 1, 1, 0, 0, tzinfo=UTC),
+        )
+        plan = InvestigationPlan(promql_queries=["up"], time_range=existing_tr)
+        state = AgentState(messages=[], trigger_type=TriggerType.ALERT, alert=sample_alert, plan=plan)
         result = await self.agent._resolve_time_range_node(state)
-        assert result == {}
+
+        assert "plan" in result
+        # アラート時刻が優先される
+        expected_start = sample_alert.starts_at - timedelta(minutes=30)
+        assert result["plan"].time_range.start == expected_start
 
     @pytest.mark.asyncio
     async def test_alert_auto_resolve(self, sample_alert):
