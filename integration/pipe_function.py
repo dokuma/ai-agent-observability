@@ -66,7 +66,7 @@ class Pipe:
                 }
             )
 
-    def _format_input_request(self, inv_id: str, pending_input: dict | None) -> str:
+    def _format_input_request(self, inv_id: str, pending_input: dict | str | None) -> str:
         """interrupt 時のユーザ入力要求をチャットメッセージとして整形.
 
         返却されるメッセージには非表示の investigation_id マーカーを含み、
@@ -76,6 +76,10 @@ class Pipe:
 
         if not pending_input:
             return f"調査を続行するために入力が必要です。\n\n回答をチャットに入力してください。\n\n{marker}"
+
+        # 文字列の場合は汎用テキスト入力として扱う（時間範囲指定など）
+        if isinstance(pending_input, str):
+            return f"{pending_input}\n\n{marker}"
 
         input_type = pending_input.get("type", "")
         message = pending_input.get("message", "")
