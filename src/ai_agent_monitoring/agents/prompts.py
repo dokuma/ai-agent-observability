@@ -56,7 +56,7 @@ Metrics Agent・Logs Agentに調査を委任し、最終的にRCAレポートを
   オブジェクト（{{"id": ..., "query": ...}}）で囲まないでください。
 - **以下のフィールドはシステムが自動設定するため出力しないでください**:
   time_range, target_instances, target_namespaces, target_pods,
-  prometheus_datasource_uid, loki_datasource_uid
+  prometheus_datasource_uids, loki_datasource_uids
 
 正しい例:
 {{

@@ -106,14 +106,40 @@ class LogsAgent:
                 time_desc = f"{plan.time_range.start.isoformat()} 〜 {plan.time_range.end.isoformat()}"
 
             queries_text = "\n".join(f"- {q}" for q in plan.logql_queries)
-            datasource_uid = plan.loki_datasource_uid
+            datasource_uids = plan.loki_datasource_uids
 
-            # datasource_uid が有効かどうかでプロンプトを分岐
-            if datasource_uid and not datasource_uid.startswith("("):
+            # datasource_uids の有効性でプロンプトを分岐
+            valid_uids = [uid for uid in datasource_uids if uid and not uid.startswith("(")]
+            if len(valid_uids) == 1:
                 datasource_instruction = (
-                    f"LokiデータソースUID: `{datasource_uid}`\n\n"
+                    f"LokiデータソースUID: `{valid_uids[0]}`\n\n"
                     "**重要**: grafana_query_lokiを使用する際は、"
-                    f"必ず `datasource_uid='{datasource_uid}'` を指定してください。"
+                    f"必ず `datasource_uid='{valid_uids[0]}'` を指定してください。"
+                )
+            elif len(valid_uids) > 1:
+                # 複数DS: 環境情報からDS別のラベル例を取得
+                env = state.get("environment")
+                ds_descriptions: list[str] = []
+                for uid in valid_uids:
+                    ds_name = uid
+                    if env:
+                        for ds in env.loki_datasources:
+                            if ds.uid == uid:
+                                ds_name = f"{ds.name} (uid: `{uid}`)"
+                                break
+                        loki_info = env.loki_env_by_uid.get(uid)
+                        if loki_info and loki_info.labels:
+                            examples = ", ".join(loki_info.labels[:5])
+                            ds_descriptions.append(f"- {ds_name}: ラベル例: [{examples}]")
+                        else:
+                            ds_descriptions.append(f"- {ds_name}")
+                    else:
+                        ds_descriptions.append(f"- uid: `{uid}`")
+                ds_list_text = "\n".join(ds_descriptions)
+                datasource_instruction = (
+                    f"利用可能なLokiデータソース:\n{ds_list_text}\n\n"
+                    "**重要**: grafana_query_lokiを使用する際は、"
+                    "クエリ内容に応じて適切な datasource_uid を指定してください。"
                 )
             else:
                 datasource_instruction = (

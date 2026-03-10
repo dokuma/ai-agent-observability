@@ -137,6 +137,22 @@ class PanelQuery(BaseModel):
     dashboard_title: str = ""
 
 
+class PrometheusEnvInfo(BaseModel):
+    """個別Prometheusデータソースの環境情報."""
+
+    metrics: list[str] = Field(default_factory=list)
+    labels: list[str] = Field(default_factory=list)
+    jobs: list[str] = Field(default_factory=list)
+    instances: list[str] = Field(default_factory=list)
+
+
+class LokiEnvInfo(BaseModel):
+    """個別Lokiデータソースの環境情報."""
+
+    labels: list[str] = Field(default_factory=list)
+    jobs: list[str] = Field(default_factory=list)
+
+
 class EnvironmentContext(BaseModel):
     """監視環境のコンテキスト情報.
 
@@ -145,15 +161,19 @@ class EnvironmentContext(BaseModel):
     ターゲットを把握するために使用。
     """
 
-    # データソース情報
-    prometheus_datasource_uid: str = ""
-    loki_datasource_uid: str = ""
+    # データソース情報（複数DS対応）
+    prometheus_datasource_uids: list[str] = Field(default_factory=list)
+    loki_datasource_uids: list[str] = Field(default_factory=list)
 
     # 全候補（エラーリカバリ・代替データソース情報用）
     prometheus_datasources: list[DatasourceInfo] = Field(default_factory=list)
     loki_datasources: list[DatasourceInfo] = Field(default_factory=list)
 
-    # 利用可能なメトリクスとラベル
+    # DS別の環境情報
+    prometheus_env_by_uid: dict[str, PrometheusEnvInfo] = Field(default_factory=dict)
+    loki_env_by_uid: dict[str, LokiEnvInfo] = Field(default_factory=dict)
+
+    # 利用可能なメトリクスとラベル（全DSのマージ結果）
     available_metrics: list[str] = Field(default_factory=list)
     available_labels: list[str] = Field(default_factory=list)
     available_jobs: list[str] = Field(default_factory=list)
@@ -162,6 +182,56 @@ class EnvironmentContext(BaseModel):
     # Lokiのラベル情報
     loki_labels: list[str] = Field(default_factory=list)
     loki_jobs: list[str] = Field(default_factory=list)
+
+    def merge_env_info(self) -> None:
+        """DS別の環境情報をフラットフィールドにマージ."""
+        if self.prometheus_env_by_uid:
+            metrics: list[str] = []
+            labels: list[str] = []
+            jobs: list[str] = []
+            instances: list[str] = []
+            seen_m: set[str] = set()
+            seen_l: set[str] = set()
+            seen_j: set[str] = set()
+            seen_i: set[str] = set()
+            for info in self.prometheus_env_by_uid.values():
+                for v in info.metrics:
+                    if v not in seen_m:
+                        seen_m.add(v)
+                        metrics.append(v)
+                for v in info.labels:
+                    if v not in seen_l:
+                        seen_l.add(v)
+                        labels.append(v)
+                for v in info.jobs:
+                    if v not in seen_j:
+                        seen_j.add(v)
+                        jobs.append(v)
+                for v in info.instances:
+                    if v not in seen_i:
+                        seen_i.add(v)
+                        instances.append(v)
+            self.available_metrics = metrics
+            self.available_labels = labels
+            self.available_jobs = jobs
+            self.available_instances = instances
+
+        if self.loki_env_by_uid:
+            loki_labels: list[str] = []
+            loki_jobs: list[str] = []
+            seen_ll: set[str] = set()
+            seen_lj: set[str] = set()
+            for loki_info in self.loki_env_by_uid.values():
+                for v in loki_info.labels:
+                    if v not in seen_ll:
+                        seen_ll.add(v)
+                        loki_labels.append(v)
+                for v in loki_info.jobs:
+                    if v not in seen_lj:
+                        seen_lj.add(v)
+                        loki_jobs.append(v)
+            self.loki_labels = loki_labels
+            self.loki_jobs = loki_jobs
 
     # 既存ダッシュボードから学習したクエリパターン
     example_promql_queries: list[str] = Field(default_factory=list)
@@ -207,8 +277,8 @@ class InvestigationPlan(BaseModel):
     model_config = {"extra": "ignore"}
 
     # データソースUID（クエリ実行時に必須、ユーザ選択値を強制設定）
-    prometheus_datasource_uid: str = ""
-    loki_datasource_uid: str = ""
+    prometheus_datasource_uids: list[str] = Field(default_factory=list)
+    loki_datasource_uids: list[str] = Field(default_factory=list)
 
     promql_queries: list[str] = Field(default_factory=list)
     logql_queries: list[str] = Field(default_factory=list)

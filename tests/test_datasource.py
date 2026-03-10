@@ -7,6 +7,7 @@ from ai_agent_monitoring.core.datasource import (
     DatasourcePreferenceStore,
     parse_datasource_list,
     select_datasource,
+    select_datasources,
 )
 
 # ---- DatasourcePreferenceStore ----
@@ -26,11 +27,29 @@ class TestDatasourcePreferenceStore:
         store = DatasourcePreferenceStore(path)
 
         store.save("prometheus", "uid-prom-1")
-        assert store.load() == {"prometheus": "uid-prom-1"}
+        assert store.load() == {"prometheus": ["uid-prom-1"]}
 
         store.save("loki", "uid-loki-1")
         prefs = store.load()
-        assert prefs == {"prometheus": "uid-prom-1", "loki": "uid-loki-1"}
+        assert prefs == {"prometheus": ["uid-prom-1"], "loki": ["uid-loki-1"]}
+
+    def test_save_uids_and_get_preferred_uids(self, tmp_path: Path):
+        """複数UIDの保存・取得ができる."""
+        path = tmp_path / "prefs.json"
+        store = DatasourcePreferenceStore(path)
+
+        store.save_uids("prometheus", ["uid-1", "uid-2"])
+        assert store.get_preferred_uids("prometheus") == ["uid-1", "uid-2"]
+        # 後方互換: get_preferred_uid は先頭を返す
+        assert store.get_preferred_uid("prometheus") == "uid-1"
+
+    def test_get_preferred_uids_legacy_format(self, tmp_path: Path):
+        """旧フォーマット（str値）からlist[str]に変換して読み込める."""
+        path = tmp_path / "prefs.json"
+        path.write_text('{"prometheus": "uid-old"}')
+        store = DatasourcePreferenceStore(path)
+        assert store.get_preferred_uids("prometheus") == ["uid-old"]
+        assert store.get_preferred_uid("prometheus") == "uid-old"
 
     def test_get_preferred_uid(self, tmp_path: Path):
         """get_preferred_uidで正しいUIDが返る."""
@@ -164,3 +183,39 @@ class TestSelectDatasource:
         ds2 = self._make_ds("uid-2", "DS 2")
         result = select_datasource([ds1, ds2])
         assert result == ds1
+
+
+# ---- select_datasources (複数対応) ----
+
+
+class TestSelectDatasources:
+    """select_datasources のテスト."""
+
+    def _make_ds(self, uid: str, name: str = "") -> DatasourceInfo:
+        return DatasourceInfo(uid=uid, name=name, type="prometheus")
+
+    def test_empty_candidates(self):
+        """空候補では空リスト."""
+        assert select_datasources([], ["uid-1"]) == []
+
+    def test_empty_preferred(self):
+        """preferred_uidsなしでは空リスト."""
+        ds = self._make_ds("uid-1")
+        assert select_datasources([ds]) == []
+        assert select_datasources([ds], []) == []
+
+    def test_all_preferred_found(self):
+        """全UIDが候補に存在→それらを返す."""
+        ds1 = self._make_ds("uid-1", "DS 1")
+        ds2 = self._make_ds("uid-2", "DS 2")
+        ds3 = self._make_ds("uid-3", "DS 3")
+        result = select_datasources([ds1, ds2, ds3], ["uid-2", "uid-1"])
+        assert len(result) == 2
+        assert result[0].uid == "uid-2"
+        assert result[1].uid == "uid-1"
+
+    def test_partial_preferred_returns_empty(self):
+        """一部のUIDが候補にない→空リスト."""
+        ds1 = self._make_ds("uid-1")
+        result = select_datasources([ds1], ["uid-1", "uid-missing"])
+        assert result == []

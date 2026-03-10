@@ -24,6 +24,7 @@ from ai_agent_monitoring.core.datasource import (
     DatasourceInfo,
     DatasourcePreferenceStore,
     parse_datasource_list,
+    select_datasources,
 )
 from ai_agent_monitoring.core.json_repair import extract_json, repair_truncated_json
 from ai_agent_monitoring.core.models import TriggerType
@@ -35,7 +36,9 @@ from ai_agent_monitoring.core.state import (
     EvaluationFeedback,
     InvestigationPlan,
     InvestigationPlanSchema,
+    LokiEnvInfo,
     PanelQuery,
+    PrometheusEnvInfo,
     TimeRange,
 )
 from ai_agent_monitoring.tools.grafana import GrafanaMCPTool
@@ -513,32 +516,34 @@ class OrchestratorAgent:
         # GraphBubbleUp がセッション cleanup に巻き込まれないようにする
         query_text = self._get_query_text(state)
         if env.prometheus_datasources:
-            env.prometheus_datasource_uid = self._select_or_ask("prometheus", env.prometheus_datasources, query_text)
+            env.prometheus_datasource_uids = self._select_or_ask_multi(
+                "prometheus", env.prometheus_datasources, query_text
+            )
         if env.loki_datasources:
-            env.loki_datasource_uid = self._select_or_ask("loki", env.loki_datasources, query_text)
+            env.loki_datasource_uids = self._select_or_ask_multi("loki", env.loki_datasources, query_text)
 
-        # Phase 3: 選択されたデータソースで詳細情報を取得（失敗時はリトライ）
+        # Phase 3: 選択された全データソースで詳細情報を取得
+        fetch_errors: dict[str, dict[str, str]] = {"prometheus": {}, "loki": {}}
         try:
             async with self.grafana_tool.session_context() as grafana:
-                # Prometheus
-                if env.prometheus_datasource_uid:
+                # Prometheus: 各UIDごとに環境情報を取得
+                for uid in env.prometheus_datasource_uids:
                     try:
-                        await self._discover_prometheus_info(grafana, env)
+                        await self._discover_prometheus_info_for_uid(grafana, env, uid)
                     except Exception as e:
-                        logger.warning(
-                            "Failed to get Prometheus info with uid=%s: %s",
-                            env.prometheus_datasource_uid,
-                            e,
-                        )
-                        env._prometheus_fetch_error = str(e)  # type: ignore[attr-defined]
+                        logger.warning("Failed to get Prometheus info with uid=%s: %s", uid, e)
+                        fetch_errors["prometheus"][uid] = str(e)
 
-                # Loki
-                if env.loki_datasource_uid:
+                # Loki: 各UIDごとに環境情報を取得
+                for uid in env.loki_datasource_uids:
                     try:
-                        await self._discover_loki_info(grafana, env)
+                        await self._discover_loki_info_for_uid(grafana, env, uid)
                     except Exception as e:
-                        logger.warning("Failed to get Loki info with uid=%s: %s", env.loki_datasource_uid, e)
-                        env._loki_fetch_error = str(e)  # type: ignore[attr-defined]
+                        logger.warning("Failed to get Loki info with uid=%s: %s", uid, e)
+                        fetch_errors["loki"][uid] = str(e)
+
+                # フラットフィールドにマージ
+                env.merge_env_info()
 
                 # ダッシュボード探索
                 await self._discover_dashboard_queries(grafana, env)
@@ -546,32 +551,34 @@ class OrchestratorAgent:
             self._log_discovery_error("environment detail", e)
 
         # Phase 4: フェッチ失敗したデータソースのリトライ（interrupt はセッション外）
-        for ds_type, uid_attr, ds_list_attr, fetch_fn, err_attr in [
+        _retry_targets = [
             (
                 "prometheus",
-                "prometheus_datasource_uid",
+                "prometheus_datasource_uids",
                 "prometheus_datasources",
-                self._discover_prometheus_info,
-                "_prometheus_fetch_error",
+                self._discover_prometheus_info_for_uid,
             ),
-            ("loki", "loki_datasource_uid", "loki_datasources", self._discover_loki_info, "_loki_fetch_error"),
-        ]:
-            error_msg = getattr(env, err_attr, None)
-            if not error_msg:
+            ("loki", "loki_datasource_uids", "loki_datasources", self._discover_loki_info_for_uid),
+        ]
+        for ds_type, uids_attr, ds_list_attr, fetch_fn in _retry_targets:
+            errors = fetch_errors.get(ds_type, {})
+            if not errors:
                 continue
-            failed_uid = getattr(env, uid_attr)
-            alt_candidates = [ds for ds in getattr(env, ds_list_attr) if ds.uid != failed_uid]
-            if not alt_candidates:
-                continue
-            # interrupt でユーザに代替選択を要求（セッション外）
-            new_uid = self._ask_datasource_retry(ds_type, failed_uid, alt_candidates, error_msg)
-            if new_uid:
-                setattr(env, uid_attr, new_uid)
-                try:
-                    async with self.grafana_tool.session_context() as grafana:
-                        await fetch_fn(grafana, env)
-                except Exception:
-                    logger.warning("Retry also failed for %s uid=%s", ds_type, new_uid)
+            for failed_uid, error_msg in errors.items():
+                alt_candidates = [ds for ds in getattr(env, ds_list_attr) if ds.uid != failed_uid]
+                if not alt_candidates:
+                    continue
+                new_uid = self._ask_datasource_retry(ds_type, failed_uid, alt_candidates, error_msg)
+                if new_uid:
+                    # 失敗したUIDを新しいUIDに置換
+                    current_uids: list[str] = getattr(env, uids_attr)
+                    setattr(env, uids_attr, [new_uid if u == failed_uid else u for u in current_uids])
+                    try:
+                        async with self.grafana_tool.session_context() as grafana:
+                            await fetch_fn(grafana, env, new_uid)
+                            env.merge_env_info()
+                    except Exception:
+                        logger.warning("Retry also failed for %s uid=%s", ds_type, new_uid)
 
         return {"environment": env}
 
@@ -620,41 +627,64 @@ class OrchestratorAgent:
         candidates: list[DatasourceInfo],
         user_query_text: str = "",
     ) -> str:
+        """データソースを自動選択（単一、後方互換ラッパー）."""
+        uids = self._select_or_ask_multi(ds_type, candidates, user_query_text)
+        return uids[0] if uids else ""
+
+    def _select_or_ask_multi(
+        self,
+        ds_type: str,
+        candidates: list[DatasourceInfo],
+        user_query_text: str = "",
+    ) -> list[str]:
         """データソースを自動選択し、解決できない場合のみinterruptで問い合わせ.
 
-        優先順位:
-        1. ユーザクエリ内の明示的指定（名前/UID一致）
-        2. プリファレンスストア（前回の選択記録）
-        3. 上記で解決できない場合のみ interrupt
+        複数選択対応。優先順位:
+        1. ユーザクエリ内の明示的指定（名前/UID一致、複数可）
+        2. プリファレンスストア（前回の選択記録の list[str]）→ 候補に全て存在すれば使用
+        3. 候補が1件のみ → 自動選択（interruptしない）
+        4. 上記で解決できない → interrupt（複数選択可能）
         """
         if not candidates:
-            return ""
+            return []
 
-        # 1. ユーザクエリ内のDS指定を照合
-        matched = self._match_datasource_from_query(ds_type, candidates, user_query_text)
+        # 1. ユーザクエリ内のDS指定を照合（複数一致可）
+        matched = self._match_datasources_from_query(ds_type, candidates, user_query_text)
         if matched:
-            logger.info("ユーザ指定で %s データソースを自動選択: %s (%s)", ds_type, matched.name, matched.uid)
+            uids = [ds.uid for ds in matched]
+            logger.info("ユーザ指定で %s データソースを自動選択: %s", ds_type, uids)
             if self.ds_preference_store:
-                self.ds_preference_store.save(ds_type, matched.uid)
-            return matched.uid
+                self.ds_preference_store.save_uids(ds_type, uids)
+            return uids
 
         # 2. プリファレンスストアから前回の選択を取得
         if self.ds_preference_store:
-            preferred_uid = self.ds_preference_store.get_preferred_uid(ds_type)
-            if preferred_uid:
-                for ds in candidates:
-                    if ds.uid == preferred_uid:
-                        logger.info("プリファレンスで %s データソースを自動選択: %s (%s)", ds_type, ds.name, ds.uid)
-                        return ds.uid
-                logger.info("プリファレンス %s=%s は候補に存在しない、ユーザに問い合わせ", ds_type, preferred_uid)
+            preferred_uids = self.ds_preference_store.get_preferred_uids(ds_type)
+            if preferred_uids:
+                resolved = select_datasources(candidates, preferred_uids)
+                if resolved:
+                    uids = [ds.uid for ds in resolved]
+                    logger.info("プリファレンスで %s データソースを自動選択: %s", ds_type, uids)
+                    return uids
+                logger.info("プリファレンス %s=%s は候補に存在しない、ユーザに問い合わせ", ds_type, preferred_uids)
 
-        # 3. 自動選択できない → interrupt でユーザに問い合わせ
+        # 3. 候補が1件のみ → 自動選択
+        if len(candidates) == 1:
+            uid = candidates[0].uid
+            logger.info("候補が1件のみ、 %s データソースを自動選択: %s", ds_type, uid)
+            if self.ds_preference_store:
+                self.ds_preference_store.save_uids(ds_type, [uid])
+            return [uid]
+
+        # 4. 自動選択できない → interrupt でユーザに問い合わせ（複数選択可）
         logger.info("Requesting user selection for %s datasource (%d candidates)", ds_type, len(candidates))
         user_choice = interrupt(
             {
                 "type": "datasource_selection",
                 "datasource_type": ds_type,
-                "message": f"使用する{ds_type}データソースを選択してください:",
+                "message": (
+                    f"使用する{ds_type}データソースを選択してください（複数選択可: カンマ区切りで番号/UID/名前を入力）:"
+                ),
                 "options": [
                     {
                         "uid": ds.uid,
@@ -666,10 +696,10 @@ class OrchestratorAgent:
             }
         )
 
-        resolved_uid = self._resolve_user_choice(user_choice, candidates)
-        if self.ds_preference_store and resolved_uid:
-            self.ds_preference_store.save(ds_type, resolved_uid)
-        return resolved_uid
+        resolved_uids = self._resolve_user_choice_multi(user_choice, candidates)
+        if self.ds_preference_store and resolved_uids:
+            self.ds_preference_store.save_uids(ds_type, resolved_uids)
+        return resolved_uids
 
     @staticmethod
     def _match_datasource_from_query(
@@ -677,12 +707,22 @@ class OrchestratorAgent:
         candidates: list[DatasourceInfo],
         user_query_text: str,
     ) -> DatasourceInfo | None:
-        """ユーザクエリテキストからデータソース指定を照合.
+        """ユーザクエリテキストからデータソース指定を照合（単一、後方互換）."""
+        matched = OrchestratorAgent._match_datasources_from_query(ds_type, candidates, user_query_text)
+        return matched[0] if matched else None
+
+    @staticmethod
+    def _match_datasources_from_query(
+        ds_type: str,
+        candidates: list[DatasourceInfo],
+        user_query_text: str,
+    ) -> list[DatasourceInfo]:
+        """ユーザクエリテキストからデータソース指定を照合（複数一致対応）.
 
         クエリ内にDS名またはUIDが含まれていれば一致する候補を返す。
         """
         if not user_query_text:
-            return None
+            return []
 
         query_lower = user_query_text.lower()
 
@@ -694,40 +734,80 @@ class OrchestratorAgent:
         keywords = type_keywords.get(ds_type, [ds_type])
         has_type_mention = any(kw in query_lower for kw in keywords)
         if not has_type_mention:
-            return None
+            return []
+
+        matched: list[DatasourceInfo] = []
+        seen_uids: set[str] = set()
 
         # UID完全一致
         for ds in candidates:
-            if ds.uid and ds.uid in user_query_text:
-                return ds
+            if ds.uid and ds.uid in user_query_text and ds.uid not in seen_uids:
+                matched.append(ds)
+                seen_uids.add(ds.uid)
 
         # 名前一致（大文字小文字無視）
         for ds in candidates:
-            if ds.name and ds.name.lower() in query_lower:
-                return ds
+            if ds.name and ds.name.lower() in query_lower and ds.uid not in seen_uids:
+                matched.append(ds)
+                seen_uids.add(ds.uid)
 
-        return None
+        return matched
 
     def _resolve_user_choice(
         self,
         user_choice: Any,
         candidates: list[DatasourceInfo],
     ) -> str:
-        """ユーザの選択をUIDに解決.
+        """ユーザの選択をUIDに解決（単一、後方互換）."""
+        uids = self._resolve_user_choice_multi(user_choice, candidates)
+        return uids[0] if uids else ""
 
-        UID文字列、番号(1-indexed)、名前、dict のいずれにも対応。
+    def _resolve_user_choice_multi(
+        self,
+        user_choice: Any,
+        candidates: list[DatasourceInfo],
+    ) -> list[str]:
+        """ユーザの選択をUID一覧に解決.
+
+        UID文字列、番号(1-indexed)、名前、dict、カンマ区切りに対応。
         """
         if not candidates:
-            return ""
+            return []
 
         # dict の場合: uid キーを使用
         if isinstance(user_choice, dict):
             uid = user_choice.get("uid", "")
             if uid:
-                return str(uid)
+                return [str(uid)]
 
-        choice = str(user_choice).strip()
+        # list の場合: 各要素を個別に解決
+        if isinstance(user_choice, list):
+            result: list[str] = []
+            for item in user_choice:
+                resolved = self._resolve_single_choice(str(item).strip(), candidates)
+                if resolved and resolved not in result:
+                    result.append(resolved)
+            return result if result else [candidates[0].uid]
 
+        choice_str = str(user_choice).strip()
+
+        # カンマ区切り対応
+        if "," in choice_str:
+            parts = [p.strip() for p in choice_str.split(",") if p.strip()]
+            result = []
+            for part in parts:
+                resolved = self._resolve_single_choice(part, candidates)
+                if resolved and resolved not in result:
+                    result.append(resolved)
+            return result if result else [candidates[0].uid]
+
+        # 単一指定
+        resolved = self._resolve_single_choice(choice_str, candidates)
+        return [resolved] if resolved else [candidates[0].uid]
+
+    @staticmethod
+    def _resolve_single_choice(choice: str, candidates: list[DatasourceInfo]) -> str:
+        """単一の選択肢をUIDに解決."""
         # UID直接指定
         for ds in candidates:
             if ds.uid == choice:
@@ -746,9 +826,8 @@ class OrchestratorAgent:
             if ds.name.lower() == choice.lower():
                 return ds.uid
 
-        # フォールバック: 先頭
-        logger.warning("Could not resolve user choice '%s', using first candidate", user_choice)
-        return candidates[0].uid
+        logger.warning("Could not resolve user choice '%s'", choice)
+        return ""
 
     def _ask_datasource_retry(
         self,
@@ -778,36 +857,28 @@ class OrchestratorAgent:
         grafana: GrafanaMCPTool,
         env: EnvironmentContext,
     ) -> None:
-        """指定UIDでPrometheusメトリクス・ラベル情報を取得."""
+        """先頭UIDでPrometheusメトリクス・ラベル情報を取得（後方互換）."""
+        uid = env.prometheus_datasource_uids[0] if env.prometheus_datasource_uids else ""
+        if not uid:
+            return
         # メトリクス名一覧（上位100件）
-        metrics_result = await grafana.list_prometheus_metric_names(
-            env.prometheus_datasource_uid,
-            limit=100,
-        )
+        metrics_result = await grafana.list_prometheus_metric_names(uid, limit=100)
         env.available_metrics = self._extract_list_from_result(metrics_result)
         logger.info("Found %d Prometheus metrics", len(env.available_metrics))
 
         # ラベル名一覧
-        labels_result = await grafana.list_prometheus_label_names(
-            env.prometheus_datasource_uid,
-        )
+        labels_result = await grafana.list_prometheus_label_names(uid)
         env.available_labels = self._extract_list_from_result(labels_result)
 
         # jobラベルの値を取得
         if "job" in env.available_labels:
-            jobs_result = await grafana.list_prometheus_label_values(
-                env.prometheus_datasource_uid,
-                "job",
-            )
+            jobs_result = await grafana.list_prometheus_label_values(uid, "job")
             env.available_jobs = self._extract_list_from_result(jobs_result)
             logger.info("Found %d jobs: %s", len(env.available_jobs), env.available_jobs[:5])
 
         # instanceラベルの値を取得
         if "instance" in env.available_labels:
-            instances_result = await grafana.list_prometheus_label_values(
-                env.prometheus_datasource_uid,
-                "instance",
-            )
+            instances_result = await grafana.list_prometheus_label_values(uid, "instance")
             env.available_instances = self._extract_list_from_result(instances_result)
             logger.info("Found %d instances", len(env.available_instances))
 
@@ -816,26 +887,52 @@ class OrchestratorAgent:
         grafana: GrafanaMCPTool,
         env: EnvironmentContext,
     ) -> None:
-        """Prometheusメトリクス・ラベル情報を取得."""
-        if not env.prometheus_datasource_uid:
+        """Prometheusメトリクス・ラベル情報を取得（後方互換）."""
+        if not env.prometheus_datasource_uids:
             return
         await self._fetch_prometheus_info(grafana, env)
+
+    async def _discover_prometheus_info_for_uid(
+        self,
+        grafana: GrafanaMCPTool,
+        env: EnvironmentContext,
+        uid: str,
+    ) -> None:
+        """指定UIDのPrometheusメトリクス・ラベル情報をDS別dictに格納."""
+        info = PrometheusEnvInfo()
+
+        metrics_result = await grafana.list_prometheus_metric_names(uid, limit=100)
+        info.metrics = self._extract_list_from_result(metrics_result)
+        logger.info("Found %d Prometheus metrics for uid=%s", len(info.metrics), uid)
+
+        labels_result = await grafana.list_prometheus_label_names(uid)
+        info.labels = self._extract_list_from_result(labels_result)
+
+        if "job" in info.labels:
+            jobs_result = await grafana.list_prometheus_label_values(uid, "job")
+            info.jobs = self._extract_list_from_result(jobs_result)
+
+        if "instance" in info.labels:
+            instances_result = await grafana.list_prometheus_label_values(uid, "instance")
+            info.instances = self._extract_list_from_result(instances_result)
+
+        env.prometheus_env_by_uid[uid] = info
 
     async def _fetch_loki_info(
         self,
         grafana: GrafanaMCPTool,
         env: EnvironmentContext,
     ) -> None:
-        """指定UIDでLokiラベル情報を取得."""
-        loki_labels_result = await grafana.list_loki_label_names(env.loki_datasource_uid)
+        """先頭UIDでLokiラベル情報を取得（後方互換）."""
+        uid = env.loki_datasource_uids[0] if env.loki_datasource_uids else ""
+        if not uid:
+            return
+        loki_labels_result = await grafana.list_loki_label_names(uid)
         env.loki_labels = self._extract_list_from_result(loki_labels_result)
         logger.info("Found %d Loki labels", len(env.loki_labels))
 
         if "job" in env.loki_labels:
-            loki_jobs_result = await grafana.list_loki_label_values(
-                env.loki_datasource_uid,
-                "job",
-            )
+            loki_jobs_result = await grafana.list_loki_label_values(uid, "job")
             env.loki_jobs = self._extract_list_from_result(loki_jobs_result)
 
     async def _discover_loki_info(
@@ -843,10 +940,29 @@ class OrchestratorAgent:
         grafana: GrafanaMCPTool,
         env: EnvironmentContext,
     ) -> None:
-        """Lokiラベル情報を取得."""
-        if not env.loki_datasource_uid:
+        """Lokiラベル情報を取得（後方互換）."""
+        if not env.loki_datasource_uids:
             return
         await self._fetch_loki_info(grafana, env)
+
+    async def _discover_loki_info_for_uid(
+        self,
+        grafana: GrafanaMCPTool,
+        env: EnvironmentContext,
+        uid: str,
+    ) -> None:
+        """指定UIDのLokiラベル情報をDS別dictに格納."""
+        info = LokiEnvInfo()
+
+        loki_labels_result = await grafana.list_loki_label_names(uid)
+        info.labels = self._extract_list_from_result(loki_labels_result)
+        logger.info("Found %d Loki labels for uid=%s", len(info.labels), uid)
+
+        if "job" in info.labels:
+            loki_jobs_result = await grafana.list_loki_label_values(uid, "job")
+            info.jobs = self._extract_list_from_result(loki_jobs_result)
+
+        env.loki_env_by_uid[uid] = info
 
     async def _discover_dashboards(
         self,
@@ -1273,12 +1389,14 @@ class OrchestratorAgent:
 
         # データソースUID（クエリ実行時に必須）
         lines.append("### データソースUID（クエリ実行時に必須）")
-        if env.prometheus_datasource_uid:
-            lines.append(f"  - Prometheus: `{env.prometheus_datasource_uid}`")
+        if env.prometheus_datasource_uids:
+            uid_list = ", ".join(f"`{uid}`" for uid in env.prometheus_datasource_uids)
+            lines.append(f"  - Prometheus: {uid_list}")
         else:
             lines.append("  - Prometheus: (grafana_list_datasources で取得してください)")
-        if env.loki_datasource_uid:
-            lines.append(f"  - Loki: `{env.loki_datasource_uid}`")
+        if env.loki_datasource_uids:
+            uid_list = ", ".join(f"`{uid}`" for uid in env.loki_datasource_uids)
+            lines.append(f"  - Loki: {uid_list}")
         else:
             lines.append("  - Loki: (grafana_list_datasources で取得してください)")
 
@@ -1521,37 +1639,41 @@ class OrchestratorAgent:
         plan: InvestigationPlan,
         env: EnvironmentContext | None,
     ) -> None:
-        """datasource_uid をユーザ選択値（env）で強制設定.
+        """datasource_uids をユーザ選択値（env）で強制設定.
 
-        datasource_uid はユーザが interrupt で選択した値を使うべきであり、
+        datasource_uids はユーザが interrupt で選択した値を使うべきであり、
         LLM が生成した値は信頼しない。env に値があれば常に env の値を使う。
         """
-        if env and env.prometheus_datasource_uid:
-            if plan.prometheus_datasource_uid != env.prometheus_datasource_uid:
+        if env and env.prometheus_datasource_uids:
+            if plan.prometheus_datasource_uids != env.prometheus_datasource_uids:
                 logger.info(
-                    "Overriding prometheus_datasource_uid '%s' with env value: %s",
-                    plan.prometheus_datasource_uid,
-                    env.prometheus_datasource_uid,
+                    "Overriding prometheus_datasource_uids '%s' with env value: %s",
+                    plan.prometheus_datasource_uids,
+                    env.prometheus_datasource_uids,
                 )
-                plan.prometheus_datasource_uid = env.prometheus_datasource_uid
-        elif not self.query_validator.is_valid_datasource_uid(plan.prometheus_datasource_uid):
+                plan.prometheus_datasource_uids = list(env.prometheus_datasource_uids)
+        elif not plan.prometheus_datasource_uids or not all(
+            self.query_validator.is_valid_datasource_uid(uid) for uid in plan.prometheus_datasource_uids
+        ):
             logger.warning(
-                "Invalid prometheus_datasource_uid and no env fallback: %s",
-                plan.prometheus_datasource_uid,
+                "Invalid prometheus_datasource_uids and no env fallback: %s",
+                plan.prometheus_datasource_uids,
             )
 
-        if env and env.loki_datasource_uid:
-            if plan.loki_datasource_uid != env.loki_datasource_uid:
+        if env and env.loki_datasource_uids:
+            if plan.loki_datasource_uids != env.loki_datasource_uids:
                 logger.info(
-                    "Overriding loki_datasource_uid '%s' with env value: %s",
-                    plan.loki_datasource_uid,
-                    env.loki_datasource_uid,
+                    "Overriding loki_datasource_uids '%s' with env value: %s",
+                    plan.loki_datasource_uids,
+                    env.loki_datasource_uids,
                 )
-                plan.loki_datasource_uid = env.loki_datasource_uid
-        elif not self.query_validator.is_valid_datasource_uid(plan.loki_datasource_uid):
+                plan.loki_datasource_uids = list(env.loki_datasource_uids)
+        elif not plan.loki_datasource_uids or not all(
+            self.query_validator.is_valid_datasource_uid(uid) for uid in plan.loki_datasource_uids
+        ):
             logger.warning(
-                "Invalid loki_datasource_uid and no env fallback: %s",
-                plan.loki_datasource_uid,
+                "Invalid loki_datasource_uids and no env fallback: %s",
+                plan.loki_datasource_uids,
             )
 
     def _validate_query_list(
@@ -1874,12 +1996,12 @@ class OrchestratorAgent:
 
         env = state.get("environment")
 
-        # datasource UID: ユーザ選択値を強制設定
+        # datasource UIDs: ユーザ選択値を強制設定
         if env:
-            if env.prometheus_datasource_uid:
-                plan.prometheus_datasource_uid = env.prometheus_datasource_uid
-            if env.loki_datasource_uid:
-                plan.loki_datasource_uid = env.loki_datasource_uid
+            if env.prometheus_datasource_uids:
+                plan.prometheus_datasource_uids = list(env.prometheus_datasource_uids)
+            if env.loki_datasource_uids:
+                plan.loki_datasource_uids = list(env.loki_datasource_uids)
 
         # target_instances / target_namespaces / target_pods: コンテキストから抽出
         alert = state.get("alert")

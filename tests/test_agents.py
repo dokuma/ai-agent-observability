@@ -294,9 +294,9 @@ class TestOrchestratorStructuredOutput:
         assert isinstance(plan, InvestigationPlan)
         assert plan.promql_queries == ["up"]
         assert plan.logql_queries == ['{job="app"} |= "error"']
-        # datasource_uid はスキーマに含まれないため空
-        assert plan.prometheus_datasource_uid == ""
-        assert plan.loki_datasource_uid == ""
+        # datasource_uids はスキーマに含まれないため空
+        assert plan.prometheus_datasource_uids == []
+        assert plan.loki_datasource_uids == []
         self.llm.with_structured_output.assert_called_once_with(InvestigationPlanSchema)
 
     @pytest.mark.asyncio
@@ -355,15 +355,18 @@ class TestOrchestratorPopulateSystemFields:
         self.agent, self.llm = _make_orchestrator()
 
     def test_datasource_uid_from_env(self):
-        """env の datasource_uid が plan に設定される."""
+        """env の datasource_uids が plan に設定される."""
         plan = InvestigationPlan(promql_queries=["up"])
-        env = EnvironmentContext(prometheus_datasource_uid="prom-uid-123", loki_datasource_uid="loki-uid-456")
+        env = EnvironmentContext(
+            prometheus_datasource_uids=["prom-uid-123"],
+            loki_datasource_uids=["loki-uid-456"],
+        )
         state = AgentState(messages=[], trigger_type=TriggerType.USER_QUERY, environment=env)
 
         self.agent._populate_system_fields(plan, state)
 
-        assert plan.prometheus_datasource_uid == "prom-uid-123"
-        assert plan.loki_datasource_uid == "loki-uid-456"
+        assert plan.prometheus_datasource_uids == ["prom-uid-123"]
+        assert plan.loki_datasource_uids == ["loki-uid-456"]
 
     def test_alert_labels_populate_targets(self, sample_alert):
         """アラートの labels から namespace, pod, instance が設定される."""
@@ -389,19 +392,22 @@ class TestOrchestratorPopulateSystemFields:
         assert plan.target_instances == ["web-01", "web-02"]
 
     def test_env_overrides_llm_datasource_uid(self):
-        """LLM が出力した不正な datasource_uid が env で上書きされる."""
+        """LLM が出力した不正な datasource_uids が env で上書きされる."""
         plan = InvestigationPlan(
             promql_queries=["up"],
-            prometheus_datasource_uid="wrong-uid",
-            loki_datasource_uid="also-wrong",
+            prometheus_datasource_uids=["wrong-uid"],
+            loki_datasource_uids=["also-wrong"],
         )
-        env = EnvironmentContext(prometheus_datasource_uid="correct-prom", loki_datasource_uid="correct-loki")
+        env = EnvironmentContext(
+            prometheus_datasource_uids=["correct-prom"],
+            loki_datasource_uids=["correct-loki"],
+        )
         state = AgentState(messages=[], trigger_type=TriggerType.USER_QUERY, environment=env)
 
         self.agent._populate_system_fields(plan, state)
 
-        assert plan.prometheus_datasource_uid == "correct-prom"
-        assert plan.loki_datasource_uid == "correct-loki"
+        assert plan.prometheus_datasource_uids == ["correct-prom"]
+        assert plan.loki_datasource_uids == ["correct-loki"]
 
     def test_time_range_carried_forward_from_previous_plan(self):
         """前回のイテレーションで解決済みの time_range が新しい plan に引き継がれる."""
@@ -1027,8 +1033,8 @@ class TestOrchestratorEnvironmentDiscovery:
 
         assert "environment" in result
         env = result["environment"]
-        assert env.prometheus_datasource_uid == ""
-        assert env.loki_datasource_uid == ""
+        assert env.prometheus_datasource_uids == []
+        assert env.loki_datasource_uids == []
         assert env.available_metrics == []
 
     def test_extract_content_text(self):
@@ -1160,7 +1166,7 @@ class TestOrchestratorFormatEnvironmentContext:
         from ai_agent_monitoring.core.state import EnvironmentContext
 
         agent, _ = _make_orchestrator()
-        env = EnvironmentContext(prometheus_datasource_uid="prom-uid-123")
+        env = EnvironmentContext(prometheus_datasource_uids=["prom-uid-123"])
         result = agent._format_environment_context(env)
         assert "prom-uid-123" in result
 
@@ -2307,8 +2313,8 @@ class TestDiscoverDatasources:
         assert len(env.prometheus_datasources) == 1
         assert len(env.loki_datasources) == 1
         # _discover_datasources は選択しない（interrupt を呼ばない）
-        assert env.prometheus_datasource_uid == ""
-        assert env.loki_datasource_uid == ""
+        assert env.prometheus_datasource_uids == []
+        assert env.loki_datasource_uids == []
 
     def test_select_or_ask_user_query_specifies_ds(self):
         """ユーザクエリでDS名を指定 → interruptなしで自動選択."""
@@ -2355,8 +2361,8 @@ class TestDiscoverDatasources:
             mock_interrupt.assert_not_called()
             assert result == "prom-2"
 
-    def test_select_or_ask_preference_not_in_candidates_interrupts(self, tmp_path):
-        """プリファレンスが候補にない → interrupt で問い合わせ."""
+    def test_select_or_ask_preference_not_in_candidates_single_auto(self, tmp_path):
+        """プリファレンスが候補にないが候補1件 → 自動選択（interruptなし）."""
         agent, _ = _make_orchestrator()
         store = DatasourcePreferenceStore(tmp_path / "prefs.json")
         store.save("prometheus", "prom-deleted")
@@ -2364,6 +2370,23 @@ class TestDiscoverDatasources:
 
         candidates = [
             DatasourceInfo(uid="prom-1", name="Prometheus 1", type="prometheus"),
+        ]
+
+        with patch("ai_agent_monitoring.agents.orchestrator.interrupt") as mock_interrupt:
+            result = agent._select_or_ask("prometheus", candidates)
+            mock_interrupt.assert_not_called()
+            assert result == "prom-1"
+
+    def test_select_or_ask_preference_not_in_candidates_interrupts(self, tmp_path):
+        """プリファレンスが候補にない + 候補複数 → interrupt で問い合わせ."""
+        agent, _ = _make_orchestrator()
+        store = DatasourcePreferenceStore(tmp_path / "prefs.json")
+        store.save("prometheus", "prom-deleted")
+        agent.ds_preference_store = store
+
+        candidates = [
+            DatasourceInfo(uid="prom-1", name="Prometheus 1", type="prometheus"),
+            DatasourceInfo(uid="prom-2", name="Prometheus 2", type="prometheus"),
         ]
 
         with patch("ai_agent_monitoring.agents.orchestrator.interrupt") as mock_interrupt:
@@ -2401,12 +2424,25 @@ class TestDiscoverDatasources:
         store = DatasourcePreferenceStore(tmp_path / "prefs.json")
         agent.ds_preference_store = store
 
-        candidates = [DatasourceInfo(uid="prom-1", name="Prometheus", type="prometheus")]
+        candidates = [
+            DatasourceInfo(uid="prom-1", name="Prometheus 1", type="prometheus"),
+            DatasourceInfo(uid="prom-2", name="Prometheus 2", type="prometheus"),
+        ]
 
         with patch("ai_agent_monitoring.agents.orchestrator.interrupt", return_value="prom-1"):
             agent._select_or_ask("prometheus", candidates)
 
         assert store.get_preferred_uid("prometheus") == "prom-1"
+
+    def test_select_or_ask_single_candidate_auto_selects(self):
+        """候補が1件のみ → interruptなしで自動選択."""
+        agent, _ = _make_orchestrator()
+        candidates = [DatasourceInfo(uid="prom-1", name="Prometheus", type="prometheus")]
+
+        with patch("ai_agent_monitoring.agents.orchestrator.interrupt") as mock_interrupt:
+            result = agent._select_or_ask("prometheus", candidates)
+            mock_interrupt.assert_not_called()
+            assert result == "prom-1"
 
     def test_match_datasource_from_query_name(self):
         """クエリ内のDS名で照合."""
@@ -2506,3 +2542,74 @@ class TestDiscoverDatasources:
             DatasourceInfo(uid="prom-2", name="DS 2", type="prometheus"),
         ]
         assert agent._resolve_user_choice("nonexistent", candidates) == "prom-1"
+
+    # ---- 複数DS選択テスト ----
+
+    def test_select_or_ask_multi_user_query_multiple_ds(self):
+        """ユーザクエリで複数DS名指定 → 複数UIDが返る."""
+        agent, _ = _make_orchestrator()
+        candidates = [
+            DatasourceInfo(uid="prom-1", name="Prometheus Infra", type="prometheus"),
+            DatasourceInfo(uid="prom-2", name="Prometheus App", type="prometheus"),
+            DatasourceInfo(uid="prom-3", name="Prometheus Dev", type="prometheus"),
+        ]
+
+        with patch("ai_agent_monitoring.agents.orchestrator.interrupt") as mock_interrupt:
+            result = agent._select_or_ask_multi(
+                "prometheus",
+                candidates,
+                user_query_text="prometheusのデータソースはPrometheus InfraとPrometheus Appを使ってください",
+            )
+            mock_interrupt.assert_not_called()
+            assert result == ["prom-1", "prom-2"]
+
+    def test_select_or_ask_multi_preference_multi_uids(self, tmp_path):
+        """プリファレンスに複数UID → 候補に全て存在すれば自動選択."""
+        agent, _ = _make_orchestrator()
+        store = DatasourcePreferenceStore(tmp_path / "prefs.json")
+        store.save_uids("prometheus", ["prom-1", "prom-3"])
+        agent.ds_preference_store = store
+
+        candidates = [
+            DatasourceInfo(uid="prom-1", name="P1", type="prometheus"),
+            DatasourceInfo(uid="prom-2", name="P2", type="prometheus"),
+            DatasourceInfo(uid="prom-3", name="P3", type="prometheus"),
+        ]
+
+        with patch("ai_agent_monitoring.agents.orchestrator.interrupt") as mock_interrupt:
+            result = agent._select_or_ask_multi("prometheus", candidates)
+            mock_interrupt.assert_not_called()
+            assert result == ["prom-1", "prom-3"]
+
+    def test_select_or_ask_multi_comma_separated_input(self):
+        """interrupt でカンマ区切り入力 → 複数UIDが返る."""
+        agent, _ = _make_orchestrator()
+        candidates = [
+            DatasourceInfo(uid="prom-1", name="DS 1", type="prometheus"),
+            DatasourceInfo(uid="prom-2", name="DS 2", type="prometheus"),
+            DatasourceInfo(uid="prom-3", name="DS 3", type="prometheus"),
+        ]
+
+        with patch("ai_agent_monitoring.agents.orchestrator.interrupt", return_value="1,3"):
+            result = agent._select_or_ask_multi("prometheus", candidates)
+            assert result == ["prom-1", "prom-3"]
+
+    def test_resolve_user_choice_multi_comma(self):
+        """カンマ区切りで複数UID解決."""
+        agent, _ = _make_orchestrator()
+        candidates = [
+            DatasourceInfo(uid="prom-1", name="DS 1", type="prometheus"),
+            DatasourceInfo(uid="prom-2", name="DS 2", type="prometheus"),
+        ]
+        result = agent._resolve_user_choice_multi("prom-1, prom-2", candidates)
+        assert result == ["prom-1", "prom-2"]
+
+    def test_resolve_user_choice_multi_list(self):
+        """listで複数UID解決."""
+        agent, _ = _make_orchestrator()
+        candidates = [
+            DatasourceInfo(uid="prom-1", name="DS 1", type="prometheus"),
+            DatasourceInfo(uid="prom-2", name="DS 2", type="prometheus"),
+        ]
+        result = agent._resolve_user_choice_multi(["1", "prom-2"], candidates)
+        assert result == ["prom-1", "prom-2"]
