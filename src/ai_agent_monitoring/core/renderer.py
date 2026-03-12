@@ -141,6 +141,25 @@ def render_rca_markdown(report: RCAReport) -> str:
                 for ev in rc.evidence:
                     lines.append(f"- {ev}")
                 lines.append("")
+            if rc.confidence_details:
+                d = rc.confidence_details
+                lines.append("<details>")
+                lines.append("<summary>信頼度スコア内訳</summary>")
+                lines.append("")
+                lines.append("| 指標 | スコア |")
+                lines.append("|------|--------|")
+                lines.append(f"| LLM判定 | {d.llm_confidence:.2f} |")
+                lines.append(f"| エビデンス充実度 | {d.evidence_score:.2f} |")
+                lines.append(f"| 異常検出数 | {d.anomaly_score:.2f} |")
+                lines.append(f"| データカバレッジ | {d.coverage_score:.2f} |")
+                lines.append(f"| K8s深刻度 | {d.severity_score:.2f} |")
+                lines.append(f"| 定量スコア(加重平均) | {d.quantitative_confidence:.2f} |")
+                lines.append(f"| **統合スコア** | **{d.final_confidence:.2f}** |")
+                lines.append("")
+                lines.append(f"_{d.explanation}_")
+                lines.append("")
+                lines.append("</details>")
+                lines.append("")
     else:
         lines.append("根本原因を特定できませんでした。")
         lines.append("")

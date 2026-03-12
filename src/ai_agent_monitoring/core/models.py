@@ -104,6 +104,19 @@ class KubernetesResult(BaseModel):
     tool_outputs: list[str] = Field(default_factory=list)
 
 
+class ConfidenceDetails(BaseModel):
+    """信頼度スコアの定量的内訳."""
+
+    llm_confidence: float = Field(ge=0.0, le=1.0)
+    evidence_score: float = Field(ge=0.0, le=1.0)
+    anomaly_score: float = Field(ge=0.0, le=1.0)
+    coverage_score: float = Field(ge=0.0, le=1.0)
+    severity_score: float = Field(ge=0.0, le=1.0)
+    quantitative_confidence: float = Field(ge=0.0, le=1.0)
+    final_confidence: float = Field(ge=0.0, le=1.0)
+    explanation: str = ""
+
+
 class RootCause(BaseModel):
     """特定された根本原因."""
 
@@ -112,6 +125,7 @@ class RootCause(BaseModel):
     description: str
     confidence: float = Field(ge=0.0, le=1.0)
     evidence: list[str] = Field(default_factory=list)
+    confidence_details: ConfidenceDetails | None = None
 
 
 class PanelSnapshot(BaseModel):

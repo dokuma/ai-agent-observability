@@ -1625,7 +1625,10 @@ class TestRCAAgentParseReport:
         report = self.agent._parse_report(content, state)
 
         assert len(report.root_causes) == 1
-        assert report.root_causes[0].confidence == 0.9
+        rc = report.root_causes[0]
+        assert rc.confidence_details is not None
+        assert rc.confidence_details.llm_confidence == 0.9
+        assert 0.0 <= rc.confidence <= 1.0
         assert report.metrics_summary == "CPU high"
         assert report.recommendations == ["increase memory"]
 
@@ -1639,8 +1642,11 @@ class TestRCAAgentParseReport:
         report = self.agent._parse_report(content, state)
 
         assert len(report.root_causes) == 1
-        assert report.root_causes[0].confidence == 0.5
-        assert report.root_causes[0].description == content
+        rc = report.root_causes[0]
+        assert rc.confidence_details is not None
+        assert rc.confidence_details.llm_confidence == 0.5
+        assert 0.0 <= rc.confidence <= 1.0
+        assert rc.description == content
 
 
 class TestRCAAgentExtractJson:
@@ -1772,7 +1778,9 @@ class TestRCAAgentGenerateReport:
         assert "rca_report" in result
         report = result["rca_report"]
         assert isinstance(report, RCAReport)
-        assert report.root_causes[0].confidence == 0.85
+        assert report.root_causes[0].confidence_details is not None
+        assert report.root_causes[0].confidence_details.llm_confidence == 0.85
+        assert 0.0 <= report.root_causes[0].confidence <= 1.0
 
 
 class TestRCAAgentCollectEvidence:

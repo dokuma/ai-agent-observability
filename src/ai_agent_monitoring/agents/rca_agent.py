@@ -9,6 +9,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
 
 from ai_agent_monitoring.agents.prompts import RCA_AGENT_SYSTEM_PROMPT
+from ai_agent_monitoring.core.confidence import compute_confidence
 from ai_agent_monitoring.core.json_repair import extract_json, repair_truncated_json
 from ai_agent_monitoring.core.models import (
     LogExcerpt,
@@ -355,6 +356,11 @@ class RCAAgent:
         for kr in state.get("k8s_results", []):
             if kr.tool_outputs:
                 agent_tool_outputs.setdefault("k8s", []).extend(kr.tool_outputs)
+
+        for rc in root_causes:
+            details = compute_confidence(rc, state)
+            rc.confidence = details.final_confidence
+            rc.confidence_details = details
 
         return RCAReport(
             trigger_type=state["trigger_type"],
