@@ -415,15 +415,11 @@ class TestPreprocessPrometheusResult:
             "data": [
                 {
                     "metric": {"namespace": "default", "reason": "ErrImagePull"},
-                    "values": [
-                        [1700000000 + i * 60, str(i * 0.5)] for i in range(30)
-                    ],
+                    "values": [[1700000000 + i * 60, str(i * 0.5)] for i in range(30)],
                 },
                 {
                     "metric": {"namespace": "kube-system", "reason": "Completed"},
-                    "values": [
-                        [1700000000 + i * 60, str(10 - i * 0.1)] for i in range(30)
-                    ],
+                    "values": [[1700000000 + i * 60, str(10 - i * 0.1)] for i in range(30)],
                 },
             ]
         }
