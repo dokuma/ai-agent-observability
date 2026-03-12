@@ -971,31 +971,44 @@ class OrchestratorAgent:
         self,
         grafana: GrafanaMCPTool,
         env: EnvironmentContext,
+        keywords: list[str] | None = None,
     ) -> None:
-        """ダッシュボード一覧を取得してEnvironmentContextに格納.
+        """調査キーワードで絞り込んだダッシュボード一覧を取得.
 
-        キーワードマッチングによる関連度スコアは後続の処理で計算する。
+        全件取得するとレスポンスが大きく切り詰めで失敗するため、
+        キーワードごとに search_dashboards で関連ダッシュボードだけを取得する。
+        キーワード未指定時は空クエリで全件取得を試みる。
         """
-        try:
-            dashboards_result = await grafana.list_dashboards()
-            dashboards = self._extract_content_text(dashboards_result)
-            dashboard_list = self._parse_dashboards(dashboards)
+        search_queries = keywords if keywords else [""]
+        seen_uids: set[str] = {d.uid for d in env.available_dashboards}
 
-            for db in dashboard_list:
-                uid = db.get("uid", "")
-                if not uid:
-                    continue
-                env.available_dashboards.append(
-                    DashboardInfo(
-                        uid=uid,
-                        title=db.get("title", ""),
-                        tags=db.get("tags", []),
+        for query in search_queries:
+            try:
+                dashboards_result = await grafana.list_dashboards(query=query)
+                dashboards = self._extract_content_text(dashboards_result)
+                dashboard_list = self._parse_dashboards(dashboards)
+
+                for db in dashboard_list:
+                    uid = db.get("uid", "")
+                    if not uid or uid in seen_uids:
+                        continue
+                    seen_uids.add(uid)
+                    env.available_dashboards.append(
+                        DashboardInfo(
+                            uid=uid,
+                            title=db.get("title", ""),
+                            tags=db.get("tags", []),
+                        )
                     )
+            except Exception as e:
+                logger.warning(
+                    "Failed to search dashboards (query=%s): %s: %s",
+                    query,
+                    type(e).__name__,
+                    e,
                 )
 
-            logger.info("Found %d dashboards", len(env.available_dashboards))
-        except Exception as e:
-            logger.warning("Failed to list dashboards: %s: %s", type(e).__name__, e)
+        logger.info("Found %d dashboards", len(env.available_dashboards))
 
     def _score_dashboard_relevance(
         self,
@@ -1144,9 +1157,10 @@ class OrchestratorAgent:
             keywords: 調査キーワード（省略時はenv.investigation_keywordsを使用）
             max_dashboards: 探索する最大ダッシュボード数
         """
-        # ダッシュボード一覧がなければ取得
+        # ダッシュボード一覧がなければキーワードで絞り込み取得
         if not env.available_dashboards:
-            await self._discover_dashboards(grafana, env)
+            search_keywords = keywords or env.investigation_keywords
+            await self._discover_dashboards(grafana, env, keywords=search_keywords)
 
         if not env.available_dashboards:
             logger.debug("No dashboards available")
@@ -1242,7 +1256,13 @@ class OrchestratorAgent:
         return []
 
     def _parse_dashboards(self, text: str) -> list[dict[str, Any]]:
-        """ダッシュボードテキストをパース."""
+        """ダッシュボードテキストをパース.
+
+        MCP応答は以下のケースに対応する:
+        - 純粋なJSON配列
+        - JSON前後に説明文が含まれる
+        - _truncate_tool_result で途中切断されたJSON配列
+        """
         # まず全体をJSONとして試行
         try:
             parsed = json.loads(text)
@@ -1260,6 +1280,24 @@ class OrchestratorAgent:
                     logger.info("Extracted dashboards JSON array from text (offset %d)", match.start())
                     return parsed
             except json.JSONDecodeError:
+                pass
+
+        # 切り詰めで途中切断された JSON 配列を修復して再試行
+        # "[" から始まる部分を見つけて repair_truncated_json で閉じる
+        arr_start = text.find("[")
+        if arr_start >= 0:
+            truncated = text[arr_start:]
+            try:
+                repaired = repair_truncated_json(truncated)
+                parsed = json.loads(repaired)
+                if isinstance(parsed, list):
+                    logger.info(
+                        "Repaired truncated dashboards JSON (%d items from %d chars)",
+                        len(parsed),
+                        len(text),
+                    )
+                    return parsed
+            except (json.JSONDecodeError, ValueError):
                 pass
 
         logger.warning("Failed to parse dashboards text (%d chars): %.200s", len(text), text)
