@@ -12,6 +12,7 @@ from ai_agent_monitoring.tools.metrics_preprocessor import (
     _detect_anomalies,
     _parse_prometheus_response,
     preprocess_prometheus_result,
+    summarize_prometheus_result,
 )
 
 
@@ -437,3 +438,96 @@ class TestPreprocessPrometheusResult:
         assert series0["n_points"] == 30
         assert "mean" in series0["stats"]
         assert "slope" in series0["trend"]
+
+
+class TestSummarizePrometheusResult:
+    """summarize_prometheus_result のテスト."""
+
+    def test_valid_prometheus_summary(self):
+        """正常な prometheus_summary JSON から要約テキストを生成."""
+        data = {
+            "type": "prometheus_summary",
+            "time_range": {
+                "start": "2023-11-14T17:46:40+00:00",
+                "end": "2023-11-14T18:46:40+00:00",
+            },
+            "series_count": 1,
+            "series": [
+                {
+                    "labels": '{"instance":"node1"}',
+                    "n_points": 60,
+                    "stats": {
+                        "mean": 0.85,
+                        "stdev": 0.01,
+                        "min": 0.8,
+                        "max": 0.9,
+                        "p50": 0.85,
+                        "p95": 0.89,
+                        "p99": 0.9,
+                    },
+                    "trend": {
+                        "slope": 0.001,
+                        "direction": "increasing",
+                        "max_spike": 0.05,
+                        "mean_change": 0.01,
+                    },
+                    "anomalies": {"count": 2, "max_z_score": 3.5, "timestamps": []},
+                    "first_value": 0.8,
+                    "last_value": 0.9,
+                }
+            ],
+        }
+        result = summarize_prometheus_result(json.dumps(data))
+
+        assert result is not None
+        assert "期間:" in result
+        assert "mean=0.85" in result
+        assert "p95=0.89" in result
+        assert "trend=increasing" in result
+        assert "anomalies=2" in result
+        assert "0.8 → 0.9" in result
+
+    def test_no_anomalies(self):
+        """異常なしの場合は anomalies 行がない."""
+        data = {
+            "type": "prometheus_summary",
+            "time_range": {},
+            "series_count": 1,
+            "series": [
+                {
+                    "labels": '{"pod":"nginx"}',
+                    "stats": {"mean": 1.0, "p95": 1.0, "max": 1.0},
+                    "trend": {"direction": "flat"},
+                    "anomalies": {"count": 0, "max_z_score": 0.5},
+                    "first_value": 1.0,
+                    "last_value": 1.0,
+                }
+            ],
+        }
+        result = summarize_prometheus_result(json.dumps(data))
+
+        assert result is not None
+        assert "anomalies" not in result
+        assert "trend=flat" in result
+
+    def test_non_prometheus_summary_returns_none(self):
+        """prometheus_summary 以外の JSON は None を返す."""
+        assert summarize_prometheus_result('{"some": "data"}') is None
+
+    def test_invalid_json_returns_none(self):
+        """不正 JSON は None を返す."""
+        assert summarize_prometheus_result("not json") is None
+
+    def test_truncated_series(self):
+        """truncated フィールドが含まれる場合."""
+        data = {
+            "type": "prometheus_summary",
+            "time_range": {},
+            "series_count": 15,
+            "series": [],
+            "truncated": "... and 5 more series",
+        }
+        result = summarize_prometheus_result(json.dumps(data))
+
+        assert result is not None
+        assert "... and 5 more series" in result

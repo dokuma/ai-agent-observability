@@ -314,3 +314,50 @@ def _format_prometheus_summary(
         summary["truncated"] = f"... and {remaining_count} more series"
 
     return json.dumps(summary, ensure_ascii=False, separators=(",", ":"))
+
+
+def summarize_prometheus_result(text: str) -> str | None:
+    """prometheus_summary JSONから簡潔な統計要約テキストを生成.
+
+    QueryStore や ObservationStore で圧縮後の時系列データを保存する際に使用。
+    prometheus_summary でなければ None を返す。
+    """
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+    if not isinstance(data, dict) or data.get("type") != "prometheus_summary":
+        return None
+
+    lines: list[str] = []
+    time_range = data.get("time_range", {})
+    if time_range:
+        lines.append(f"期間: {time_range.get('start', '')} ~ {time_range.get('end', '')}")
+
+    for series in data.get("series", []):
+        labels = series.get("labels", "{}")
+        stats = series.get("stats", {})
+        trend = series.get("trend", {})
+        anomalies = series.get("anomalies", {})
+
+        parts = [labels]
+        if stats:
+            parts.append(f"mean={stats.get('mean')}, p95={stats.get('p95')}, max={stats.get('max')}")
+        if trend:
+            parts.append(f"trend={trend.get('direction')}")
+        anom_count = anomalies.get("count", 0)
+        if anom_count > 0:
+            parts.append(f"anomalies={anom_count}(max_z={anomalies.get('max_z_score')})")
+        first_v = series.get("first_value")
+        last_v = series.get("last_value")
+        if first_v is not None and last_v is not None:
+            parts.append(f"{first_v} → {last_v}")
+
+        lines.append(" | ".join(parts))
+
+    truncated = data.get("truncated")
+    if truncated:
+        lines.append(str(truncated))
+
+    return "\n".join(lines)

@@ -212,11 +212,18 @@ class ObservationStore:
     @staticmethod
     def _build_metrics_text(mr: MetricsResult) -> str:
         """MetricsResult から embedding 用テキストを構築."""
+        from ai_agent_monitoring.tools.metrics_preprocessor import summarize_prometheus_result
+
         parts = [mr.summary]
         if mr.query:
             parts.append(f"Query: {mr.query}")
         if mr.anomalies:
             parts.append("Anomalies: " + "; ".join(mr.anomalies))
+        # tool_outputs から時系列統計サマリを抽出
+        for output in mr.tool_outputs:
+            prom_summary = summarize_prometheus_result(output)
+            if prom_summary:
+                parts.append(f"統計サマリ:\n{prom_summary}")
         return "\n".join(parts)
 
     @staticmethod

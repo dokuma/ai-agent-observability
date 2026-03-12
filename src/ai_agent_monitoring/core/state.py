@@ -104,6 +104,32 @@ _TOOL_OUTPUT_MAX_CHARS = 2000
 _TOOL_OUTPUT_MAX_MESSAGES = 5
 
 
+def _extract_text_from_content(content: Any) -> str:
+    """ToolMessage.content からテキストコンテンツを抽出.
+
+    LangChain ToolNode は dict や list 形式で content を格納することがある。
+    {"content": [{"type": "text", "text": "..."}]} 形式から text を取り出す。
+    str() による Python repr ではなく、元のテキストを返す。
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, dict):
+        texts = []
+        for item in content.get("content", []):
+            if isinstance(item, dict) and item.get("type") == "text":
+                texts.append(item.get("text", ""))
+        if texts:
+            return "\n".join(texts)
+    if isinstance(content, list):
+        texts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                texts.append(item.get("text", ""))
+        if texts:
+            return "\n".join(texts)
+    return str(content)
+
+
 def extract_tool_outputs(messages: Sequence[BaseMessage]) -> list[str]:
     """ToolMessage からツール実行結果のテキストを抽出する.
 
@@ -112,7 +138,7 @@ def extract_tool_outputs(messages: Sequence[BaseMessage]) -> list[str]:
     tool_msgs = [m for m in messages if isinstance(m, ToolMessage)]
     # 最新N件
     recent = tool_msgs[-_TOOL_OUTPUT_MAX_MESSAGES:]
-    return [str(m.content)[:_TOOL_OUTPUT_MAX_CHARS] for m in recent]
+    return [_extract_text_from_content(m.content)[:_TOOL_OUTPUT_MAX_CHARS] for m in recent]
 
 
 # ツール名 → クエリタイプのマッピング
@@ -132,6 +158,13 @@ _TOOL_QUERY_TYPE: dict[str, str] = {
     "k8s_get_pods_top": "k8s",
     "k8s_get_resource": "k8s",
 }
+
+
+def _summarize_prometheus(text: str) -> str | None:
+    """prometheus_summary テキストの統計要約を生成（遅延インポート）."""
+    from ai_agent_monitoring.tools.metrics_preprocessor import summarize_prometheus_result
+
+    return summarize_prometheus_result(text)
 
 
 def extract_query_records(messages: Sequence[BaseMessage]) -> list[QueryRecord]:
@@ -179,12 +212,14 @@ def extract_query_records(messages: Sequence[BaseMessage]) -> list[QueryRecord]:
             for j in range(i + 1, len(msg_list)):
                 following = msg_list[j]
                 if isinstance(following, ToolMessage) and following.tool_call_id == tool_call_id:
-                    content = str(following.content)[:500]
-                    if getattr(following, "status", None) == "error" or "error" in content.lower()[:100]:
+                    text = _extract_text_from_content(following.content)
+                    if getattr(following, "status", None) == "error" or "error" in text[:100].lower():
                         status = "failed"
-                        error_message = content[:200]
+                        error_message = text[:200]
                     else:
-                        result_summary = content[:200]
+                        # prometheus_summary の場合は統計要約を生成
+                        prom_summary = _summarize_prometheus(text)
+                        result_summary = prom_summary if prom_summary else text[:500]
                     break
 
             records.append(
