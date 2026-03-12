@@ -1553,8 +1553,7 @@ class OrchestratorAgent:
                 plan_prompt_parts.append(
                     "## 前回の調査で判明した事実\n"
                     "以下は前回の調査で得られた結果です。"
-                    "すでに判明している情報を重複して取得しないでください。\n\n"
-                    + feedback.previous_results_summary
+                    "すでに判明している情報を重複して取得しないでください。\n\n" + feedback.previous_results_summary
                 )
 
             if feedback.missing_information:
@@ -2042,7 +2041,9 @@ class OrchestratorAgent:
         # INSUFFICIENTの場合、構造化されたフィードバックを抽出してstateに保存
         if not is_complete:
             feedback = self._parse_evaluation_feedback(
-                response.content, previous_queries, results_text,
+                response.content,
+                previous_queries,
+                results_text,
             )
             result["evaluation_feedback"] = feedback
             logger.info(
