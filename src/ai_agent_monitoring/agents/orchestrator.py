@@ -2032,9 +2032,7 @@ class OrchestratorAgent:
         for r in results:
             age_dt = datetime.fromtimestamp(r.created_at_ts, tz=UTC)
             age_str = age_dt.strftime("%Y-%m-%d %H:%M")
-            lines.append(
-                f"- [{r.observation_type}] {age_str} (score={r.score:.2f}): {r.summary}"
-            )
+            lines.append(f"- [{r.observation_type}] {age_str} (score={r.score:.2f}): {r.summary}")
         return "\n".join(lines)
 
     # ---- ルーティング ----
