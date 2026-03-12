@@ -73,9 +73,7 @@ class TestParsePrometheusResponse:
             "status": "success",
             "data": {
                 "resultType": "matrix",
-                "result": [
-                    {"metric": {}, "values": [[1700000000, "1.0"]]}
-                ],
+                "result": [{"metric": {}, "values": [[1700000000, "1.0"]]}],
             },
         }
         text = f"Here is the result: {json.dumps(data)} end of response"
@@ -88,9 +86,7 @@ class TestParsePrometheusResponse:
         """data直接のフォーマット（外側のstatus/dataラッパーなし）."""
         data = {
             "resultType": "matrix",
-            "result": [
-                {"metric": {"job": "test"}, "values": [[1700000000, "0.5"]]}
-            ],
+            "result": [{"metric": {"job": "test"}, "values": [[1700000000, "0.5"]]}],
         }
         text = json.dumps(data)
         parsed = _parse_prometheus_response(text)
@@ -219,9 +215,7 @@ class TestDetectAnomalies:
 class TestPreprocessPrometheusResult:
     """preprocess_prometheus_result の統合テスト."""
 
-    def _make_matrix_result(
-        self, values: list[tuple[float, str]], metric: dict | None = None
-    ) -> dict:
+    def _make_matrix_result(self, values: list[tuple[float, str]], metric: dict | None = None) -> dict:
         """テスト用のmatrix形式ツール結果を生成."""
         data = {
             "status": "success",
@@ -258,9 +252,7 @@ class TestPreprocessPrometheusResult:
 
     def test_non_timeseries_passthrough(self):
         """非時系列データはスルー."""
-        tool_result = {
-            "content": [{"type": "text", "text": '{"some": "data"}'}]
-        }
+        tool_result = {"content": [{"type": "text", "text": '{"some": "data"}'}]}
         result = preprocess_prometheus_result(tool_result)
         assert result == tool_result
 
@@ -276,9 +268,7 @@ class TestPreprocessPrometheusResult:
             "status": "success",
             "data": {
                 "resultType": "vector",
-                "result": [
-                    {"metric": {"instance": "node1"}, "value": [1700000000, "0.85"]}
-                ],
+                "result": [{"metric": {"instance": "node1"}, "value": [1700000000, "0.85"]}],
             },
         }
         tool_result = {"content": [{"type": "text", "text": json.dumps(data)}]}
@@ -304,10 +294,7 @@ class TestPreprocessPrometheusResult:
                 "result": [
                     {
                         "metric": {"instance": f"node{i}"},
-                        "values": [
-                            [1700000000 + j * 60, str(0.5 + j * 0.01)]
-                            for j in range(10)
-                        ],
+                        "values": [[1700000000 + j * 60, str(0.5 + j * 0.01)] for j in range(10)],
                     }
                     for i in range(3)
                 ],
