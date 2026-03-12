@@ -6,6 +6,7 @@ LLM判定と定量シグナルの加重平均でハイブリッドスコアを�
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from ai_agent_monitoring.core.models import ConfidenceDetails
@@ -124,7 +125,7 @@ def compute_severity_score(k8s_results: list[KubernetesResult]) -> float:
     return max_severity
 
 
-def compute_confidence(root_cause: RootCause, state: dict[str, Any]) -> ConfidenceDetails:
+def compute_confidence(root_cause: RootCause, state: Mapping[str, Any]) -> ConfidenceDetails:
     """定量スコアとLLM信頼度を統合してConfidenceDetailsを算出."""
     metrics_results = state.get("metrics_results", [])
     logs_results = state.get("logs_results", [])
