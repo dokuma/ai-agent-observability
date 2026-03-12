@@ -52,9 +52,7 @@ def test_render_without_confidence_details() -> None:
     """confidence_details がない場合、内訳は表示されないこと."""
     report = RCAReport(
         trigger_type=TriggerType.USER_QUERY,
-        root_causes=[
-            RootCause(description="テスト原因", confidence=0.5, evidence=[])
-        ],
+        root_causes=[RootCause(description="テスト原因", confidence=0.5, evidence=[])],
         created_at=datetime(2026, 1, 1, 12, 0, 0),
     )
     md = render_rca_markdown(report)
