@@ -21,6 +21,7 @@ from ai_agent_monitoring.core.datasource import DatasourcePreferenceStore
 from ai_agent_monitoring.core.hybrid_search import HybridSearcher
 from ai_agent_monitoring.core.llm_retry import RateLimitRetryWrapper
 from ai_agent_monitoring.core.models import RCAReport
+from ai_agent_monitoring.core.observation_store import ObservationStore
 from ai_agent_monitoring.core.report_store import ReportStore
 from ai_agent_monitoring.core.vector_store import VectorStore
 from ai_agent_monitoring.tools.registry import ToolRegistry
@@ -201,6 +202,7 @@ class AppState:
         self.report_store: ReportStore | None = None
         self.report_search_agent: ReportSearchAgent | None = None
         self.vector_store: VectorStore | None = None
+        self.observation_store: ObservationStore | None = None
         self.hybrid_searcher: HybridSearcher | None = None
 
     async def initialize(self) -> None:
@@ -278,6 +280,7 @@ class AppState:
             settings=self.settings,
             stage_update_callback=self.update_investigation_stage,
             ds_preference_store=self.ds_preference_store,
+            observation_store=self.observation_store,
         )
         logger.info("Orchestrator Agent initialized")
 
@@ -398,6 +401,27 @@ class AppState:
             )
             await self._migrate_reports_to_qdrant()
 
+        # Observations 用 VectorStore（同じ embedding、別コレクション）
+        obs_vector_store = VectorStore(
+            qdrant_url=self.settings.qdrant_url,
+            collection_name=self.settings.qdrant_checkpoints_collection,
+            embeddings=embeddings,
+            vector_size=vector_size,
+        )
+        try:
+            await obs_vector_store.ensure_collection()
+            self.observation_store = ObservationStore(vector_store=obs_vector_store)
+            logger.info(
+                "ObservationStore initialized (collection: %s)",
+                self.settings.qdrant_checkpoints_collection,
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to initialize observations collection (error_type=%s): %s",
+                type(e).__name__,
+                e,
+            )
+
     async def _migrate_reports_to_qdrant(self) -> None:
         """SQLite のレポートを Qdrant に差分マイグレーション."""
         if not self.vector_store or not self.report_store:
@@ -419,10 +443,8 @@ class AppState:
                     "report_id": report.id,
                     "investigation_id": report.investigation_id,
                     "trigger_type": report.report.trigger_type.value,
-                    "created_at": report.created_at.isoformat(),
+                    "created_at_ts": report.created_at.timestamp(),
                 }
-                if report.report.alert:
-                    metadata["alert_name"] = report.report.alert.alert_name
                 batch.append((report.id, text, metadata))
                 if len(batch) >= batch_size:
                     await self.vector_store.upsert_batch(batch)
@@ -447,10 +469,8 @@ class AppState:
                 "report_id": report_id,
                 "investigation_id": inv_id,
                 "trigger_type": rca_report.trigger_type.value,
-                "created_at": datetime.now().isoformat(),
+                "created_at_ts": datetime.now().timestamp(),
             }
-            if rca_report.alert:
-                metadata["alert_name"] = rca_report.alert.alert_name
             await self.vector_store.upsert(report_id, text, metadata)
             logger.info("Report %s upserted to Qdrant", report_id)
         except APIStatusError as e:

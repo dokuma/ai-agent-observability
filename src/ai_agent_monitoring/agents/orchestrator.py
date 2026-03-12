@@ -28,6 +28,7 @@ from ai_agent_monitoring.core.datasource import (
 )
 from ai_agent_monitoring.core.json_repair import extract_json, repair_truncated_json
 from ai_agent_monitoring.core.models import TriggerType
+from ai_agent_monitoring.core.observation_store import ObservationStore
 from ai_agent_monitoring.core.sanitizer import sanitize_user_input
 from ai_agent_monitoring.core.state import (
     AgentState,
@@ -161,12 +162,14 @@ class OrchestratorAgent:
         settings: Settings | None = None,
         stage_update_callback: StageUpdateCallback | None = None,
         ds_preference_store: DatasourcePreferenceStore | None = None,
+        observation_store: ObservationStore | None = None,
     ) -> None:
         self.llm = llm
         self.settings = settings or Settings()
         self.registry = registry
         self._stage_callback = stage_update_callback
         self.ds_preference_store = ds_preference_store
+        self.observation_store = observation_store
 
         # 時刻ツールは常に利用可能
         self.time_tools = create_time_tools()
@@ -1516,6 +1519,15 @@ class OrchestratorAgent:
                 "ラベル名やメトリクス名を参考にしてください:\n" + panel_templates
             )
 
+        # 過去の類似観測データ
+        past_observations = await self._search_past_observations(query_text)
+        if past_observations:
+            plan_prompt_parts.append(
+                "## 過去の類似観測データ\n"
+                "以下は過去の調査で取得された類似の観測データです。\n"
+                "再発パターンや過去の傾向を考慮してください:\n" + past_observations
+            )
+
         # 最終指示
         # LLM が生成するのは promql_queries, logql_queries, k8s_resource_kinds のみ
         if feedback is not None:
@@ -1954,6 +1966,9 @@ class OrchestratorAgent:
                 feedback.additional_investigation_points,
             )
 
+        # 観測データを Qdrant に保存（失敗しても調査は継続）
+        await self._save_observations(state)
+
         return result
 
     def _parse_evaluation_feedback(
@@ -1979,6 +1994,48 @@ class OrchestratorAgent:
             feedback.reasoning = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
 
         return feedback
+
+    # ---- Observation Store ----
+
+    async def _save_observations(self, state: AgentState) -> None:
+        """各エージェントの調査結果を ObservationStore に保存."""
+        if not self.observation_store:
+            return
+        inv_id = state.get("investigation_id", "")
+        try:
+            await self.observation_store.save_observations(
+                investigation_id=inv_id,
+                metrics_results=state.get("metrics_results"),
+                logs_results=state.get("logs_results"),
+                k8s_results=state.get("k8s_results"),
+            )
+        except Exception:
+            logger.warning("Failed to save observations for %s", inv_id, exc_info=True)
+
+    async def _search_past_observations(self, query_text: str) -> str:
+        """過去の類似観測を検索しプロンプト用テキストを生成."""
+        if not self.observation_store:
+            return ""
+        try:
+            results = await self.observation_store.search_similar(
+                query=query_text,
+                top_k=5,
+            )
+        except Exception:
+            logger.warning("Failed to search past observations", exc_info=True)
+            return ""
+
+        if not results:
+            return ""
+
+        lines: list[str] = []
+        for r in results:
+            age_dt = datetime.fromtimestamp(r.created_at_ts, tz=UTC)
+            age_str = age_dt.strftime("%Y-%m-%d %H:%M")
+            lines.append(
+                f"- [{r.observation_type}] {age_str} (score={r.score:.2f}): {r.summary}"
+            )
+        return "\n".join(lines)
 
     # ---- ルーティング ----
 

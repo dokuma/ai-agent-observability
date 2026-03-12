@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from openai import APIConnectionError, APIStatusError
+from qdrant_client.models import FieldCondition, Filter, MatchValue
 
 from ai_agent_monitoring.core.vector_store import VectorSearchResult, VectorStore
 
@@ -129,6 +130,25 @@ class TestVectorStoreSearch:
         assert results[0].doc_id == "r1"
         assert results[0].score == 0.95
         assert results[0].payload == {"report_id": "r1"}
+
+    @pytest.mark.asyncio
+    async def test_search_with_query_filter(self, store, mock_qdrant_client, mock_embeddings):
+        mock_qdrant_client.query_points.return_value.points = []
+        qf = Filter(must=[FieldCondition(key="observation_type", match=MatchValue(value="metrics"))])
+
+        await store.search("test", top_k=5, query_filter=qf)
+
+        call_kwargs = mock_qdrant_client.query_points.call_args[1]
+        assert call_kwargs["query_filter"] is qf
+
+    @pytest.mark.asyncio
+    async def test_search_without_filter_passes_none(self, store, mock_qdrant_client, mock_embeddings):
+        mock_qdrant_client.query_points.return_value.points = []
+
+        await store.search("test")
+
+        call_kwargs = mock_qdrant_client.query_points.call_args[1]
+        assert call_kwargs["query_filter"] is None
 
 
 class TestVectorStoreHealth:

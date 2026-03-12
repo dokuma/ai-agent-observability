@@ -9,7 +9,7 @@ from typing import Any
 import httpx
 from openai import APIConnectionError, APIStatusError
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, PointStruct, VectorParams
+from qdrant_client.models import Distance, Filter, PointStruct, VectorParams
 
 logger = logging.getLogger(__name__)
 
@@ -159,8 +159,19 @@ class VectorStore:
 
         await asyncio.to_thread(_upsert)
 
-    async def search(self, query: str, top_k: int = 5) -> list[VectorSearchResult]:
-        """クエリテキストでベクトル検索."""
+    async def search(
+        self,
+        query: str,
+        top_k: int = 5,
+        query_filter: Filter | None = None,
+    ) -> list[VectorSearchResult]:
+        """クエリテキストでベクトル検索.
+
+        Args:
+            query: 検索クエリテキスト
+            top_k: 返却する最大件数
+            query_filter: Qdrant Filter（ペイロードフィルタ条件）
+        """
         try:
             vector = await self._embeddings.aembed_query(query)
         except APIStatusError as e:
@@ -179,6 +190,7 @@ class VectorStore:
                 collection_name=self._collection_name,
                 query=vector,
                 limit=top_k,
+                query_filter=query_filter,
             ).points
             return [
                 VectorSearchResult(
