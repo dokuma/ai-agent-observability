@@ -154,11 +154,21 @@ class RCAAgent:
                     "上記の分析を踏まえ、最終的なRCAレポートを以下のJSON形式で出力してください:\n"
                     "{\n"
                     '  "root_causes": [{"description": "...", "confidence": 0.9, "evidence": ["..."]}],\n'
-                    '  "metrics_summary": "メトリクス分析の要約",\n'
-                    '  "logs_summary": "ログ分析の要約",\n'
-                    '  "k8s_summary": "Kubernetes分析の要約",\n'
+                    '  "metrics_summary": "メトリクス分析の要約（Markdown形式）",\n'
+                    '  "logs_summary": "ログ分析の要約（Markdown形式）",\n'
+                    '  "k8s_summary": "Kubernetes分析の要約（Markdown形式）",\n'
                     '  "recommendations": ["推奨アクション1", ...]\n'
-                    "}"
+                    "}\n\n"
+                    "## summaryフィールドのフォーマット規則\n"
+                    "各summaryフィールドはMarkdown形式で記述してください:\n"
+                    "- PromQL/LogQLクエリは ```promql や ```logql のコードブロックで囲む\n"
+                    "- メトリクス値は `値` のインラインコードで囲む\n"
+                    "- 箇条書き（- ）で項目を分ける\n"
+                    "- 改行（\\n）で段落を分ける\n\n"
+                    "例:\n"
+                    '"metrics_summary": "CPU使用率が高い状態を確認:\\n\\n'
+                    '```promql\\nrate(node_cpu_seconds_total{mode=\\\\"idle\\\\"}[5m])\\n```\\n\\n'
+                    '- 最大値: `95%`\\n- 平均値: `82%`\\n- 閾値超過ノード: `node-1`, `node-2`"'
                 )
             ),
         ]
