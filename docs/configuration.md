@@ -11,6 +11,10 @@
 |--------|-----------|------|
 | `LLM_ENDPOINT` | `http://localhost:8000` | LLM API エンドポイント (OpenAI 互換) |
 | `LLM_MODEL` | `llama-3.1-8b` | 使用モデル名 |
+| `LLM_API_KEY` | `not-needed` | LLM API キー |
+| `LLM_CUSTOM_HEADER_*` | (なし) | カスタムヘッダー (`LLM_CUSTOM_HEADER_X_API_KEY=xxx` → `X-API-KEY: xxx`) |
+| `LLM_VERIFY_SSL` | `true` | LLM API の SSL 検証 |
+| `LLM_MAX_RETRIES` | `5` | LLM API の最大リトライ回数 |
 
 ### 監視スタック
 
@@ -29,14 +33,50 @@
 | `MCP_LOKI_URL` | `http://localhost:8081` | Loki MCP |
 | `MCP_PROMETHEUS_URL` | `http://localhost:8082` | Prometheus MCP |
 | `MCP_KUBERNETES_URL` | `http://localhost:8083` | Kubernetes MCP |
-| `MCP_KUBERNETES_TRANSPORT` | (空) | Kubernetes MCP トランスポート (`streamable_http` / `sse`) |
+| `MCP_TRANSPORT` | `sse` | グローバルデフォルトトランスポート (`sse` / `streamable_http`) |
+| `MCP_GRAFANA_TRANSPORT` | (空 = `MCP_TRANSPORT`) | Grafana MCP トランスポート |
+| `MCP_LOKI_TRANSPORT` | (空 = `MCP_TRANSPORT`) | Loki MCP トランスポート |
+| `MCP_PROMETHEUS_TRANSPORT` | (空 = `MCP_TRANSPORT`) | Prometheus MCP トランスポート |
+| `MCP_KUBERNETES_TRANSPORT` | (空 = `MCP_TRANSPORT`) | Kubernetes MCP トランスポート |
 
 ### Agent 動作制御
 
 | 変数名 | デフォルト | 説明 |
 |--------|-----------|------|
 | `MAX_ITERATIONS` | `5` | 調査ループの最大反復回数 |
-| `INVESTIGATION_TIMEOUT_SECONDS` | `120` | 調査タイムアウト (秒) |
+| `INVESTIGATION_TIMEOUT_SECONDS` | `300` | 調査タイムアウト (秒) |
+| `REPORT_SEARCH_TIMEOUT_SECONDS` | `60` | レポート検索タイムアウト (秒) |
+| `MAX_REACT_STEPS` | `5` | 各サブエージェントの ReAct ループ最大ステップ数 |
+| `MAX_TOOL_RESULT_CHARS` | `8000` | MCP ツール結果の最大文字数 |
+| `SEARCH_RELEVANCE_THRESHOLD` | `0.3` | Search-First のレポート検索スコア閾値 |
+
+### LLM レートリミット
+
+| 変数名 | デフォルト | 説明 |
+|--------|-----------|------|
+| `LLM_RATE_LIMIT_MAX_ATTEMPTS` | `3` | レートリミット時の最大リトライ回数 |
+| `LLM_RATE_LIMIT_WAIT_MIN` | `5` | リトライ最小待機時間 (秒) |
+| `LLM_RATE_LIMIT_WAIT_MAX` | `120` | リトライ最大待機時間 (秒) |
+
+### MCP TLS
+
+| 変数名 | デフォルト | 説明 |
+|--------|-----------|------|
+| `MCP_USE_TLS` | `false` | MCP 接続で TLS を使用するか |
+| `MCP_VERIFY_SSL` | `true` | MCP 接続の SSL 検証 |
+| `MCP_CA_BUNDLE` | (空) | カスタム CA 証明書パス (空の場合はシステムデフォルト) |
+
+### データソースプリファレンス
+
+| 変数名 | デフォルト | 説明 |
+|--------|-----------|------|
+| `DATASOURCE_PREFERENCES_PATH` | `data/datasource_preferences.json` | データソース選択のプリファレンス保存先 |
+
+### レポートストア
+
+| 変数名 | デフォルト | 説明 |
+|--------|-----------|------|
+| `REPORT_STORE_PATH` | `data/rca_reports.db` | RCA レポートの SQLite 保存先 |
 
 ### Embedding / ベクトル検索
 
@@ -61,6 +101,12 @@
 |--------|-----------|------|
 | `SLACK_WEBHOOK_URL` | (空) | Slack 通知用 Webhook URL |
 
+### CORS
+
+| 変数名 | デフォルト | 説明 |
+|--------|-----------|------|
+| `CORS_ALLOWED_ORIGINS` | `["http://localhost:3000"]` | CORS 許可オリジン (JSON リスト) |
+
 ### Langfuse トレーシング
 
 | 変数名 | デフォルト | 説明 |
@@ -81,16 +127,25 @@ LLM_ENDPOINT=http://ollama:11434/v1
 LLM_MODEL=qwen2.5:0.5b
 
 # MCP
+MCP_TRANSPORT=sse
 MCP_PROMETHEUS_URL=http://prometheus-mcp:9090
 MCP_LOKI_URL=http://loki-mcp:8080
 MCP_GRAFANA_URL=http://grafana-mcp:8080
 MCP_KUBERNETES_URL=http://kubernetes-mcp:8080
-MCP_KUBERNETES_TRANSPORT=streamable_http
+MCP_KUBERNETES_TRANSPORT=sse
 
 # Monitoring
 PROMETHEUS_URL=http://prometheus:9090
 LOKI_URL=http://loki:3100
 GRAFANA_URL=http://grafana:3000
+
+# Qdrant (ナレッジストア)
+QDRANT_ENABLED=true
+QDRANT_URL=http://qdrant:6333
+
+# Embedding
+EMBEDDING_ENDPOINT=http://ollama:11434/v1
+EMBEDDING_MODEL=text-embedding-3-small
 
 # Langfuse
 LANGFUSE_ENABLED=true
