@@ -1549,6 +1549,14 @@ class OrchestratorAgent:
         # 前回の評価フィードバックがある場合
         feedback = state.get("evaluation_feedback")
         if feedback is not None:
+            if feedback.previous_results_summary:
+                plan_prompt_parts.append(
+                    "## 前回の調査で判明した事実\n"
+                    "以下は前回の調査で得られた結果です。"
+                    "すでに判明している情報を重複して取得しないでください。\n\n"
+                    + feedback.previous_results_summary
+                )
+
             if feedback.missing_information:
                 plan_prompt_parts.append(
                     "## 前回の調査で不足していた情報\n"
@@ -2033,7 +2041,9 @@ class OrchestratorAgent:
 
         # INSUFFICIENTの場合、構造化されたフィードバックを抽出してstateに保存
         if not is_complete:
-            feedback = self._parse_evaluation_feedback(response.content, previous_queries)
+            feedback = self._parse_evaluation_feedback(
+                response.content, previous_queries, results_text,
+            )
             result["evaluation_feedback"] = feedback
             logger.info(
                 "Evaluation: INSUFFICIENT - missing=%s, additional_points=%s",
@@ -2053,10 +2063,12 @@ class OrchestratorAgent:
         self,
         content: str,
         previous_queries: list[str],
+        results_summary: str,
     ) -> EvaluationFeedback:
         """LLMの評価結果からEvaluationFeedbackをパース."""
         feedback = EvaluationFeedback(
             previous_queries_attempted=previous_queries,
+            previous_results_summary=results_summary,
         )
 
         try:

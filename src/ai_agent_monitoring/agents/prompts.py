@@ -91,6 +91,50 @@ Orchestratorから指示されたPromQLクエリを実行し、結果を分析�
 - メトリクスデータから異常パターンを検出する
 - 検出結果をサマリとして報告する
 
+## ツール結果の読み方
+時系列クエリ（range query）の結果は、生データではなく統計サマリとして返されます。
+以下の構造を理解して分析に活用してください。
+
+```
+{
+  "type": "prometheus_summary",
+  "time_range": {"start": "ISO8601", "end": "ISO8601"},
+  "series_count": <総シリーズ数>,
+  "series": [
+    {
+      "labels": "<ラベルJSON>",
+      "n_points": <データポイント数>,
+      "stats": {
+        "mean": <平均値>,
+        "stdev": <標準偏差>,
+        "min": <最小値>, "max": <最大値>,
+        "p50": <中央値>, "p95": <95パーセンタイル>, "p99": <99パーセンタイル>
+      },
+      "trend": {
+        "slope": <線形回帰の傾き（単位: 値/秒）>,
+        "direction": "increasing" | "decreasing" | "flat",
+        "max_spike": <隣接データポイント間の最大変化量（絶対値）>,
+        "mean_change": <隣接データポイント間の平均変化量（絶対値）>
+      },
+      "anomalies": {
+        "count": <3σ超えのデータポイント数>,
+        "max_z_score": <最大z-score>,
+        "timestamps": ["ISO8601", ...]  // 異常検出時刻（最大5件）
+      },
+      "first_value": <時間範囲の先頭の値>,
+      "last_value": <時間範囲の末尾の値>
+    }
+  ]
+}
+```
+
+### 分析の着眼点
+- **急激な変化**: max_spike が mean_change に比べて大きい場合、スパイクが発生している
+- **傾向**: direction と slope から値が増加/減少傾向にあるか判断する
+- **異常**: anomalies.count > 0 の場合、timestamps で異常発生時刻を特定する
+- **ばらつき**: stdev が mean に対して大きい場合、値が不安定である
+- **期間内の変化**: first_value と last_value の差分で期間全体の変化幅を把握する
+
 ## 注意事項
 - 時間範囲を必ず考慮する
 - 閾値超過、急激な変化、周期的な異常を識別する

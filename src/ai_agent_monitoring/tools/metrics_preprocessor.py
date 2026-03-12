@@ -45,7 +45,6 @@ def preprocess_prometheus_result(tool_result: dict[str, Any]) -> dict[str, Any]:
             new_content.append(item)
             continue
 
-        query_expr = parsed.get("query", "")
         results = parsed.get("results", [])
         time_range = parsed.get("time_range", {})
 
@@ -66,7 +65,7 @@ def preprocess_prometheus_result(tool_result: dict[str, Any]) -> dict[str, Any]:
             series_summaries.append(summary)
 
         remaining = len(results) - _MAX_SERIES
-        summary_text = _format_prometheus_summary(query_expr, series_summaries, time_range, remaining)
+        summary_text = _format_prometheus_summary(series_summaries, time_range, remaining)
         new_content.append({"type": "text", "text": summary_text})
 
     return {"content": new_content}
@@ -112,20 +111,16 @@ def _parse_prometheus_response(text: str) -> dict[str, Any] | None:
     inner = data.get("data", data)
     if isinstance(inner, dict) and inner.get("resultType") == "matrix":
         result_list = inner.get("result", [])
-        query = data.get("query", "") or data.get("expr", "")
         time_range = _extract_time_range(result_list)
         return {
-            "query": query,
             "results": result_list,
             "time_range": time_range,
         }
 
     # 形式3 (Grafana MCP): {"data": [{"metric": {...}, "values": [[ts, val], ...]}, ...]}
     if isinstance(inner, list) and inner and _is_series_list(inner):
-        query = data.get("query", "") or data.get("expr", "")
         time_range = _extract_time_range(inner)
         return {
-            "query": query,
             "results": inner,
             "time_range": time_range,
         }
@@ -165,8 +160,8 @@ def _extract_time_range(result_list: list[dict[str, Any]]) -> dict[str, str]:
     start_ts = min(all_timestamps)
     end_ts = max(all_timestamps)
     return {
-        "start": datetime.fromtimestamp(start_ts, tz=UTC).strftime("%H:%M:%S"),
-        "end": datetime.fromtimestamp(end_ts, tz=UTC).strftime("%H:%M:%S"),
+        "start": datetime.fromtimestamp(start_ts, tz=UTC).isoformat(),
+        "end": datetime.fromtimestamp(end_ts, tz=UTC).isoformat(),
     }
 
 
@@ -282,7 +277,7 @@ def _format_series_summary(
     for idx in anomalies.get("indices", [])[:5]:  # 最大5件
         if idx < len(timestamps):
             ts = datetime.fromtimestamp(timestamps[idx], tz=UTC)
-            anomaly_timestamps.append(ts.strftime("%H:%M:%S"))
+            anomaly_timestamps.append(ts.isoformat())
 
     # ラベル文字列を簡潔に
     label_str = json.dumps(labels, ensure_ascii=False, separators=(",", ":")) if labels else "{}"
@@ -303,7 +298,6 @@ def _format_series_summary(
 
 
 def _format_prometheus_summary(
-    query_expr: str,
     series_summaries: list[dict[str, Any]],
     time_range: dict[str, str],
     remaining_count: int = 0,
@@ -311,7 +305,6 @@ def _format_prometheus_summary(
     """全シリーズの統合サマリをJSON文字列化."""
     summary: dict[str, Any] = {
         "type": "prometheus_summary",
-        "query": query_expr,
         "time_range": time_range,
         "series_count": len(series_summaries) + max(0, remaining_count),
         "series": series_summaries,

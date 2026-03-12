@@ -346,6 +346,7 @@ class EvaluationFeedback(BaseModel):
     missing_information: list[str] = Field(default_factory=list)
     additional_investigation_points: list[str] = Field(default_factory=list)
     previous_queries_attempted: list[str] = Field(default_factory=list)
+    previous_results_summary: str = ""
     reasoning: str = ""
 
 
