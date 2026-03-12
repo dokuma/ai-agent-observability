@@ -1,10 +1,11 @@
 """LangGraph AgentState 定義."""
 
+import logging
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Annotated, Any
 
-from langchain_core.messages import BaseMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langgraph.graph import MessagesState
 from pydantic import BaseModel, Field
 
@@ -14,10 +15,13 @@ from ai_agent_monitoring.core.models import (
     KubernetesResult,
     LogsResult,
     MetricsResult,
+    QueryRecord,
     RCAReport,
     TriggerType,
     UserQuery,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _merge_list(left: list[Any], right: list[Any]) -> list[Any]:
@@ -109,6 +113,93 @@ def extract_tool_outputs(messages: Sequence[BaseMessage]) -> list[str]:
     # 最新N件
     recent = tool_msgs[-_TOOL_OUTPUT_MAX_MESSAGES:]
     return [str(m.content)[:_TOOL_OUTPUT_MAX_CHARS] for m in recent]
+
+
+# ツール名 → クエリタイプのマッピング
+_TOOL_QUERY_TYPE: dict[str, str] = {
+    "grafana_query_prometheus": "promql",
+    "grafana_list_prometheus_metric_names": "promql",
+    "grafana_list_datasources": "promql",
+    "query_prometheus_range": "promql",
+    "query_prometheus_instant": "promql",
+    "grafana_query_loki": "logql",
+    "grafana_list_loki_label_names": "logql",
+    "query_loki": "logql",
+    "k8s_list_pods": "k8s",
+    "k8s_list_pods_in_namespace": "k8s",
+    "k8s_list_events": "k8s",
+    "k8s_list_namespaces": "k8s",
+    "k8s_get_pods_top": "k8s",
+    "k8s_get_resource": "k8s",
+}
+
+
+def extract_query_records(messages: Sequence[BaseMessage]) -> list[QueryRecord]:
+    """ToolMessage からクエリ記録を抽出する.
+
+    AIMessage の tool_calls からツール名・引数を取得し、
+    直後の ToolMessage の内容からステータスを判定する。
+    """
+    records: list[QueryRecord] = []
+    msg_list = list(messages)
+
+    for i, msg in enumerate(msg_list):
+        if not isinstance(msg, AIMessage) or not getattr(msg, "tool_calls", None):
+            continue
+        for tc in msg.tool_calls:
+            tool_name = tc.get("name", "")
+            if not tool_name:
+                continue
+
+            query_type = _TOOL_QUERY_TYPE.get(tool_name)
+            if query_type is None:
+                continue
+
+            args = tc.get("args", {})
+            tool_call_id = tc.get("id", "")
+
+            # クエリテキストを引数から抽出
+            query_text = ""
+            for key in ("query", "expr", "promql", "logql"):
+                if key in args:
+                    query_text = str(args[key])
+                    break
+            if not query_text:
+                # K8s系: kind/namespace/name を結合
+                parts = []
+                for key in ("kind", "namespace", "name", "api_version"):
+                    if key in args:
+                        parts.append(f"{key}={args[key]}")
+                query_text = tool_name + ("(" + ", ".join(parts) + ")" if parts else "")
+
+            # 対応するToolMessageを探してステータス判定
+            status = "executed"
+            error_message = ""
+            result_summary = ""
+            for j in range(i + 1, len(msg_list)):
+                following = msg_list[j]
+                if isinstance(following, ToolMessage) and following.tool_call_id == tool_call_id:
+                    content = str(following.content)[:500]
+                    if getattr(following, "status", None) == "error" or "error" in content.lower()[:100]:
+                        status = "failed"
+                        error_message = content[:200]
+                    else:
+                        result_summary = content[:200]
+                    break
+
+            records.append(
+                QueryRecord(
+                    query_type=query_type,
+                    tool_name=tool_name,
+                    query_text=query_text,
+                    parameters={k: v for k, v in args.items() if k not in ("query", "expr", "promql", "logql")},
+                    status=status,
+                    error_message=error_message,
+                    result_summary=result_summary,
+                )
+            )
+
+    return records
 
 
 class TimeRange(BaseModel):

@@ -37,8 +37,18 @@ class HybridSearcher:
         戻り値は ReportStore.search() と同じ型を維持。
         """
         bm25_results = self._report_store.search(query, top_k=top_k)
+        logger.info(
+            "Hybrid search: BM25 returned %d results (top_score=%.3f)",
+            len(bm25_results),
+            bm25_results[0][1] if bm25_results else 0,
+        )
 
         vector_results = await self._vector_search(query, top_k)
+        logger.info(
+            "Hybrid search: Vector returned %d results (top_score=%.3f)",
+            len(vector_results),
+            vector_results[0].score if vector_results else 0,
+        )
 
         if not vector_results:
             return bm25_results
@@ -64,6 +74,11 @@ class HybridSearcher:
             rrf_scores[doc_id] = score
 
         sorted_ids = sorted(rrf_scores, key=lambda x: rrf_scores[x], reverse=True)[:top_k]
+        logger.info(
+            "Hybrid search: RRF merged %d unique docs, returning top %d",
+            len(all_ids),
+            len(sorted_ids),
+        )
 
         results: list[tuple[StoredRCAReport, float, list[str]]] = []
         for doc_id in sorted_ids:

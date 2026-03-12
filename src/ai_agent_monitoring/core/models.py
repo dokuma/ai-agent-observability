@@ -151,6 +151,19 @@ class RCAReport(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now)
 
 
+class QueryRecord(BaseModel):
+    """実行されたクエリの記録."""
+
+    query_type: str  # "promql" | "logql" | "k8s"
+    tool_name: str  # "query_prometheus_range", "k8s_list_pods" 等
+    query_text: str  # PromQL式, LogQL式, or K8sリクエスト説明
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    status: str = "executed"  # "executed" | "failed"
+    error_message: str = ""
+    result_summary: str = ""  # 結果の要約（行数、データ有無等）
+    executed_at: datetime = Field(default_factory=datetime.now)
+
+
 class StoredRCAReport(BaseModel):
     """永続化されたRCAレポート."""
 

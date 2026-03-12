@@ -37,6 +37,21 @@ _RETRY_PATTERN = re.compile(r"再調査|やり直|別の角度|深掘|もっと�
 _REINVESTIGATE_PATTERN = re.compile(r"再調査|やり直|別の角度")
 _CONTINUE_PATTERN = re.compile(r"深掘|もっと詳しく|追加で調査|続けて")
 
+# 回顧的クエリ検出用正規表現
+_RETROSPECTIVE_PATTERN = re.compile(
+    r"前回|過去の|以前の|先ほど|さっき|履歴|"
+    r"(実行|使用|使った).*(クエリ|コマンド)|"
+    r"(クエリ|コマンド|結果).*(一覧|リスト|出力|表示|教えて)|"
+    r"何を(実行|調査|確認)し|"
+    r"どんな(クエリ|コマンド|調査)を"
+)
+
+
+def _is_retrospective_query(query: str) -> bool:
+    """過去の調査結果・実行クエリの参照を目的としたクエリかどうか判定."""
+    return bool(_RETROSPECTIVE_PATTERN.search(query))
+
+
 # ヘルスチェック再実行の並行呼び出し保護
 _health_refresh_lock = asyncio.Lock()
 
@@ -213,18 +228,41 @@ async def submit_query(
             if has_relevant_results and search_results:
                 # ---- Step 3: バックグラウンドでレポート検索 → 不十分なら調査へ自動移行 ----
                 logger.info(
-                    "Search-first: relevant results found (top_score=%.3f, threshold=%.3f), routing to report_search",
+                    "Search-first: relevant results found "
+                    "(top_score=%.3f, threshold=%.3f, hybrid=%s), routing to report_search",
                     search_results[0][1] if search_results else 0,
                     threshold,
+                    is_hybrid,
                 )
                 inv_id = app_state.create_investigation("report_search")
                 app_state.update_investigation_stage(inv_id, "レポート検索中")
+                is_retrospective = _is_retrospective_query(request.query)
+                # 回顧的クエリの場合、QueryStore からクエリ履歴を検索して追加コンテキストとして渡す
+                query_history = ""
+                if is_retrospective and app_state.query_store:
+                    try:
+                        qh_results = app_state.query_store.search(request.query, top_k=20)
+                        if qh_results:
+                            qh_lines: list[str] = []
+                            for qr in qh_results:
+                                status_mark = "\u2713" if qr["status"] == "executed" else "\u2717"
+                                line = f"- [{qr['query_type']}] {status_mark} {qr['query_text']}"
+                                if qr["status"] == "failed" and qr["error_message"]:
+                                    line += f" \u2192 error: {qr['error_message']}"
+                                line += f" (inv: {qr['investigation_id']}, {qr['executed_at']})"
+                                qh_lines.append(line)
+                            query_history = "\n".join(qh_lines)
+                    except Exception:
+                        logger.warning("QueryStore search failed for retrospective query", exc_info=True)
+
                 background_tasks.add_task(
                     _run_report_search,
                     inv_id,
                     request.query,
                     report_search_timeout,
                     observation_context,
+                    is_retrospective,
+                    query_history,
                 )
                 return UserQueryResponse(
                     investigation_id=inv_id,
@@ -479,15 +517,18 @@ async def _search_observation_store(query: str) -> str:
         観測データのテキスト。結果なしまたはストア未初期化時は空文字列。
     """
     if not app_state.observation_store:
+        logger.info("ObservationStore search skipped: store not initialized")
         return ""
     try:
         from datetime import UTC, datetime
 
+        logger.info("ObservationStore search starting for query: %s", query[:100])
         results = await app_state.observation_store.search_similar(
             query=query,
             top_k=5,
         )
         if not results:
+            logger.info("ObservationStore search returned 0 results")
             return ""
         lines: list[str] = []
         for r in results:
@@ -501,11 +542,20 @@ async def _search_observation_store(query: str) -> str:
         return ""
 
 
-async def _run_report_search(inv_id: str, query: str, timeout: int, observation_context: str = "") -> None:
+async def _run_report_search(
+    inv_id: str,
+    query: str,
+    timeout: int,
+    observation_context: str = "",
+    is_retrospective: bool = False,
+    query_history: str = "",
+) -> None:
     """レポート検索をバックグラウンドで実行し、結果を InvestigationRecord に保存.
 
     回答に [NEEDS_INVESTIGATION] マーカーが含まれる場合は、
     過去レポートの部分回答を保持しつつ新規調査を自動開始する。
+    ただし is_retrospective=True の場合は [NEEDS_INVESTIGATION] を除去し、
+    フォローアップ調査を開始しない。
     """
     if not app_state.knowledge_search_agent:
         app_state.fail_investigation(inv_id, "Report search agent not initialized")
@@ -516,6 +566,7 @@ async def _run_report_search(inv_id: str, query: str, timeout: int, observation_
             app_state.knowledge_search_agent.search_and_answer(
                 query=query,
                 observation_context=observation_context,
+                query_history=query_history,
             ),
             timeout=timeout,
         )
@@ -524,7 +575,14 @@ async def _run_report_search(inv_id: str, query: str, timeout: int, observation_
             answer = "該当するRCAレポートが見つかりませんでした。新しく調査を開始してください。"
 
         # [NEEDS_INVESTIGATION] マーカー検出 → 調査へ自動移行
-        if _NEEDS_INVESTIGATION_MARKER in answer:
+        # ただし回顧的クエリの場合は抑制
+        if _NEEDS_INVESTIGATION_MARKER in answer and is_retrospective:
+            logger.info(
+                "Retrospective query detected for %s, suppressing [NEEDS_INVESTIGATION] followup",
+                inv_id,
+            )
+            answer = answer.replace(_NEEDS_INVESTIGATION_MARKER, "").rstrip()
+        elif _NEEDS_INVESTIGATION_MARKER in answer:
             stripped_answer = answer.replace(_NEEDS_INVESTIGATION_MARKER, "").rstrip()
             logger.info(
                 "Report search flagged [NEEDS_INVESTIGATION] for %s, starting followup investigation",

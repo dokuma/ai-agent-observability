@@ -22,6 +22,7 @@ from ai_agent_monitoring.core.hybrid_search import HybridSearcher
 from ai_agent_monitoring.core.llm_retry import RateLimitRetryWrapper
 from ai_agent_monitoring.core.models import RCAReport
 from ai_agent_monitoring.core.observation_store import ObservationStore
+from ai_agent_monitoring.core.query_store import QueryStore
 from ai_agent_monitoring.core.report_store import ReportStore
 from ai_agent_monitoring.core.vector_store import VectorStore
 from ai_agent_monitoring.tools.registry import ToolRegistry
@@ -204,6 +205,7 @@ class AppState:
         self.vector_store: VectorStore | None = None
         self.observation_store: ObservationStore | None = None
         self.hybrid_searcher: HybridSearcher | None = None
+        self.query_store: QueryStore | None = None
 
     async def initialize(self) -> None:
         """アプリケーション起動時の初期化."""
@@ -262,6 +264,12 @@ class AppState:
         self.report_store.initialize()
         logger.info("ReportStore initialized (%d reports)", self.report_store.count())
 
+        # クエリ履歴ストア
+        query_store_path = str(Path(self.settings.report_store_path).parent / "query_history.db")
+        self.query_store = QueryStore(db_path=query_store_path)
+        self.query_store.initialize()
+        logger.info("QueryStore initialized (%d records)", self.query_store.count())
+
         # Qdrant ベクトルストア（qdrant_enabled の場合のみ）
         if self.settings.qdrant_enabled:
             await self._init_vector_store()
@@ -281,6 +289,7 @@ class AppState:
             stage_update_callback=self.update_investigation_stage,
             ds_preference_store=self.ds_preference_store,
             observation_store=self.observation_store,
+            query_store=self.query_store,
         )
         logger.info("Orchestrator Agent initialized")
 

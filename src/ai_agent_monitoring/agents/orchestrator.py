@@ -29,6 +29,7 @@ from ai_agent_monitoring.core.datasource import (
 from ai_agent_monitoring.core.json_repair import extract_json, repair_truncated_json
 from ai_agent_monitoring.core.models import TriggerType
 from ai_agent_monitoring.core.observation_store import ObservationStore
+from ai_agent_monitoring.core.query_store import QueryStore
 from ai_agent_monitoring.core.sanitizer import sanitize_user_input
 from ai_agent_monitoring.core.state import (
     AgentState,
@@ -163,6 +164,7 @@ class OrchestratorAgent:
         stage_update_callback: StageUpdateCallback | None = None,
         ds_preference_store: DatasourcePreferenceStore | None = None,
         observation_store: ObservationStore | None = None,
+        query_store: QueryStore | None = None,
     ) -> None:
         self.llm = llm
         self.settings = settings or Settings()
@@ -170,6 +172,7 @@ class OrchestratorAgent:
         self._stage_callback = stage_update_callback
         self.ds_preference_store = ds_preference_store
         self.observation_store = observation_store
+        self.query_store = query_store
 
         # 時刻ツールは常に利用可能
         self.time_tools = create_time_tools()
@@ -1591,6 +1594,15 @@ class OrchestratorAgent:
                 "再発パターンや過去の傾向を考慮してください:\n" + past_observations
             )
 
+        # 過去の類似クエリ実行履歴
+        past_queries = self._search_past_queries(query_text)
+        if past_queries:
+            plan_prompt_parts.append(
+                "## 過去の類似クエリ実行履歴\n"
+                "以下は過去の調査で実行されたクエリです。\n"
+                "成功したクエリは参考に、失敗したクエリは回避してください:\n" + past_queries
+            )
+
         # 最終指示
         # LLM が生成するのは promql_queries, logql_queries, k8s_resource_kinds のみ
         if feedback is not None:
@@ -2032,6 +2044,9 @@ class OrchestratorAgent:
         # 観測データを Qdrant に保存（失敗しても調査は継続）
         await self._save_observations(state)
 
+        # クエリ実行履歴を QueryStore に保存（失敗しても調査は継続）
+        self._save_query_records(state)
+
         return result
 
     def _parse_evaluation_feedback(
@@ -2075,6 +2090,23 @@ class OrchestratorAgent:
         except Exception:
             logger.warning("Failed to save observations for %s", inv_id, exc_info=True)
 
+    def _save_query_records(self, state: AgentState) -> None:
+        """ToolMessage からクエリ実行履歴を抽出し QueryStore に保存."""
+        if not self.query_store:
+            return
+        inv_id = state.get("investigation_id", "")
+        if not inv_id:
+            return
+        try:
+            from ai_agent_monitoring.core.state import extract_query_records
+
+            records = extract_query_records(state.get("messages", []))
+            if records:
+                count = self.query_store.save_queries(inv_id, records)
+                logger.info("Saved %d query records for investigation %s", count, inv_id)
+        except Exception:
+            logger.warning("Failed to save query records for %s", inv_id, exc_info=True)
+
     async def _search_past_observations(self, query_text: str) -> str:
         """過去の類似観測を検索しプロンプト用テキストを生成."""
         if not self.observation_store:
@@ -2096,6 +2128,31 @@ class OrchestratorAgent:
             age_dt = datetime.fromtimestamp(r.created_at_ts, tz=UTC)
             age_str = age_dt.strftime("%Y-%m-%d %H:%M")
             lines.append(f"- [{r.observation_type}] {age_str} (score={r.score:.2f}): {r.summary}")
+        return "\n".join(lines)
+
+    def _search_past_queries(self, query_text: str) -> str:
+        """過去の類似クエリ実行履歴を検索しプロンプト用テキストを生成."""
+        if not self.query_store:
+            return ""
+        try:
+            results = self.query_store.search(query_text, top_k=10)
+        except Exception:
+            logger.warning("Failed to search past queries", exc_info=True)
+            return ""
+
+        if not results:
+            return ""
+
+        lines: list[str] = []
+        for r in results:
+            status_mark = "\u2713" if r["status"] == "executed" else "\u2717"
+            line = f"- [{r['query_type']}] {status_mark} {r['query_text']}"
+            if r["status"] == "failed" and r["error_message"]:
+                line += f" \u2192 error: {r['error_message']}"
+            inv_id = r.get("investigation_id", "")
+            if inv_id:
+                line += f" (inv: {inv_id})"
+            lines.append(line)
         return "\n".join(lines)
 
     # ---- ルーティング ----

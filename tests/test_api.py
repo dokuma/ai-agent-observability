@@ -1013,3 +1013,56 @@ class TestDetectRetryPattern:
         assert _detect_retry_pattern("CPU使用率を教えて") is None
         assert _detect_retry_pattern("前回の結果は？") is None
         assert _detect_retry_pattern("クラスタの状態") is None
+
+
+class TestRetrospectiveQuery:
+    """回顧的クエリの検出テスト."""
+
+    def test_retrospective_patterns_detected(self):
+        from ai_agent_monitoring.api.routes import _is_retrospective_query
+
+        assert _is_retrospective_query("前回の調査で実行したprometheusクエリの一覧を出力してください")
+        assert _is_retrospective_query("過去の調査結果を教えてください")
+        assert _is_retrospective_query("以前の調査で使ったクエリは何ですか")
+        assert _is_retrospective_query("さっき実行したコマンドの一覧")
+        assert _is_retrospective_query("履歴を表示して")
+        assert _is_retrospective_query("何を調査しましたか")
+        assert _is_retrospective_query("どんなクエリを実行しましたか")
+
+    def test_non_retrospective_not_detected(self):
+        from ai_agent_monitoring.api.routes import _is_retrospective_query
+
+        assert not _is_retrospective_query("CPU使用率が高い原因を調べて")
+        assert not _is_retrospective_query("クラスタの状態を確認して")
+        assert not _is_retrospective_query("エラーログを分析してください")
+
+    def test_retrospective_query_suppresses_followup(self, client):
+        """回顧的クエリの場合、[NEEDS_INVESTIGATION] による自動フォローアップが抑制される."""
+        mock_store = MagicMock()
+        mock_store.count.return_value = 3
+        mock_report = MagicMock()
+        mock_store.search.return_value = [(mock_report, 0.5, ["highlight"])]
+
+        mock_search_agent = AsyncMock()
+        mock_search_agent.search_and_answer.return_value = ReportSearchResponse(
+            answer="過去の調査データです。[NEEDS_INVESTIGATION]",
+            results=[],
+            total_reports=3,
+        )
+
+        app_state.report_store = mock_store
+        app_state.knowledge_search_agent = mock_search_agent
+        app_state.hybrid_searcher = None
+        app_state.query_store = None
+
+        response = client.post(
+            "/api/v1/query",
+            json={"query": "前回の調査で実行したクエリの一覧を出力してください"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["routed_to"] == "report_search"
+        assert data["status"] == "running"
+
+        app_state.report_store = None
+        app_state.knowledge_search_agent = None

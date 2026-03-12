@@ -61,7 +61,7 @@ class KnowledgeSearchAgent:
 
     @_observe(name="knowledge_search_and_answer", as_type="span")
     async def search_and_answer(
-        self, query: str, top_k: int = 5, observation_context: str = ""
+        self, query: str, top_k: int = 5, observation_context: str = "", query_history: str = ""
     ) -> ReportSearchResponse:
         """クエリに基づいてRCAレポートと過去の観測データを検索し、LLMで回答を生成する."""
         total = self._report_store.count()
@@ -97,12 +97,12 @@ class KnowledgeSearchAgent:
             rca = report.report
             root_causes_summary = "; ".join(rc.description for rc in rca.root_causes[:3]) if rca.root_causes else "不明"
 
-            # agent_tool_outputs のコンテキスト（各ソース先頭500文字）
+            # agent_tool_outputs のコンテキスト（各ソース先頭1500文字）
             tool_output_context = ""
             if rca.agent_tool_outputs:
                 tool_parts: list[str] = []
                 for source, outputs in rca.agent_tool_outputs.items():
-                    combined = " ".join(outputs)[:500]
+                    combined = " ".join(outputs)[:1500]
                     if combined:
                         tool_parts.append(f"  {source}: {combined}")
                 if tool_parts:
@@ -150,6 +150,8 @@ class KnowledgeSearchAgent:
                 "以下は過去の調査で取得された類似の観測データです。"
                 "回答の補足情報として活用してください:\n" + observation_context
             )
+        if query_history:
+            human_content += "\n\n## クエリ実行履歴\n以下は過去の調査で実行されたクエリの一覧です:\n" + query_history
         messages = [
             SystemMessage(content=KNOWLEDGE_SEARCH_SYSTEM_PROMPT),
             HumanMessage(content=human_content),
