@@ -26,7 +26,7 @@ def preprocess_prometheus_result(tool_result: dict[str, Any]) -> dict[str, Any]:
     tool_resultは_extract_result()の出力形式:
     {"content": [{"type": "text", "text": "..."}]}
 
-    textの中身がPrometheus matrix結果（resultType=="matrix"）の場合のみ
+    textの中身がPrometheus時系列結果（matrix形式またはGrafana MCP形式）の場合
     統計サマリに変換。それ以外はそのまま返す。
     """
     content = tool_result.get("content", [])
@@ -86,7 +86,11 @@ def _safe_float(v: Any) -> float:
 def _parse_prometheus_response(text: str) -> dict[str, Any] | None:
     """MCP応答テキストからPrometheus matrix結果をパース.
 
-    resultType=="matrix"の場合のみ処理。それ以外はNone。
+    以下の形式を認識する:
+    - 形式1: {"status":"success","data":{"resultType":"matrix","result":[...]}}
+    - 形式2: {"resultType":"matrix","result":[...]}
+    - 形式3: {"data":[{"metric":{...},"values":[[ts,val],...]},...]}  (Grafana MCP)
+
     JSON前後に説明文が含まれる場合の正規表現フォールバック付き。
     """
     # まずそのまま JSON パース
@@ -101,21 +105,38 @@ def _parse_prometheus_response(text: str) -> dict[str, Any] | None:
     if data is None:
         return None
 
-    # Prometheus API レスポンス形式の検出
-    # 形式1: {"status": "success", "data": {"resultType": "matrix", "result": [...]}}
-    if isinstance(data, dict):
-        inner = data.get("data", data)
-        if isinstance(inner, dict) and inner.get("resultType") == "matrix":
-            result_list = inner.get("result", [])
-            query = data.get("query", "") or data.get("expr", "")
-            time_range = _extract_time_range(result_list)
-            return {
-                "query": query,
-                "results": result_list,
-                "time_range": time_range,
-            }
+    if not isinstance(data, dict):
+        return None
+
+    # 形式1/2: {"data": {"resultType": "matrix", "result": [...]}}
+    inner = data.get("data", data)
+    if isinstance(inner, dict) and inner.get("resultType") == "matrix":
+        result_list = inner.get("result", [])
+        query = data.get("query", "") or data.get("expr", "")
+        time_range = _extract_time_range(result_list)
+        return {
+            "query": query,
+            "results": result_list,
+            "time_range": time_range,
+        }
+
+    # 形式3 (Grafana MCP): {"data": [{"metric": {...}, "values": [[ts, val], ...]}, ...]}
+    if isinstance(inner, list) and inner and _is_series_list(inner):
+        query = data.get("query", "") or data.get("expr", "")
+        time_range = _extract_time_range(inner)
+        return {
+            "query": query,
+            "results": inner,
+            "time_range": time_range,
+        }
 
     return None
+
+
+def _is_series_list(items: list[Any]) -> bool:
+    """リストが Prometheus series の配列かどうかを判定."""
+    first = items[0]
+    return isinstance(first, dict) and ("values" in first or "value" in first)
 
 
 def _try_parse_json(text: str) -> dict[str, Any] | None:

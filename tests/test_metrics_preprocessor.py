@@ -94,6 +94,73 @@ class TestParsePrometheusResponse:
         assert parsed is not None
         assert len(parsed["results"]) == 1
 
+    def test_parse_grafana_mcp_format(self):
+        """Grafana MCP形式: {"data": [{"metric": {...}, "values": [...]}]}."""
+        data = {
+            "data": [
+                {
+                    "metric": {"namespace": "default", "reason": "ErrImagePull"},
+                    "values": [[1700000000, "1"], [1700000060, "2"], [1700000120, "3"]],
+                },
+                {
+                    "metric": {"namespace": "kube-system", "reason": "Completed"},
+                    "values": [[1700000000, "0"], [1700000060, "0"]],
+                },
+            ]
+        }
+        text = json.dumps(data)
+        parsed = _parse_prometheus_response(text)
+
+        assert parsed is not None
+        assert len(parsed["results"]) == 2
+        assert parsed["results"][0]["metric"]["namespace"] == "default"
+        assert parsed["time_range"] != {}
+
+    def test_parse_grafana_mcp_single_series(self):
+        """Grafana MCP形式: 1シリーズのみ."""
+        data = {
+            "data": [
+                {
+                    "metric": {"pod": "nginx-1"},
+                    "values": [[1700000000, "0.85"], [1700000060, "0.87"]],
+                },
+            ]
+        }
+        text = json.dumps(data)
+        parsed = _parse_prometheus_response(text)
+
+        assert parsed is not None
+        assert len(parsed["results"]) == 1
+
+    def test_parse_grafana_mcp_instant_value(self):
+        """Grafana MCP形式: instant query（valueフィールド）."""
+        data = {
+            "data": [
+                {"metric": {"instance": "node1"}, "value": [1700000000, "0.85"]},
+            ]
+        }
+        text = json.dumps(data)
+        parsed = _parse_prometheus_response(text)
+
+        assert parsed is not None
+        assert len(parsed["results"]) == 1
+
+    def test_parse_grafana_mcp_empty_data_array(self):
+        """Grafana MCP形式: 空のdata配列はNone."""
+        data = {"data": []}
+        text = json.dumps(data)
+        parsed = _parse_prometheus_response(text)
+
+        assert parsed is None
+
+    def test_parse_data_array_non_series(self):
+        """data配列がseries形式でない場合はNone."""
+        data = {"data": [{"name": "foo", "type": "bar"}]}
+        text = json.dumps(data)
+        parsed = _parse_prometheus_response(text)
+
+        assert parsed is None
+
 
 class TestComputeStatistics:
     """_compute_statistics のテスト."""
@@ -341,3 +408,36 @@ class TestPreprocessPrometheusResult:
         result = preprocess_prometheus_result(tool_result)
         assert result["content"][0] == {"type": "image", "data": "base64data"}
         assert result["content"][1] == {"type": "text", "text": "plain text"}
+
+    def test_grafana_mcp_format_to_summary(self):
+        """Grafana MCP形式の時系列データ→サマリ変換."""
+        data = {
+            "data": [
+                {
+                    "metric": {"namespace": "default", "reason": "ErrImagePull"},
+                    "values": [
+                        [1700000000 + i * 60, str(i * 0.5)] for i in range(30)
+                    ],
+                },
+                {
+                    "metric": {"namespace": "kube-system", "reason": "Completed"},
+                    "values": [
+                        [1700000000 + i * 60, str(10 - i * 0.1)] for i in range(30)
+                    ],
+                },
+            ]
+        }
+        tool_result = {"content": [{"type": "text", "text": json.dumps(data)}]}
+
+        result = preprocess_prometheus_result(tool_result)
+
+        assert len(result["content"]) == 1
+        summary = json.loads(result["content"][0]["text"])
+        assert summary["type"] == "prometheus_summary"
+        assert summary["series_count"] == 2
+        assert len(summary["series"]) == 2
+
+        series0 = summary["series"][0]
+        assert series0["n_points"] == 30
+        assert "mean" in series0["stats"]
+        assert "slope" in series0["trend"]
