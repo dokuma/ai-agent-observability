@@ -27,7 +27,7 @@ from ai_agent_monitoring.core.datasource import (
     select_datasources,
 )
 from ai_agent_monitoring.core.json_repair import extract_json, repair_truncated_json
-from ai_agent_monitoring.core.models import TriggerType
+from ai_agent_monitoring.core.models import QueryRecord, TriggerType
 from ai_agent_monitoring.core.observation_store import ObservationStore
 from ai_agent_monitoring.core.query_store import QueryStore
 from ai_agent_monitoring.core.sanitizer import sanitize_user_input
@@ -42,6 +42,7 @@ from ai_agent_monitoring.core.state import (
     PanelQuery,
     PrometheusEnvInfo,
     TimeRange,
+    extract_query_records,
 )
 from ai_agent_monitoring.tools.grafana import GrafanaMCPTool
 from ai_agent_monitoring.tools.query_rag import get_query_rag
@@ -1549,11 +1550,20 @@ class OrchestratorAgent:
         # 前回の評価フィードバックがある場合
         feedback = state.get("evaluation_feedback")
         if feedback is not None:
-            if feedback.previous_results_summary:
+            if feedback.executed_queries:
+                lines = []
+                for qr in feedback.executed_queries:
+                    status_mark = "x" if qr.status == "failed" else "o"
+                    line = f"- [{status_mark}] `{qr.query_text}` ({qr.tool_name})"
+                    if qr.error_message:
+                        line += f"\n  エラー: {qr.error_message}"
+                    elif qr.result_summary:
+                        line += f"\n  結果: {qr.result_summary}"
+                    lines.append(line)
                 plan_prompt_parts.append(
-                    "## 前回の調査で判明した事実\n"
-                    "以下は前回の調査で得られた結果です。"
-                    "すでに判明している情報を重複して取得しないでください。\n\n" + feedback.previous_results_summary
+                    "## これまでに実行したクエリと結果\n"
+                    "以下は前回までの調査で実行済みのクエリです。\n"
+                    "同じクエリを繰り返さず、不足している情報を補うクエリを計画してください。\n\n" + "\n".join(lines)
                 )
 
             if feedback.missing_information:
@@ -1566,12 +1576,6 @@ class OrchestratorAgent:
                 plan_prompt_parts.append(
                     "## 追加で調査すべき観点\n"
                     + "\n".join(f"- {point}" for point in feedback.additional_investigation_points)
-                )
-
-            if feedback.previous_queries_attempted:
-                plan_prompt_parts.append(
-                    "## 前回試行済みのクエリ（同じクエリは避けてください）\n"
-                    + "\n".join(f"- `{q}`" for q in feedback.previous_queries_attempted)
                 )
 
             if feedback.reasoning:
@@ -2003,13 +2007,6 @@ class OrchestratorAgent:
 
         results_text = "\n".join(results_summary) if results_summary else "結果なし"
 
-        # これまでに試行したクエリを収集
-        plan = state.get("plan")
-        previous_queries: list[str] = []
-        if plan:
-            previous_queries.extend(plan.promql_queries)
-            previous_queries.extend(plan.logql_queries)
-
         messages = [
             *state["messages"],
             HumanMessage(
@@ -2040,10 +2037,10 @@ class OrchestratorAgent:
 
         # INSUFFICIENTの場合、構造化されたフィードバックを抽出してstateに保存
         if not is_complete:
+            query_records = extract_query_records(state.get("messages", []))
             feedback = self._parse_evaluation_feedback(
                 response.content,
-                previous_queries,
-                results_text,
+                query_records,
             )
             result["evaluation_feedback"] = feedback
             logger.info(
@@ -2063,13 +2060,11 @@ class OrchestratorAgent:
     def _parse_evaluation_feedback(
         self,
         content: str,
-        previous_queries: list[str],
-        results_summary: str,
+        query_records: list[QueryRecord],
     ) -> EvaluationFeedback:
         """LLMの評価結果からEvaluationFeedbackをパース."""
         feedback = EvaluationFeedback(
-            previous_queries_attempted=previous_queries,
-            previous_results_summary=results_summary,
+            executed_queries=query_records,
         )
 
         try:
@@ -2111,8 +2106,6 @@ class OrchestratorAgent:
         if not inv_id:
             return
         try:
-            from ai_agent_monitoring.core.state import extract_query_records
-
             records = extract_query_records(state.get("messages", []))
             if records:
                 count = self.query_store.save_queries(inv_id, records)
