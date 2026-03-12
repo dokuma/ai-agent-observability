@@ -1361,6 +1361,9 @@ class OrchestratorAgent:
         # RAGから関連ドキュメントを取得
         rag_context = self._get_rag_context(query_text)
 
+        # 過去の類似観測データを検索
+        past_observations = await self._search_past_observations(query_text)
+
         system_prompt = ORCHESTRATOR_SYSTEM_PROMPT.format(
             max_iterations=state.get("max_iterations", 3),
             current_time=current_time,
@@ -1370,6 +1373,14 @@ class OrchestratorAgent:
         # RAGコンテキストがある場合はシステムプロンプトに追加
         if rag_context:
             system_prompt += f"\n\n## クエリリファレンス（関連ドキュメント）\n{rag_context}"
+
+        # 過去の類似観測データがある場合はシステムプロンプトに追加
+        if past_observations:
+            system_prompt += (
+                "\n\n## 過去の類似観測データ\n"
+                "以下は過去の調査で取得された類似の観測データです。"
+                "分析の参考にしてください:\n" + past_observations
+            )
 
         messages = [
             SystemMessage(content=system_prompt),

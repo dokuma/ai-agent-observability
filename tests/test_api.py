@@ -150,7 +150,7 @@ class TestUserQuery:
         )
 
         app_state.report_store = mock_store
-        app_state.report_search_agent = mock_search_agent
+        app_state.knowledge_search_agent = mock_search_agent
         app_state.hybrid_searcher = None
 
         response = client.post(
@@ -165,7 +165,7 @@ class TestUserQuery:
 
         # cleanup
         app_state.report_store = None
-        app_state.report_search_agent = None
+        app_state.knowledge_search_agent = None
 
     def test_query_routed_to_investigation_low_score(self, client):
         """検索スコアが閾値未満の場合、新規調査を開始."""
@@ -176,7 +176,7 @@ class TestUserQuery:
         mock_store.search.return_value = [(mock_report, 0.1, [])]
 
         app_state.report_store = mock_store
-        app_state.report_search_agent = MagicMock()
+        app_state.knowledge_search_agent = MagicMock()
         app_state.hybrid_searcher = None
 
         app_state.orchestrator = MagicMock()
@@ -198,7 +198,7 @@ class TestUserQuery:
         assert "見つからなかった" in data["message"]
 
         app_state.report_store = None
-        app_state.report_search_agent = None
+        app_state.knowledge_search_agent = None
 
     def test_report_search_needs_investigation_starts_followup(self, client):
         """report_search が [NEEDS_INVESTIGATION] を返した場合、自動的にフォローアップ調査を開始."""
@@ -215,7 +215,7 @@ class TestUserQuery:
         )
 
         app_state.report_store = mock_store
-        app_state.report_search_agent = mock_search_agent
+        app_state.knowledge_search_agent = mock_search_agent
         app_state.hybrid_searcher = None
 
         # フォローアップ調査用のオーケストレータをセットアップ
@@ -235,7 +235,7 @@ class TestUserQuery:
         assert data["status"] == "running"
 
         app_state.report_store = None
-        app_state.report_search_agent = None
+        app_state.knowledge_search_agent = None
 
     def test_query_hybrid_search_routes_to_report_search(self, client):
         """ハイブリッド検索(RRF)でスコアが低くても結果があれば report_search にルーティング."""
@@ -256,7 +256,7 @@ class TestUserQuery:
         )
 
         app_state.report_store = mock_store
-        app_state.report_search_agent = mock_search_agent
+        app_state.knowledge_search_agent = mock_search_agent
         app_state.hybrid_searcher = mock_hybrid
 
         response = client.post(
@@ -269,7 +269,7 @@ class TestUserQuery:
         assert data["status"] == "running"
 
         app_state.report_store = None
-        app_state.report_search_agent = None
+        app_state.knowledge_search_agent = None
         app_state.hybrid_searcher = None
 
     def test_query_routed_to_investigation_no_reports(self, client):
@@ -366,7 +366,7 @@ class TestUserQuery:
         )
 
         app_state.report_store = mock_store
-        app_state.report_search_agent = mock_search_agent
+        app_state.knowledge_search_agent = mock_search_agent
         app_state.hybrid_searcher = None
 
         response = client.post(
@@ -380,7 +380,7 @@ class TestUserQuery:
         assert data["status"] == "running"
 
         app_state.report_store = None
-        app_state.report_search_agent = None
+        app_state.knowledge_search_agent = None
 
 
 class TestInvestigationStatus:
@@ -647,7 +647,7 @@ class TestReportEndpoints:
         assert data["reports"] == []
 
     def test_reports_search_not_initialized(self, client):
-        app_state.report_search_agent = None
+        app_state.knowledge_search_agent = None
         response = client.post(
             "/api/v1/reports/search",
             json={"query": "OOMKill"},
@@ -663,7 +663,7 @@ class TestReportEndpoints:
                 total_reports=0,
             )
         )
-        app_state.report_search_agent = mock_agent
+        app_state.knowledge_search_agent = mock_agent
 
         response = client.post(
             "/api/v1/reports/search",
@@ -703,7 +703,7 @@ class TestReportSearchTimeout:
         mock_search_agent = AsyncMock()
 
         app_state.report_store = mock_store
-        app_state.report_search_agent = mock_search_agent
+        app_state.knowledge_search_agent = mock_search_agent
         app_state.hybrid_searcher = None
 
         response = client.post(
@@ -718,7 +718,7 @@ class TestReportSearchTimeout:
 
         # cleanup
         app_state.report_store = None
-        app_state.report_search_agent = None
+        app_state.knowledge_search_agent = None
 
 
 class TestSecondQueryAfterReport:
@@ -802,7 +802,7 @@ class TestSecondQueryAfterReport:
             total_reports=1,
         )
         app_state.report_store = mock_store
-        app_state.report_search_agent = mock_search_agent
+        app_state.knowledge_search_agent = mock_search_agent
         app_state.hybrid_searcher = None
 
         resp2 = client.post(
@@ -817,7 +817,7 @@ class TestSecondQueryAfterReport:
 
         # cleanup
         app_state.report_store = None
-        app_state.report_search_agent = None
+        app_state.knowledge_search_agent = None
 
 
 class TestPendingInputStringType:

@@ -1,11 +1,11 @@
-"""RCAレポート検索エージェント."""
+"""ナレッジ検索エージェント — RCAレポートと過去の観測データを統合検索."""
 
 import logging
 from typing import TYPE_CHECKING, Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from ai_agent_monitoring.agents.prompts import REPORT_SEARCH_SYSTEM_PROMPT
+from ai_agent_monitoring.agents.prompts import KNOWLEDGE_SEARCH_SYSTEM_PROMPT
 from ai_agent_monitoring.api.schemas import ReportSearchResponse, ReportSearchResult
 from ai_agent_monitoring.core.report_store import ReportStore
 
@@ -30,15 +30,15 @@ except ImportError:
         return decorator
 
 
-class ReportSearchAgent:
-    """過去のRCAレポートを検索し、LLMで回答を生成するエージェント."""
+class KnowledgeSearchAgent:
+    """過去のRCAレポートと観測データを検索し、LLMで回答を生成するエージェント."""
 
     def __init__(self, llm: Any, report_store: ReportStore, hybrid_searcher: "HybridSearcher | None" = None) -> None:
         self._llm = llm
         self._report_store = report_store
         self._hybrid_searcher = hybrid_searcher
 
-    @_observe(name="report_search_translate_keywords", as_type="span")
+    @_observe(name="knowledge_search_translate_keywords", as_type="span")
     async def _translate_query_to_keywords(self, query: str) -> str:
         """ユーザクエリから英語検索キーワードを生成."""
         messages = [
@@ -59,11 +59,13 @@ class ReportSearchAgent:
             logger.warning("Failed to translate query to English keywords")
             return ""
 
-    @_observe(name="report_search_and_answer", as_type="span")
-    async def search_and_answer(self, query: str, top_k: int = 5) -> ReportSearchResponse:
-        """クエリに基づいてレポートを検索し、LLMで回答を生成する."""
+    @_observe(name="knowledge_search_and_answer", as_type="span")
+    async def search_and_answer(
+        self, query: str, top_k: int = 5, observation_context: str = ""
+    ) -> ReportSearchResponse:
+        """クエリに基づいてRCAレポートと過去の観測データを検索し、LLMで回答を生成する."""
         total = self._report_store.count()
-        logger.info("Report search started: query=%s, total_reports=%d", query[:100], total)
+        logger.info("Knowledge search started: query=%s, total_reports=%d", query[:100], total)
 
         en_query = await self._translate_query_to_keywords(query)
         combined_query = f"{en_query} {query}".strip() if en_query else query
@@ -140,10 +142,17 @@ class ReportSearchAgent:
         context = "\n".join(context_parts)
 
         # Generate answer with LLM
-        logger.info("Generating LLM answer for report search")
+        logger.info("Generating LLM answer for knowledge search")
+        human_content = f"## 検索クエリ\n{query}\n\n## 検索結果\n{context}"
+        if observation_context:
+            human_content += (
+                "\n\n## 過去の類似観測データ\n"
+                "以下は過去の調査で取得された類似の観測データです。"
+                "回答の補足情報として活用してください:\n" + observation_context
+            )
         messages = [
-            SystemMessage(content=REPORT_SEARCH_SYSTEM_PROMPT),
-            HumanMessage(content=f"## 検索クエリ\n{query}\n\n## 検索結果\n{context}"),
+            SystemMessage(content=KNOWLEDGE_SEARCH_SYSTEM_PROMPT),
+            HumanMessage(content=human_content),
         ]
 
         response = await self._llm.ainvoke(messages)
@@ -165,13 +174,13 @@ class ReportSearchAgent:
         # 空や JSON 構造だけの回答はフォールバック
         stripped = answer.strip()
         if not stripped or stripped in ("{}", "[]", "null"):
-            logger.warning("Report search returned empty/JSON-only answer: %r", stripped[:100])
+            logger.warning("Knowledge search returned empty/JSON-only answer: %r", stripped[:100])
             answer = (
                 "過去のRCAレポートから情報が見つかりましたが、"
                 "回答の生成に失敗しました。別のキーワードでお試しください。"
             )
 
-        logger.info("Report search completed: answer_length=%d", len(answer))
+        logger.info("Knowledge search completed: answer_length=%d", len(answer))
 
         return ReportSearchResponse(
             answer=answer,

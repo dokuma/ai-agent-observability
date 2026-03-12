@@ -14,8 +14,8 @@ from langgraph.checkpoint.memory import MemorySaver
 from openai import APIConnectionError, APIStatusError
 from pydantic import SecretStr
 
+from ai_agent_monitoring.agents.knowledge_search_agent import KnowledgeSearchAgent
 from ai_agent_monitoring.agents.orchestrator import OrchestratorAgent
-from ai_agent_monitoring.agents.report_search_agent import ReportSearchAgent
 from ai_agent_monitoring.core.config import Settings
 from ai_agent_monitoring.core.datasource import DatasourcePreferenceStore
 from ai_agent_monitoring.core.hybrid_search import HybridSearcher
@@ -200,7 +200,7 @@ class AppState:
         self.checkpointer = MemorySaver()
         self.ds_preference_store: DatasourcePreferenceStore | None = None
         self.report_store: ReportStore | None = None
-        self.report_search_agent: ReportSearchAgent | None = None
+        self.knowledge_search_agent: KnowledgeSearchAgent | None = None
         self.vector_store: VectorStore | None = None
         self.observation_store: ObservationStore | None = None
         self.hybrid_searcher: HybridSearcher | None = None
@@ -267,7 +267,7 @@ class AppState:
             await self._init_vector_store()
 
         # レポート検索エージェント
-        self.report_search_agent = ReportSearchAgent(
+        self.knowledge_search_agent = KnowledgeSearchAgent(
             llm=llm,
             report_store=self.report_store,
             hybrid_searcher=self.hybrid_searcher,

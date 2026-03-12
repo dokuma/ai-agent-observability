@@ -137,7 +137,7 @@ async def submit_query(
 
     1. retry パターン検出 → 該当すれば既存の retry 処理へ
     2. レポートストアで検索実行（BM25 + ベクトル検索）
-    3. 検索結果が十分（スコア閾値超え）→ report_search_agent で回答生成
+    3. 検索結果が十分（スコア閾値超え）→ knowledge_search_agent で回答生成
     4. 検索結果が不十分 → 新規調査開始
     """
     report_search_timeout = app_state.settings.report_search_timeout_seconds
@@ -181,9 +181,14 @@ async def submit_query(
             )
         # completed 調査が見つからない場合は新規調査にフォールスルー
 
-    # ---- Step 2: レポート検索（Search-First） ----
+    # ---- Step 2: レポート検索 + ObservationStore 検索（Search-First） ----
     search_miss_message: str | None = None
-    if app_state.report_store and app_state.report_store.count() > 0 and app_state.report_search_agent:
+    observation_context = ""
+
+    # ObservationStore 検索（レポート検索と並行して実行）
+    obs_task = asyncio.create_task(_search_observation_store(request.query))
+
+    if app_state.report_store and app_state.report_store.count() > 0 and app_state.knowledge_search_agent:
         # BM25 + ベクトル検索で関連レポートを検索
         try:
             is_hybrid = False
@@ -193,6 +198,9 @@ async def submit_query(
             if app_state.hybrid_searcher:
                 search_results = await app_state.hybrid_searcher.search(request.query, top_k=5)
                 is_hybrid = True
+
+            # ObservationStore の結果を取得
+            observation_context = await obs_task
 
             # 検索結果のスコアが閾値を超えているか判定
             # ハイブリッド検索(RRF)はスコアスケールが異なる（最大~0.033）ため、
@@ -216,11 +224,12 @@ async def submit_query(
                     inv_id,
                     request.query,
                     report_search_timeout,
+                    observation_context,
                 )
                 return UserQueryResponse(
                     investigation_id=inv_id,
                     status="running",
-                    message="過去のレポートから回答を検索中です...",
+                    message="過去のレポートと観測データから回答を検索中です...",
                     routed_to="report_search",
                 )
             else:
@@ -236,6 +245,10 @@ async def submit_query(
         except Exception:
             logger.warning("Search-first: search failed, falling back to investigation", exc_info=True)
             search_miss_message = None
+
+    # ObservationStore の結果がまだ未取得の場合は待機
+    if not obs_task.done():
+        observation_context = await obs_task
 
     # ---- Step 4: 新規調査開始 ----
     user_query = UserQuery(
@@ -459,19 +472,51 @@ async def _refresh_orchestrator_health(inv_id: str) -> dict[str, bool]:
 _NEEDS_INVESTIGATION_MARKER = "[NEEDS_INVESTIGATION]"
 
 
-async def _run_report_search(inv_id: str, query: str, timeout: int) -> None:
+async def _search_observation_store(query: str) -> str:
+    """ObservationStore から過去の類似観測を検索しテキストを返す.
+
+    Returns:
+        観測データのテキスト。結果なしまたはストア未初期化時は空文字列。
+    """
+    if not app_state.observation_store:
+        return ""
+    try:
+        from datetime import UTC, datetime
+
+        results = await app_state.observation_store.search_similar(
+            query=query,
+            top_k=5,
+        )
+        if not results:
+            return ""
+        lines: list[str] = []
+        for r in results:
+            age_dt = datetime.fromtimestamp(r.created_at_ts, tz=UTC)
+            age_str = age_dt.strftime("%Y-%m-%d %H:%M")
+            lines.append(f"- [{r.observation_type}] {age_str} (score={r.score:.2f}): {r.summary}")
+        logger.info("ObservationStore search returned %d results for query: %s", len(results), query[:100])
+        return "\n".join(lines)
+    except Exception:
+        logger.warning("ObservationStore search failed", exc_info=True)
+        return ""
+
+
+async def _run_report_search(inv_id: str, query: str, timeout: int, observation_context: str = "") -> None:
     """レポート検索をバックグラウンドで実行し、結果を InvestigationRecord に保存.
 
     回答に [NEEDS_INVESTIGATION] マーカーが含まれる場合は、
     過去レポートの部分回答を保持しつつ新規調査を自動開始する。
     """
-    if not app_state.report_search_agent:
+    if not app_state.knowledge_search_agent:
         app_state.fail_investigation(inv_id, "Report search agent not initialized")
         return
 
     try:
         result = await asyncio.wait_for(
-            app_state.report_search_agent.search_and_answer(query=query),
+            app_state.knowledge_search_agent.search_and_answer(
+                query=query,
+                observation_context=observation_context,
+            ),
             timeout=timeout,
         )
         answer = result.answer
@@ -795,9 +840,9 @@ async def _retry_investigation(
 @router.post("/reports/search", response_model=ReportSearchResponse)
 async def search_reports(request: ReportSearchRequest) -> ReportSearchResponse:
     """過去のRCAレポートを自然言語で検索し、LLMが要約回答を生成."""
-    if not app_state.report_search_agent:
+    if not app_state.knowledge_search_agent:
         raise HTTPException(status_code=503, detail="Report search agent not initialized")
-    return await app_state.report_search_agent.search_and_answer(query=request.query, top_k=request.top_k)
+    return await app_state.knowledge_search_agent.search_and_answer(query=request.query, top_k=request.top_k)
 
 
 @router.get("/reports", response_model=ReportListResponse)

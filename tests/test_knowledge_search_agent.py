@@ -1,11 +1,11 @@
-"""ReportSearchAgentのテスト."""
+"""KnowledgeSearchAgentのテスト."""
 
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from ai_agent_monitoring.agents.report_search_agent import ReportSearchAgent
+from ai_agent_monitoring.agents.knowledge_search_agent import KnowledgeSearchAgent
 from ai_agent_monitoring.core.models import (
     Alert,
     RCAReport,
@@ -49,7 +49,7 @@ def _make_stored_report(
     )
 
 
-class TestReportSearchAgent:
+class TestKnowledgeSearchAgent:
     @pytest.fixture
     def mock_llm(self):
         llm = MagicMock()
@@ -74,7 +74,7 @@ class TestReportSearchAgent:
             (stored, 2.5, ["CPU usage at 95%"]),
         ]
 
-        agent = ReportSearchAgent(llm=mock_llm, report_store=mock_store)
+        agent = KnowledgeSearchAgent(llm=mock_llm, report_store=mock_store)
         result = await agent.search_and_answer("CPUが高い原因は？")
 
         assert result.answer == "テスト回答: CPUが高い原因はループ処理でした。"
@@ -91,7 +91,7 @@ class TestReportSearchAgent:
     async def test_search_no_results(self, mock_llm, mock_store):
         mock_store.search.return_value = []
 
-        agent = ReportSearchAgent(llm=mock_llm, report_store=mock_store)
+        agent = KnowledgeSearchAgent(llm=mock_llm, report_store=mock_store)
         result = await agent.search_and_answer("存在しないクエリ")
 
         assert "見つかりませんでした" in result.answer
@@ -109,7 +109,7 @@ class TestReportSearchAgent:
             (stored, 1.5, []),
         ]
 
-        agent = ReportSearchAgent(llm=mock_llm, report_store=mock_store)
+        agent = KnowledgeSearchAgent(llm=mock_llm, report_store=mock_store)
         result = await agent.search_and_answer("テスト")
 
         assert result.results[0].trigger_type == "user_query"
@@ -127,7 +127,7 @@ class TestReportSearchAgent:
         stored = _make_stored_report()
         mock_store.search.return_value = [(stored, 1.0, [])]
 
-        agent = ReportSearchAgent(llm=llm, report_store=mock_store)
+        agent = KnowledgeSearchAgent(llm=llm, report_store=mock_store)
         result = await agent.search_and_answer("CPUが高い")
 
         # Translation failed, so search is called with the original query only
@@ -149,14 +149,14 @@ class TestReportSearchAgent:
         mock_store.search.side_effect = [[], [(stored, 1.0, [])]]
         mock_store.count.return_value = 5
 
-        agent = ReportSearchAgent(llm=llm, report_store=mock_store)
+        agent = KnowledgeSearchAgent(llm=llm, report_store=mock_store)
         result = await agent.search_and_answer("CPUが高い")
 
         assert mock_store.search.call_count == 2
         assert len(result.results) == 1
 
 
-class TestReportSearchAgentWithHybridSearcher:
+class TestKnowledgeSearchAgentWithHybridSearcher:
     @pytest.fixture
     def mock_hybrid_searcher(self):
         searcher = MagicMock()
@@ -178,7 +178,7 @@ class TestReportSearchAgentWithHybridSearcher:
         store = MagicMock()
         store.count.return_value = 10
 
-        agent = ReportSearchAgent(llm=llm, report_store=store, hybrid_searcher=mock_hybrid_searcher)
+        agent = KnowledgeSearchAgent(llm=llm, report_store=store, hybrid_searcher=mock_hybrid_searcher)
         result = await agent.search_and_answer("CPUが高い")
 
         mock_hybrid_searcher.search.assert_called_once()
@@ -199,7 +199,7 @@ class TestReportSearchAgentWithHybridSearcher:
         store.count.return_value = 5
         store.search.return_value = [(stored, 2.0, [])]
 
-        agent = ReportSearchAgent(llm=llm, report_store=store, hybrid_searcher=None)
+        agent = KnowledgeSearchAgent(llm=llm, report_store=store, hybrid_searcher=None)
         result = await agent.search_and_answer("test")
 
         store.search.assert_called_once()
