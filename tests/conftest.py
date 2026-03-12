@@ -144,11 +144,43 @@ def sample_k8s_result() -> KubernetesResult:
 
 @pytest.fixture
 def mock_mcp_client() -> MCPClient:
-    """モック MCP クライアント."""
+    """モック MCP クライアント.
+
+    BaseMCPTool._call_tool() の統一パイプライン
+    (session → _extract_result → _preprocess_result → _truncate_tool_result)
+    に対応。session().call_tool() の呼び出しを client.call_tool に委譲して
+    既存テストのアサーション互換性を維持する。
+    """
     client = MagicMock(spec=MCPClient)
     client.base_url = "http://mock-mcp:8080"
     client.timeout = 30.0
+    client._max_tool_result_chars = 8000
+
+    # call_tool は記録用（アサーション互換性のため）
     client.call_tool = AsyncMock(return_value={"status": "ok", "data": []})
+
+    # _extract_result のモック
+    client._extract_result = MagicMock(return_value={"content": []})
+
+    # session() が返すモックセッション
+    # call_tool の呼び出しを client.call_tool に委譲して引数を記録
+    raw_result = MagicMock()
+    raw_result.isError = False
+    raw_result.content = []
+
+    mock_session = AsyncMock()
+
+    async def _forwarding_call_tool(name: str, args: dict) -> MagicMock:  # type: ignore[type-arg]
+        await client.call_tool(name, args)
+        return raw_result
+
+    mock_session.call_tool = AsyncMock(side_effect=_forwarding_call_tool)
+
+    session_cm = MagicMock()
+    session_cm.__aenter__ = AsyncMock(return_value=mock_session)
+    session_cm.__aexit__ = AsyncMock(return_value=None)
+    client.session = MagicMock(return_value=session_cm)
+
     return client
 
 

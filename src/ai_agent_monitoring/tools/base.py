@@ -537,12 +537,22 @@ class BaseMCPTool:
             finally:
                 self._current_session = None
 
+    def _preprocess_result(self, tool_name: str, result: dict[str, Any]) -> dict[str, Any]:
+        """ツール結果の前処理フック（サブクラスでオーバーライド可能）.
+
+        _extract_resultの後、_truncate_tool_resultの前に呼ばれる。
+        デフォルトは何もせずそのまま返す。
+        """
+        return result
+
     @_observe(name="mcp_base_call_tool", as_type="tool")
     async def _call_tool(self, tool_name: str, params: dict[str, Any]) -> dict[str, Any]:
         """ツールを呼び出す（セッション再利用対応）.
 
         セッションが確立済みの場合は再利用し、
-        そうでない場合は新規セッションを作成する（後方互換性）。
+        そうでない場合は新規セッションを作成する。
+        常に _extract_result → _preprocess_result → _truncate_tool_result の
+        一貫したパイプラインを通る。
 
         Args:
             tool_name: 呼び出すツール名
@@ -552,13 +562,14 @@ class BaseMCPTool:
             ツールの実行結果
         """
         if self._current_session:
-            # セッションが確立済みの場合は再利用
             result = await self._current_session.call_tool(tool_name, params)
-            extracted = self.mcp_client._extract_result(result)
-            return _truncate_tool_result(extracted, self.mcp_client._max_tool_result_chars)
         else:
-            # セッションがない場合は新規作成（後方互換性）
-            return await self.mcp_client.call_tool(tool_name, params)
+            async with self.mcp_client.session() as session:
+                result = await session.call_tool(tool_name, params)
+
+        extracted = self.mcp_client._extract_result(result)
+        preprocessed = self._preprocess_result(tool_name, extracted)
+        return _truncate_tool_result(preprocessed, self.mcp_client._max_tool_result_chars)
 
 
 class MCPSessionManager:

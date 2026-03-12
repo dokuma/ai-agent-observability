@@ -7,6 +7,7 @@ from typing import Any
 from langchain_core.tools import BaseTool, tool
 
 from ai_agent_monitoring.tools.base import BaseMCPTool, MCPClient
+from ai_agent_monitoring.tools.metrics_preprocessor import preprocess_prometheus_result
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,12 @@ class PrometheusMCPTool(BaseMCPTool):
                 result1 = await ctx.instant_query("up")
                 result2 = await ctx.range_query("rate(http_requests[5m])", start, end)
     """
+
+    def _preprocess_result(self, tool_name: str, result: dict[str, Any]) -> dict[str, Any]:
+        """Prometheus時系列データの前処理."""
+        if tool_name == "query_prometheus":
+            return preprocess_prometheus_result(result)
+        return result
 
     async def instant_query(self, query: str, time: datetime | None = None) -> dict[str, Any]:
         """PromQL インスタントクエリを実行."""

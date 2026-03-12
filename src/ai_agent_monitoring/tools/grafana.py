@@ -8,6 +8,7 @@ import httpx
 from langchain_core.tools import BaseTool, tool
 
 from ai_agent_monitoring.tools.base import BaseMCPTool, MCPClient
+from ai_agent_monitoring.tools.metrics_preprocessor import preprocess_prometheus_result
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,12 @@ class GrafanaMCPTool(BaseMCPTool):
                 dashboards = await ctx.list_dashboards()
                 alerts = await ctx.get_firing_alerts()
     """
+
+    def _preprocess_result(self, tool_name: str, result: dict[str, Any]) -> dict[str, Any]:
+        """Prometheus時系列データの前処理."""
+        if tool_name == "query_prometheus":
+            return preprocess_prometheus_result(result)
+        return result
 
     async def list_dashboards(self, query: str = "") -> dict[str, Any]:
         """ダッシュボード一覧を取得.

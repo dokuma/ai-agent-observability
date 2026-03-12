@@ -177,16 +177,30 @@ class TestBaseMCPToolCallTool:
 
     @pytest.mark.asyncio
     async def test_call_tool_without_session(self):
-        """セッションなし: mcp_client.call_tool が呼ばれる."""
+        """セッションなし: session経由でcall_toolが呼ばれる."""
+        raw_result = MagicMock()
+        raw_result.isError = False
+        raw_result.content = []
+
+        mock_session = AsyncMock()
+        mock_session.call_tool = AsyncMock(return_value=raw_result)
+
         mock_client = MagicMock(spec=MCPClient)
-        mock_client.call_tool = AsyncMock(return_value={"content": []})
+        mock_client._max_tool_result_chars = 8000
+        mock_client._extract_result = MagicMock(return_value={"content": []})
+
+        session_cm = MagicMock()
+        session_cm.__aenter__ = AsyncMock(return_value=mock_session)
+        session_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_client.session = MagicMock(return_value=session_cm)
 
         tool = BaseMCPTool(mock_client)
         assert tool._current_session is None
 
         result = await tool._call_tool("some_tool", {"param": "val"})
 
-        mock_client.call_tool.assert_called_once_with("some_tool", {"param": "val"})
+        mock_session.call_tool.assert_called_once_with("some_tool", {"param": "val"})
+        mock_client._extract_result.assert_called_once_with(raw_result)
         assert result == {"content": []}
 
     @pytest.mark.asyncio
