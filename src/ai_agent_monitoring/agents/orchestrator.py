@@ -1243,12 +1243,26 @@ class OrchestratorAgent:
 
     def _parse_dashboards(self, text: str) -> list[dict[str, Any]]:
         """ダッシュボードテキストをパース."""
+        # まず全体をJSONとして試行
         try:
             parsed = json.loads(text)
             if isinstance(parsed, list):
                 return parsed
         except json.JSONDecodeError:
             pass
+
+        # テキスト中からJSON配列を抽出（MCP応答に説明文が含まれる場合）
+        match = re.search(r"\[.*\]", text, re.DOTALL)
+        if match:
+            try:
+                parsed = json.loads(match.group())
+                if isinstance(parsed, list):
+                    logger.info("Extracted dashboards JSON array from text (offset %d)", match.start())
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+
+        logger.warning("Failed to parse dashboards text (%d chars): %.200s", len(text), text)
         return []
 
     def _extract_queries_from_panels(self, text: str) -> tuple[list[str], list[str]]:
