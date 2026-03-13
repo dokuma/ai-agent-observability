@@ -227,6 +227,9 @@ class AppState:
         self.knowledge_search_agent: KnowledgeSearchAgent | None = None
         self.vector_store: VectorStore | None = None
         self.observation_store: ObservationStore | None = None
+        # EnvironmentContext の in-memory TTL キャッシュ
+        self._env_cache: dict[str, Any] | None = None  # {"env": EnvironmentContext, "ts": float}
+        self._env_cache_ttl: float = 3600.0  # initialize() で settings から上書き
 
     async def initialize(self) -> None:
         """アプリケーション起動時の初期化."""
@@ -289,6 +292,9 @@ class AppState:
             vector_store=self.vector_store,
         )
 
+        # Environment cache TTL
+        self._env_cache_ttl = float(self.settings.environment_cache_ttl_seconds)
+
         # Orchestrator（registryを渡してhealthy状態を考慮）
         self.orchestrator = OrchestratorAgent(
             llm=llm,
@@ -297,8 +303,31 @@ class AppState:
             stage_update_callback=self.update_investigation_stage,
             ds_preference_store=self.ds_preference_store,
             observation_store=self.observation_store,
+            get_cached_env=self._get_cached_env,
+            set_cached_env=self._set_cached_env,
         )
         logger.info("Orchestrator Agent initialized")
+
+    def _get_cached_env(self) -> Any | None:
+        """キャッシュ済み EnvironmentContext を返す（TTL 超過時は None）."""
+        import time
+
+        if self._env_cache is None:
+            return None
+        elapsed = time.time() - self._env_cache["ts"]
+        if elapsed > self._env_cache_ttl:
+            logger.info("Environment cache expired (%.0fs > %.0fs)", elapsed, self._env_cache_ttl)
+            self._env_cache = None
+            return None
+        logger.info("Environment cache hit (age=%.0fs)", elapsed)
+        return self._env_cache["env"]
+
+    def _set_cached_env(self, env: Any) -> None:
+        """EnvironmentContext をキャッシュに格納."""
+        import time
+
+        self._env_cache = {"env": env, "ts": time.time()}
+        logger.info("Environment context cached")
 
     async def _init_vector_store(self) -> None:
         """Qdrant + Embedding を初期化."""
@@ -430,7 +459,13 @@ class AppState:
                 e,
             )
 
-    async def _upsert_report_vector(self, report_id: str, inv_id: str, rca_report: RCAReport) -> None:
+    async def _upsert_report_vector(
+        self,
+        report_id: str,
+        inv_id: str,
+        rca_report: RCAReport,
+        environment_json: str = "",
+    ) -> None:
         """レポートを Qdrant にベクトル保存（失敗時はログのみ）."""
         if not self.vector_store:
             return
@@ -444,6 +479,8 @@ class AppState:
                 "created_at_ts": datetime.now().timestamp(),
                 "report_json": report_json,
             }
+            if environment_json:
+                metadata["environment_json"] = environment_json
             await self.vector_store.upsert(report_id, text, metadata)
             logger.info("Report %s upserted to Qdrant", report_id)
         except APIStatusError as e:
@@ -493,7 +530,12 @@ class AppState:
         """調査レコードを取得."""
         return self.investigations.get(inv_id)
 
-    async def complete_investigation(self, inv_id: str, rca_report: RCAReport | None = None) -> None:
+    async def complete_investigation(
+        self,
+        inv_id: str,
+        rca_report: RCAReport | None = None,
+        environment_json: str = "",
+    ) -> None:
         """調査を完了としてマーク."""
         record = self.investigations.get(inv_id)
         if record:
@@ -505,7 +547,7 @@ class AppState:
                     from uuid import uuid4
 
                     report_id = uuid4().hex[:12]
-                    await self._upsert_report_vector(report_id, inv_id, rca_report)
+                    await self._upsert_report_vector(report_id, inv_id, rca_report, environment_json)
                     logger.info("RCA report saved: %s (investigation: %s)", report_id, inv_id)
                 except Exception:
                     logger.exception("Failed to save RCA report for investigation %s", inv_id)

@@ -118,9 +118,14 @@ class KnowledgeSearchAgent:
                 if tool_parts:
                     tool_output_context = "\nツール実行結果:\n" + "\n".join(tool_parts) + "\n"
 
+            # 環境スナップショット
+            env_summary = stored.get_environment_summary()
+            env_line = f"環境: {env_summary}\n" if env_summary else ""
+
             context_parts.append(
                 f"--- レポート {i} (ID: {stored.id}, スコア: {vr.score:.2f}) ---\n"
                 f"作成日時: {stored.created_at.isoformat()}\n"
+                f"{env_line}"
                 f"根本原因: {root_causes_summary}\n"
                 f"メトリクス: {rca.metrics_summary or 'なし'}\n"
                 f"ログ: {rca.logs_summary or 'なし'}\n"

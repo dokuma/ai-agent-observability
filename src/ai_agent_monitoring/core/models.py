@@ -172,6 +172,7 @@ class StoredRCAReport(BaseModel):
     investigation_id: str
     report: RCAReport
     created_at: datetime
+    environment_json: str = ""  # EnvironmentContext の JSON スナップショット
 
     @classmethod
     def from_qdrant_payload(cls, payload: dict[str, Any]) -> "StoredRCAReport | None":
@@ -184,4 +185,29 @@ class StoredRCAReport(BaseModel):
             investigation_id=payload.get("investigation_id", ""),
             report=RCAReport.model_validate_json(report_json),
             created_at=datetime.fromtimestamp(payload.get("created_at_ts", 0)),
+            environment_json=payload.get("environment_json", ""),
         )
+
+    def get_environment_summary(self) -> str:
+        """環境スナップショットの要約テキストを返す."""
+        if not self.environment_json:
+            return ""
+        try:
+            # circular import 回避のため遅延インポート
+            from ai_agent_monitoring.core.state import EnvironmentContext
+
+            env = EnvironmentContext.model_validate_json(self.environment_json)
+            parts: list[str] = []
+            if env.prometheus_datasource_uids:
+                parts.append(f"Prometheus DS: {', '.join(env.prometheus_datasource_uids)}")
+            if env.loki_datasource_uids:
+                parts.append(f"Loki DS: {', '.join(env.loki_datasource_uids)}")
+            if env.available_metrics:
+                parts.append(f"メトリクス数: {len(env.available_metrics)}")
+            if env.available_jobs:
+                parts.append(f"Jobs: {', '.join(env.available_jobs[:10])}")
+            if env.k8s_env and env.k8s_env.namespaces:
+                parts.append(f"K8s NS: {', '.join(env.k8s_env.namespaces[:10])}")
+            return "; ".join(parts) if parts else ""
+        except Exception:
+            return ""

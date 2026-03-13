@@ -166,6 +166,8 @@ class OrchestratorAgent:
         stage_update_callback: StageUpdateCallback | None = None,
         ds_preference_store: DatasourcePreferenceStore | None = None,
         observation_store: ObservationStore | None = None,
+        get_cached_env: Callable[[], Any | None] | None = None,
+        set_cached_env: Callable[[Any], None] | None = None,
     ) -> None:
         self.llm = llm
         self.settings = settings or Settings()
@@ -173,6 +175,8 @@ class OrchestratorAgent:
         self._stage_callback = stage_update_callback
         self.ds_preference_store = ds_preference_store
         self.observation_store = observation_store
+        self._get_cached_env = get_cached_env
+        self._set_cached_env = set_cached_env
 
         # 時刻ツールは常に利用可能
         self.time_tools = create_time_tools()
@@ -501,6 +505,13 @@ class OrchestratorAgent:
         """
         self._update_stage(state, "環境情報を収集中")
 
+        # キャッシュチェック
+        if self._get_cached_env:
+            cached = self._get_cached_env()
+            if cached is not None:
+                logger.info("Using cached environment context")
+                return {"environment": cached}
+
         if not self.grafana_tool:
             logger.warning("Grafana MCP unavailable, skipping environment discovery")
             return {"environment": EnvironmentContext()}
@@ -593,6 +604,10 @@ class OrchestratorAgent:
                 await self._discover_k8s_environment(env)
             except Exception as e:
                 self._log_discovery_error("k8s environment", e)
+
+        # キャッシュに格納
+        if self._set_cached_env:
+            self._set_cached_env(env)
 
         return {"environment": env}
 

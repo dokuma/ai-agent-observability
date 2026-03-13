@@ -90,6 +90,9 @@ class Settings(BaseSettings):
     # Search-First
     search_relevance_threshold: float = 0.3
 
+    # Environment cache TTL（秒）— discover_environment の結果をキャッシュする時間
+    environment_cache_ttl_seconds: int = 3600
+
     # CORS
     cors_allowed_origins: list[str] = ["http://localhost:3000"]
 

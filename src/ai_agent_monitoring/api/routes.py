@@ -28,6 +28,18 @@ from ai_agent_monitoring.api.schemas import (
 from ai_agent_monitoring.core.models import Alert, Severity, StoredRCAReport, TriggerType, UserQuery
 from ai_agent_monitoring.core.tracing import build_runnable_config
 
+
+def _extract_env_json(result: dict[str, Any]) -> str:
+    """AgentState 結果から EnvironmentContext の JSON を取得."""
+    env = result.get("environment")
+    if env is None:
+        return ""
+    try:
+        return str(env.model_dump_json())
+    except Exception:
+        return ""
+
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -644,7 +656,8 @@ async def _run_investigation_loop(
                 return
 
             rca_report = result.get("rca_report")
-            await app_state.complete_investigation(inv_id, rca_report=rca_report)
+            env_json = _extract_env_json(result)
+            await app_state.complete_investigation(inv_id, rca_report=rca_report, environment_json=env_json)
             logger.info("Investigation completed: %s", inv_id)
         except TimeoutError:
             logger.warning("Investigation timed out after %ds: %s", timeout, inv_id)
@@ -752,7 +765,8 @@ async def _resume_investigation(
                 return
 
             rca_report = result.get("rca_report")
-            await app_state.complete_investigation(inv_id, rca_report=rca_report)
+            env_json = _extract_env_json(result)
+            await app_state.complete_investigation(inv_id, rca_report=rca_report, environment_json=env_json)
             logger.info("Investigation completed after resume: %s", inv_id)
         except TimeoutError:
             logger.warning("Investigation timed out after resume %ds: %s", timeout, inv_id)
@@ -832,7 +846,8 @@ async def _retry_investigation(
                 return
 
             rca_report = result.get("rca_report")
-            await app_state.complete_investigation(inv_id, rca_report=rca_report)
+            env_json = _extract_env_json(result)
+            await app_state.complete_investigation(inv_id, rca_report=rca_report, environment_json=env_json)
             logger.info("Investigation completed after retry: %s (%s)", inv_id, retry_type)
         except TimeoutError:
             logger.warning("Investigation timed out after retry %ds: %s", timeout, inv_id)
