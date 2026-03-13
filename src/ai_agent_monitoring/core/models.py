@@ -117,6 +117,17 @@ class ConfidenceDetails(BaseModel):
     explanation: str = ""
 
 
+class RootCauseSchema(BaseModel):
+    """LLM Structured Output 用の根本原因スキーマ.
+
+    confidence_details はシステムが算出するため LLM には生成させない。
+    """
+
+    description: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    evidence: list[str] = Field(default_factory=list)
+
+
 class RootCause(BaseModel):
     """特定された根本原因."""
 
@@ -126,6 +137,21 @@ class RootCause(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     evidence: list[str] = Field(default_factory=list)
     confidence_details: ConfidenceDetails | None = None
+
+
+class RCAReportSchema(BaseModel):
+    """LLM Structured Output 用 RCA レポートスキーマ.
+
+    LLM が生成すべきフィールドのみを含む。
+    trigger_type, alert, user_query, agent_tool_outputs 等のシステムフィールドは
+    コンテキストから設定するため除外する。
+    """
+
+    root_causes: list[RootCauseSchema] = Field(default_factory=list)
+    metrics_summary: str = ""
+    logs_summary: str = ""
+    k8s_summary: str = ""
+    recommendations: list[str] = Field(default_factory=list)
 
 
 class PanelSnapshot(BaseModel):

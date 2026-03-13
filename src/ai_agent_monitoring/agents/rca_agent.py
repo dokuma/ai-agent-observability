@@ -15,6 +15,7 @@ from ai_agent_monitoring.core.models import (
     LogExcerpt,
     PanelSnapshot,
     RCAReport,
+    RCAReportSchema,
     RootCause,
 )
 from ai_agent_monitoring.core.renderer import render_rca_markdown
@@ -147,40 +148,89 @@ class RCAAgent:
 
     @_observe(name="rca_generate_report", as_type="span")
     async def _generate_report(self, state: AgentState) -> dict[str, Any]:
-        """RCAレポートのJSON構造を生成."""
-        messages = [
-            *state["messages"],
-            HumanMessage(
-                content=(
-                    "上記の分析を踏まえ、最終的なRCAレポートを以下のJSON形式で出力してください:\n"
-                    "{\n"
-                    '  "root_causes": [{"description": "...", "confidence": 0.9, "evidence": ["..."]}],\n'
-                    '  "metrics_summary": "メトリクス分析の要約（Markdown形式）",\n'
-                    '  "logs_summary": "ログ分析の要約（Markdown形式）",\n'
-                    '  "k8s_summary": "Kubernetes分析の要約（Markdown形式）",\n'
-                    '  "recommendations": ["推奨アクション1", ...]\n'
-                    "}\n\n"
-                    "## summaryフィールドのフォーマット規則\n"
-                    "各summaryフィールドはMarkdown形式で記述してください:\n"
-                    "- PromQL/LogQLクエリは ```promql や ```logql のコードブロックで囲む\n"
-                    "- メトリクス値は `値` のインラインコードで囲む\n"
-                    "- 箇条書き（- ）で項目を分ける\n"
-                    "- 改行（\\n）で段落を分ける\n\n"
-                    "例:\n"
-                    '"metrics_summary": "CPU使用率が高い状態を確認:\\n\\n'
-                    '```promql\\nrate(node_cpu_seconds_total{mode=\\\\"idle\\\\"}[5m])\\n```\\n\\n'
-                    '- 最大値: `95%`\\n- 平均値: `82%`\\n- 閾値超過ノード: `node-1`, `node-2`"'
-                )
-            ),
-        ]
-        response = await self.llm.ainvoke(messages)
+        """RCAレポートのJSON構造を生成.
 
-        report = self._parse_report(response.content, state)
+        LLM Structured Output を優先し、失敗時はテキストパースにフォールバック。
+        """
+        report_prompt = (
+            "上記の分析を踏まえ、最終的なRCAレポートを生成してください。\n\n"
+            "## 出力フィールド\n"
+            "- root_causes: 根本原因のリスト（description, confidence 0.0〜1.0, evidence）\n"
+            "- metrics_summary: メトリクス分析の要約（Markdown形式）\n"
+            "- logs_summary: ログ分析の要約（Markdown形式）\n"
+            "- k8s_summary: Kubernetes分析の要約（Markdown形式）\n"
+            "- recommendations: 推奨アクションのリスト\n\n"
+            "## summaryフィールドのフォーマット規則\n"
+            "各summaryフィールドはMarkdown形式で記述してください:\n"
+            "- PromQL/LogQLクエリは ```promql や ```logql のコードブロックで囲む\n"
+            "- メトリクス値は `値` のインラインコードで囲む\n"
+            "- 箇条書き（- ）で項目を分ける\n"
+            "- 改行（\\n）で段落を分ける"
+        )
+        messages = [*state["messages"], HumanMessage(content=report_prompt)]
 
-        return {
-            "messages": [response],
-            "rca_report": report,
-        }
+        # Structured Output を試行
+        schema_result = await self._invoke_structured_report(messages)
+        if schema_result is not None:
+            report = self._build_report_from_schema(schema_result, state)
+        else:
+            # フォールバック: テキスト生成 → 手動パース
+            response = await self.llm.ainvoke(messages)
+            report = self._parse_report(response.content, state)
+            return {"messages": [response], "rca_report": report}
+
+        return {"rca_report": report}
+
+    async def _invoke_structured_report(self, messages: list[Any]) -> RCAReportSchema | None:
+        """Structured Output で RCAReportSchema を取得.失敗時は None."""
+        try:
+            structured_llm = self.llm.with_structured_output(RCAReportSchema)
+            result = await structured_llm.ainvoke(messages)
+            if isinstance(result, RCAReportSchema):
+                logger.info("Structured output で RCA レポートを取得しました")
+                return result
+            if isinstance(result, dict):
+                logger.info("Structured output が dict を返却、RCAReportSchema に変換")
+                return RCAReportSchema(**result)
+            raise TypeError(f"Unexpected type from structured output: {type(result)}")
+        except Exception as e:
+            logger.warning(
+                "Structured output 失敗、テキストパースにフォールバック: %s: %s",
+                type(e).__name__,
+                e,
+            )
+            return None
+
+    def _build_report_from_schema(self, schema: RCAReportSchema, state: AgentState) -> RCAReport:
+        """RCAReportSchema から RCAReport を構築."""
+        root_causes = []
+        for rc_schema in schema.root_causes:
+            conf = rc_schema.confidence
+            if conf > 1.0:
+                conf = conf / 100.0
+            conf = max(0.0, min(1.0, conf))
+            root_causes.append(
+                RootCause(description=rc_schema.description, confidence=conf, evidence=rc_schema.evidence)
+            )
+
+        agent_tool_outputs = self._collect_agent_tool_outputs(state)
+
+        for rc in root_causes:
+            details = compute_confidence(rc, state)
+            rc.confidence = details.final_confidence
+            rc.confidence_details = details
+
+        return RCAReport(
+            trigger_type=state["trigger_type"],
+            alert=state.get("alert"),
+            user_query=state.get("user_query"),
+            root_causes=root_causes,
+            metrics_summary=schema.metrics_summary,
+            logs_summary=schema.logs_summary,
+            k8s_summary=schema.k8s_summary,
+            recommendations=schema.recommendations,
+            agent_tool_outputs=agent_tool_outputs,
+        )
 
     @_observe(name="rca_collect_evidence", as_type="span")
     async def _collect_evidence(self, state: AgentState) -> dict[str, Any]:
@@ -323,29 +373,9 @@ class RCAAgent:
 
     # ---- パーサー ----
 
-    def _parse_report(self, content: str, state: AgentState) -> RCAReport:
-        """LLM出力からRCAレポートをパース."""
-        try:
-            json_str = extract_json(content)
-            try:
-                data = json.loads(json_str)
-            except json.JSONDecodeError:
-                repaired = repair_truncated_json(json_str)
-                data = json.loads(repaired)
-            root_causes = []
-            for rc in data.get("root_causes", []):
-                # confidence を 0.0〜1.0 に正規化
-                conf = float(rc.get("confidence", 0.5))
-                if conf > 1.0:
-                    conf = conf / 100.0
-                rc["confidence"] = max(0.0, min(1.0, conf))
-                root_causes.append(RootCause(**rc))
-        except Exception:
-            logger.warning("RCAレポートのパースに失敗。LLM出力をそのまま使用。content=%.500s", content, exc_info=True)
-            root_causes = [RootCause(description=content, confidence=0.5)]
-            data = {}
-
-        # 各エージェントの tool_outputs を集約
+    @staticmethod
+    def _collect_agent_tool_outputs(state: AgentState) -> dict[str, list[str]]:
+        """各エージェントの tool_outputs を集約."""
         agent_tool_outputs: dict[str, list[str]] = {}
         for mr in state.get("metrics_results", []):
             if mr.tool_outputs:
@@ -356,6 +386,30 @@ class RCAAgent:
         for kr in state.get("k8s_results", []):
             if kr.tool_outputs:
                 agent_tool_outputs.setdefault("k8s", []).extend(kr.tool_outputs)
+        return agent_tool_outputs
+
+    def _parse_report(self, content: str, state: AgentState) -> RCAReport:
+        """LLM出力からRCAレポートをパース（フォールバック用）."""
+        try:
+            json_str = extract_json(content)
+            try:
+                data = json.loads(json_str)
+            except json.JSONDecodeError:
+                repaired = repair_truncated_json(json_str)
+                data = json.loads(repaired)
+            root_causes = []
+            for rc in data.get("root_causes", []):
+                conf = float(rc.get("confidence", 0.5))
+                if conf > 1.0:
+                    conf = conf / 100.0
+                rc["confidence"] = max(0.0, min(1.0, conf))
+                root_causes.append(RootCause(**rc))
+        except Exception:
+            logger.warning("RCAレポートのパースに失敗。LLM出力をそのまま使用。content=%.500s", content, exc_info=True)
+            root_causes = [RootCause(description=content, confidence=0.5)]
+            data = {}
+
+        agent_tool_outputs = self._collect_agent_tool_outputs(state)
 
         for rc in root_causes:
             details = compute_confidence(rc, state)
