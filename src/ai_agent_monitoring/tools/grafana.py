@@ -298,30 +298,24 @@ class GrafanaMCPTool(BaseMCPTool):
         self,
         datasource_uid: str,
         label_name: str,
-        page_size: int = 500,
     ) -> dict[str, Any]:
-        """Prometheusラベル値を全件取得（ページング、切り詰めなし）."""
-        all_values: list[str] = []
-        page = 1
-        while True:
-            params: dict[str, Any] = {
-                "datasourceUid": datasource_uid,
-                "labelName": label_name,
-                "limit": page_size,
-                "page": page,
-            }
-            result = await self._call_tool_raw("list_prometheus_label_values", params)
-            values = self._extract_names_from_result(result)
-            all_values.extend(values)
-            if len(values) < page_size:
-                break
-            page += 1
+        """Prometheusラベル値を切り詰めなしで取得.
+
+        MCP側は limit のみサポート（page 非対応）のため、大きな limit で1回取得する。
+        """
+        params: dict[str, Any] = {
+            "datasourceUid": datasource_uid,
+            "labelName": label_name,
+            "limit": 10000,
+        }
+        result = await self._call_tool_raw("list_prometheus_label_values", params)
+        values = self._extract_names_from_result(result)
         logger.info(
-            "Grafana: fetched %d prometheus label values for %s (all pages)",
-            len(all_values),
+            "Grafana: fetched %d prometheus label values for %s",
+            len(values),
             label_name,
         )
-        return {"content": [{"type": "text", "text": "\n".join(all_values)}]}
+        return {"content": [{"type": "text", "text": "\n".join(values)}]}
 
     async def list_loki_label_names(
         self,
@@ -360,30 +354,23 @@ class GrafanaMCPTool(BaseMCPTool):
         self,
         datasource_uid: str,
         label_name: str,
-        page_size: int = 500,
     ) -> dict[str, Any]:
-        """Lokiラベル値を全件取得（ページング、切り詰めなし）."""
-        all_values: list[str] = []
-        page = 1
-        while True:
-            params: dict[str, Any] = {
-                "datasourceUid": datasource_uid,
-                "labelName": label_name,
-                "limit": page_size,
-                "page": page,
-            }
-            result = await self._call_tool_raw("list_loki_label_values", params)
-            values = self._extract_names_from_result(result)
-            all_values.extend(values)
-            if len(values) < page_size:
-                break
-            page += 1
+        """Lokiラベル値を切り詰めなしで取得.
+
+        MCP側は limit/page 非対応のため、パラメータなしで1回取得する。
+        """
+        params: dict[str, Any] = {
+            "datasourceUid": datasource_uid,
+            "labelName": label_name,
+        }
+        result = await self._call_tool_raw("list_loki_label_values", params)
+        values = self._extract_names_from_result(result)
         logger.info(
-            "Grafana: fetched %d loki label values for %s (all pages)",
-            len(all_values),
+            "Grafana: fetched %d loki label values for %s",
+            len(values),
             label_name,
         )
-        return {"content": [{"type": "text", "text": "\n".join(all_values)}]}
+        return {"content": [{"type": "text", "text": "\n".join(values)}]}
 
     def _extract_names_from_result(self, result: dict[str, Any]) -> list[str]:
         """MCP応答からメトリクス名/ラベル名リストを抽出."""
