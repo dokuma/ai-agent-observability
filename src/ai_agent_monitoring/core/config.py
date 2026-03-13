@@ -75,9 +75,6 @@ class Settings(BaseSettings):
     # Datasource preferences
     datasource_preferences_path: str = "data/datasource_preferences.json"
 
-    # Report Store
-    report_store_path: str = "data/rca_reports.db"
-
     # Embedding
     embedding_endpoint: str = ""  # 空なら llm_endpoint を使用
     embedding_model: str = "text-embedding-3-small"
@@ -86,15 +83,12 @@ class Settings(BaseSettings):
 
     # Qdrant
     qdrant_url: str = "http://localhost:6333"
-    qdrant_enabled: bool = False
+    qdrant_enabled: bool = True
     qdrant_reports_collection: str = "rca_reports"
     qdrant_checkpoints_collection: str = "checkpoint_outputs"
 
     # Search-First
     search_relevance_threshold: float = 0.3
-
-    # Hybrid Search
-    rrf_k: int = 60
 
     # CORS
     cors_allowed_origins: list[str] = ["http://localhost:3000"]

@@ -9,7 +9,7 @@ from typing import Any
 import httpx
 from openai import APIConnectionError, APIStatusError
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, Filter, PointStruct, VectorParams
+from qdrant_client.models import Direction, Distance, Filter, OrderBy, PointStruct, VectorParams
 
 logger = logging.getLogger(__name__)
 
@@ -203,6 +203,64 @@ class VectorStore:
             ]
 
         return await asyncio.to_thread(_search)
+
+    async def retrieve(self, doc_id: str) -> VectorSearchResult | None:
+        """ポイントIDで1件取得."""
+        point_id = self._to_point_id(doc_id)
+
+        def _retrieve() -> VectorSearchResult | None:
+            try:
+                points = self._client.retrieve(
+                    collection_name=self._collection_name,
+                    ids=[point_id],
+                    with_payload=True,
+                    with_vectors=False,
+                )
+            except Exception:
+                logger.warning("Failed to retrieve point %s", doc_id, exc_info=True)
+                return None
+            if not points:
+                return None
+            p = points[0]
+            return VectorSearchResult(
+                doc_id=(p.payload or {}).get("report_id", str(p.id)),
+                score=0.0,
+                payload=p.payload or {},
+            )
+
+        return await asyncio.to_thread(_retrieve)
+
+    async def scroll(
+        self,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> tuple[list[VectorSearchResult], int]:
+        """ページング付き一覧取得（created_at_ts 降順）."""
+
+        def _scroll() -> tuple[list[VectorSearchResult], int]:
+            total_info = self._client.get_collection(self._collection_name)
+            total = total_info.points_count or 0
+
+            points, _ = self._client.scroll(
+                collection_name=self._collection_name,
+                limit=limit + offset,
+                with_payload=True,
+                with_vectors=False,
+                order_by=OrderBy(key="created_at_ts", direction=Direction.DESC),
+            )
+            # offset 適用
+            paged = points[offset : offset + limit]
+            results = [
+                VectorSearchResult(
+                    doc_id=(p.payload or {}).get("report_id", str(p.id)),
+                    score=0.0,
+                    payload=p.payload or {},
+                )
+                for p in paged
+            ]
+            return results, total
+
+        return await asyncio.to_thread(_scroll)
 
     async def count(self) -> int:
         """コレクション内のポイント数を取得."""

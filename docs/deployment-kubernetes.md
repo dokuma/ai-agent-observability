@@ -347,30 +347,18 @@ kubectl exec -n ai-monitoring deploy/ai-agent-monitoring-agent -- \
 | Service | `<release>-qdrant` | ClusterIP (6333: HTTP, 6334: gRPC, 6335: P2P) |
 | PVC | `qdrant-storage-<release>-qdrant-*` | StatefulSet の volumeClaimTemplate |
 
-Agent Pod は起動時に自動的に:
-1. Qdrant コレクション（`rca_reports`）を作成
-2. SQLite に保存済みのレポートを Qdrant にマイグレーション（差分のみ）
-3. 以後の検索は BM25 + Vector の RRF ハイブリッドで実行
+Agent Pod は起動時に自動的に Qdrant コレクション（`rca_reports`, `checkpoint_outputs`）を作成する。
+RCA レポートと観測データは全て Qdrant に保存・検索される。
 
 ### 縮退運転
 
-Qdrant が停止・未接続の場合でも Agent は正常に動作する:
-
-| 状況 | 動作 |
-|------|------|
-| `qdrant.enabled: false` | BM25 のみで検索（既存動作） |
-| Qdrant Pod が停止中 | ベクトル検索をスキップし BM25 のみで検索 |
-| Embedding API が不通 | レポートの SQLite 保存は成功、ベクトル登録のみスキップ |
+Qdrant が停止・未接続の場合、レポート検索・ナレッジ検索機能は利用不可になるが、
+新規調査の実行は可能。Embedding API が不通の場合、レポートのベクトル登録がスキップされる。
 
 ### 永続化とバックアップ
 
 Qdrant のデータは StatefulSet の PVC に永続化される。
-ベクトルデータは SQLite のレポートから再構築可能なため、
-PVC を失った場合は Agent の再起動で自動マイグレーションが実行される。
-
-バックアップの優先順位:
-1. **SQLite DB** (`/app/data/rca_reports.db`) — 正本。必ずバックアップする
-2. **Qdrant PVC** — オプション。失っても SQLite から再構築可能
+全レポートデータは Qdrant が正本のため、PVC のバックアップを推奨する。
 
 ## Docker Compose (開発環境)
 

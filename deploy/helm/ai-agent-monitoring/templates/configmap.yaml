@@ -47,7 +47,6 @@ data:
   EMBEDDING_DIMENSIONS: {{ .Values.config.embeddingDimensions | quote }}
   SEARCH_RELEVANCE_THRESHOLD: {{ .Values.config.searchRelevanceThreshold | quote }}
   # Data paths
-  REPORT_STORE_PATH: "{{ .Values.agent.persistence.mountPath }}/rca_reports.db"
   DATASOURCE_PREFERENCES_PATH: "{{ .Values.agent.persistence.mountPath }}/datasource_preferences.json"
   # Langfuse
   LANGFUSE_ENABLED: {{ .Values.externalServices.langfuse.enabled | quote }}

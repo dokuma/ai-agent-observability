@@ -165,20 +165,6 @@ class RCAReport(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now)
 
 
-class QueryRecord(BaseModel):
-    """実行されたクエリの記録."""
-
-    query_type: str  # "promql" | "logql" | "k8s"
-    tool_name: str  # "query_prometheus_range", "k8s_list_pods" 等
-    query_text: str  # PromQL式, LogQL式, or K8sリクエスト説明
-    parameters: dict[str, Any] = Field(default_factory=dict)
-    status: str = "executed"  # "executed" | "failed"
-    error_message: str = ""
-    result_summary: str = ""  # 結果の要約（行数、データ有無等）
-    raw_tool_output: str = ""  # ツール実行結果の生テキスト（prometheus_summary等）
-    executed_at: datetime = Field(default_factory=datetime.now)
-
-
 class StoredRCAReport(BaseModel):
     """永続化されたRCAレポート."""
 
@@ -186,3 +172,16 @@ class StoredRCAReport(BaseModel):
     investigation_id: str
     report: RCAReport
     created_at: datetime
+
+    @classmethod
+    def from_qdrant_payload(cls, payload: dict[str, Any]) -> "StoredRCAReport | None":
+        """Qdrant ペイロードから StoredRCAReport を復元."""
+        report_json = payload.get("report_json")
+        if not report_json:
+            return None
+        return cls(
+            id=payload.get("report_id", ""),
+            investigation_id=payload.get("investigation_id", ""),
+            report=RCAReport.model_validate_json(report_json),
+            created_at=datetime.fromtimestamp(payload.get("created_at_ts", 0)),
+        )

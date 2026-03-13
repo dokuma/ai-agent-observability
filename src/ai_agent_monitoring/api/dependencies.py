@@ -18,16 +18,40 @@ from ai_agent_monitoring.agents.knowledge_search_agent import KnowledgeSearchAge
 from ai_agent_monitoring.agents.orchestrator import OrchestratorAgent
 from ai_agent_monitoring.core.config import Settings
 from ai_agent_monitoring.core.datasource import DatasourcePreferenceStore
-from ai_agent_monitoring.core.hybrid_search import HybridSearcher
 from ai_agent_monitoring.core.llm_retry import RateLimitRetryWrapper
 from ai_agent_monitoring.core.models import RCAReport
 from ai_agent_monitoring.core.observation_store import ObservationStore
-from ai_agent_monitoring.core.query_store import QueryStore
-from ai_agent_monitoring.core.report_store import ReportStore
 from ai_agent_monitoring.core.vector_store import VectorStore
 from ai_agent_monitoring.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_searchable_text(report: RCAReport) -> str:
+    """RCAReport からベクトル検索用テキストを構築."""
+    parts: list[str] = []
+    if report.alert:
+        if report.alert.alert_name:
+            parts.append(report.alert.alert_name)
+        if report.alert.summary:
+            parts.append(report.alert.summary)
+    if report.user_query and report.user_query.raw_input:
+        parts.append(report.user_query.raw_input)
+    if report.root_causes:
+        parts.append("\n".join(rc.description for rc in report.root_causes))
+    if report.metrics_summary:
+        parts.append(report.metrics_summary)
+    if report.logs_summary:
+        parts.append(report.logs_summary)
+    if report.k8s_summary:
+        parts.append(report.k8s_summary)
+    if report.recommendations:
+        parts.append("\n".join(report.recommendations))
+    for outputs in report.agent_tool_outputs.values():
+        parts.extend(outputs)
+    if report.search_keywords_en:
+        parts.append(report.search_keywords_en)
+    return " ".join(parts)
 
 
 def _log_emb_connection_error(
@@ -200,12 +224,9 @@ class AppState:
         self.investigations: dict[str, InvestigationRecord] = {}
         self.checkpointer = MemorySaver()
         self.ds_preference_store: DatasourcePreferenceStore | None = None
-        self.report_store: ReportStore | None = None
         self.knowledge_search_agent: KnowledgeSearchAgent | None = None
         self.vector_store: VectorStore | None = None
         self.observation_store: ObservationStore | None = None
-        self.hybrid_searcher: HybridSearcher | None = None
-        self.query_store: QueryStore | None = None
 
     async def initialize(self) -> None:
         """アプリケーション起動時の初期化."""
@@ -259,26 +280,13 @@ class AppState:
         # データソースプリファレンスストア
         self.ds_preference_store = DatasourcePreferenceStore(Path(self.settings.datasource_preferences_path))
 
-        # レポートストア
-        self.report_store = ReportStore(db_path=self.settings.report_store_path)
-        self.report_store.initialize()
-        logger.info("ReportStore initialized (%d reports)", self.report_store.count())
-
-        # クエリ履歴ストア
-        query_store_path = str(Path(self.settings.report_store_path).parent / "query_history.db")
-        self.query_store = QueryStore(db_path=query_store_path)
-        self.query_store.initialize()
-        logger.info("QueryStore initialized (%d records)", self.query_store.count())
-
-        # Qdrant ベクトルストア（qdrant_enabled の場合のみ）
-        if self.settings.qdrant_enabled:
-            await self._init_vector_store()
+        # Qdrant ベクトルストア
+        await self._init_vector_store()
 
         # レポート検索エージェント
         self.knowledge_search_agent = KnowledgeSearchAgent(
             llm=llm,
-            report_store=self.report_store,
-            hybrid_searcher=self.hybrid_searcher,
+            vector_store=self.vector_store,
         )
 
         # Orchestrator（registryを渡してhealthy状態を考慮）
@@ -289,12 +297,11 @@ class AppState:
             stage_update_callback=self.update_investigation_stage,
             ds_preference_store=self.ds_preference_store,
             observation_store=self.observation_store,
-            query_store=self.query_store,
         )
         logger.info("Orchestrator Agent initialized")
 
     async def _init_vector_store(self) -> None:
-        """Qdrant + Embedding + HybridSearcher を初期化."""
+        """Qdrant + Embedding を初期化."""
         from langchain_openai import OpenAIEmbeddings
 
         emb_endpoint = self.settings.embedding_endpoint or self.settings.llm_endpoint
@@ -402,14 +409,6 @@ class AppState:
             )
             self.vector_store = None
 
-        if self.vector_store and self.report_store:
-            self.hybrid_searcher = HybridSearcher(
-                report_store=self.report_store,
-                vector_store=self.vector_store,
-                rrf_k=self.settings.rrf_k,
-            )
-            await self._migrate_reports_to_qdrant()
-
         # Observations 用 VectorStore（同じ embedding、別コレクション）
         obs_vector_store = VectorStore(
             qdrant_url=self.settings.qdrant_url,
@@ -431,54 +430,19 @@ class AppState:
                 e,
             )
 
-    async def _migrate_reports_to_qdrant(self) -> None:
-        """SQLite のレポートを Qdrant に差分マイグレーション."""
-        if not self.vector_store or not self.report_store:
-            return
-        try:
-            qdrant_count = await self.vector_store.count()
-            sqlite_count = self.report_store.count()
-            if qdrant_count >= sqlite_count:
-                logger.info("Qdrant already up to date (%d points)", qdrant_count)
-                return
-
-            logger.info("Migrating reports to Qdrant: sqlite=%d, qdrant=%d", sqlite_count, qdrant_count)
-            reports, _ = self.report_store.list_reports(offset=0, limit=sqlite_count)
-            batch: list[tuple[str, str, dict[str, Any]]] = []
-            batch_size = 50
-            for report in reports:
-                text = self.report_store._extract_searchable_text_from_json(report.report.model_dump_json())
-                metadata = {
-                    "report_id": report.id,
-                    "investigation_id": report.investigation_id,
-                    "trigger_type": report.report.trigger_type.value,
-                    "created_at_ts": report.created_at.timestamp(),
-                }
-                batch.append((report.id, text, metadata))
-                if len(batch) >= batch_size:
-                    await self.vector_store.upsert_batch(batch)
-                    batch = []
-            if batch:
-                await self.vector_store.upsert_batch(batch)
-            logger.info("Migrated %d reports to Qdrant", len(reports))
-        except Exception as e:
-            logger.error(
-                "Failed to migrate reports to Qdrant (error_type=%s): %s",
-                type(e).__name__,
-                e,
-            )
-
     async def _upsert_report_vector(self, report_id: str, inv_id: str, rca_report: RCAReport) -> None:
         """レポートを Qdrant にベクトル保存（失敗時はログのみ）."""
-        if not self.vector_store or not self.report_store:
+        if not self.vector_store:
             return
         try:
-            text = self.report_store._extract_searchable_text_from_json(rca_report.model_dump_json())
+            text = _extract_searchable_text(rca_report)
+            report_json = rca_report.model_dump_json()
             metadata: dict[str, Any] = {
                 "report_id": report_id,
                 "investigation_id": inv_id,
                 "trigger_type": rca_report.trigger_type.value,
                 "created_at_ts": datetime.now().timestamp(),
+                "report_json": report_json,
             }
             await self.vector_store.upsert(report_id, text, metadata)
             logger.info("Report %s upserted to Qdrant", report_id)
@@ -536,11 +500,13 @@ class AppState:
             record.status = "completed"
             record.completed_at = datetime.now()
             record.rca_report = rca_report
-            if rca_report and self.report_store:
+            if rca_report:
                 try:
-                    report_id = self.report_store.save_report(inv_id, rca_report)
-                    logger.info("RCA report saved: %s (investigation: %s)", report_id, inv_id)
+                    from uuid import uuid4
+
+                    report_id = uuid4().hex[:12]
                     await self._upsert_report_vector(report_id, inv_id, rca_report)
+                    logger.info("RCA report saved: %s (investigation: %s)", report_id, inv_id)
                 except Exception:
                     logger.exception("Failed to save RCA report for investigation %s", inv_id)
 

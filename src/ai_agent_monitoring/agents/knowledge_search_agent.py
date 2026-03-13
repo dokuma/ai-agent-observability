@@ -1,16 +1,14 @@
 """ナレッジ検索エージェント — RCAレポートと過去の観測データを統合検索."""
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from ai_agent_monitoring.agents.prompts import KNOWLEDGE_SEARCH_SYSTEM_PROMPT
 from ai_agent_monitoring.api.schemas import ReportSearchResponse, ReportSearchResult
-from ai_agent_monitoring.core.report_store import ReportStore
-
-if TYPE_CHECKING:
-    from ai_agent_monitoring.core.hybrid_search import HybridSearcher
+from ai_agent_monitoring.core.models import StoredRCAReport
+from ai_agent_monitoring.core.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
 
@@ -33,10 +31,9 @@ except ImportError:
 class KnowledgeSearchAgent:
     """過去のRCAレポートと観測データを検索し、LLMで回答を生成するエージェント."""
 
-    def __init__(self, llm: Any, report_store: ReportStore, hybrid_searcher: "HybridSearcher | None" = None) -> None:
+    def __init__(self, llm: Any, vector_store: VectorStore | None = None) -> None:
         self._llm = llm
-        self._report_store = report_store
-        self._hybrid_searcher = hybrid_searcher
+        self._vector_store = vector_store
 
     @_observe(name="knowledge_search_translate_keywords", as_type="span")
     async def _translate_query_to_keywords(self, query: str) -> str:
@@ -59,31 +56,41 @@ class KnowledgeSearchAgent:
             logger.warning("Failed to translate query to English keywords")
             return ""
 
+    async def _count_reports(self) -> int:
+        """ベクトルストアのレポート数を取得."""
+        if not self._vector_store:
+            return 0
+        try:
+            return await self._vector_store.count()
+        except Exception:
+            return 0
+
     @_observe(name="knowledge_search_and_answer", as_type="span")
     async def search_and_answer(
         self, query: str, top_k: int = 5, observation_context: str = "", query_history: str = ""
     ) -> ReportSearchResponse:
         """クエリに基づいてRCAレポートと過去の観測データを検索し、LLMで回答を生成する."""
-        total = self._report_store.count()
+        total = await self._count_reports()
         logger.info("Knowledge search started: query=%s, total_reports=%d", query[:100], total)
+
+        if not self._vector_store:
+            return ReportSearchResponse(
+                answer="ベクトルストアが初期化されていません。",
+                results=[],
+                total_reports=0,
+            )
 
         en_query = await self._translate_query_to_keywords(query)
         combined_query = f"{en_query} {query}".strip() if en_query else query
         logger.info("Translated keywords: %s", en_query[:200] if en_query else "(empty)")
 
-        if self._hybrid_searcher:
-            results = await self._hybrid_searcher.search(combined_query, top_k=top_k)
-        else:
-            results = self._report_store.search(combined_query, top_k=top_k)
-        logger.info("Search returned %d results", len(results))
+        vector_results = await self._vector_store.search(combined_query, top_k=top_k)
+        logger.info("Search returned %d results", len(vector_results))
 
-        if not results and en_query:
-            if self._hybrid_searcher:
-                results = await self._hybrid_searcher.search(query, top_k=top_k)
-            else:
-                results = self._report_store.search(query, top_k=top_k)
+        if not vector_results and en_query:
+            vector_results = await self._vector_store.search(query, top_k=top_k)
 
-        if not results:
+        if not vector_results:
             return ReportSearchResponse(
                 answer="該当するRCAレポートが見つかりませんでした。",
                 results=[],
@@ -93,8 +100,11 @@ class KnowledgeSearchAgent:
         # Build context from search results
         context_parts: list[str] = []
         search_results: list[ReportSearchResult] = []
-        for i, (report, score, highlights) in enumerate(results, 1):
-            rca = report.report
+        for i, vr in enumerate(vector_results, 1):
+            stored = StoredRCAReport.from_qdrant_payload(vr.payload)
+            if not stored:
+                continue
+            rca = stored.report
             root_causes_summary = "; ".join(rc.description for rc in rca.root_causes[:3]) if rca.root_causes else "不明"
 
             # agent_tool_outputs のコンテキスト（各ソース先頭1500文字）
@@ -109,8 +119,8 @@ class KnowledgeSearchAgent:
                     tool_output_context = "\nツール実行結果:\n" + "\n".join(tool_parts) + "\n"
 
             context_parts.append(
-                f"--- レポート {i} (ID: {report.id}, スコア: {score:.2f}) ---\n"
-                f"作成日時: {report.created_at.isoformat()}\n"
+                f"--- レポート {i} (ID: {stored.id}, スコア: {vr.score:.2f}) ---\n"
+                f"作成日時: {stored.created_at.isoformat()}\n"
                 f"根本原因: {root_causes_summary}\n"
                 f"メトリクス: {rca.metrics_summary or 'なし'}\n"
                 f"ログ: {rca.logs_summary or 'なし'}\n"
@@ -128,15 +138,22 @@ class KnowledgeSearchAgent:
 
             search_results.append(
                 ReportSearchResult(
-                    report_id=report.id,
-                    investigation_id=report.investigation_id,
-                    score=score,
+                    report_id=stored.id,
+                    investigation_id=stored.investigation_id,
+                    score=vr.score,
                     trigger_type=trigger_type,
                     alert_name=alert_name,
                     root_causes_summary=root_causes_summary,
-                    created_at=report.created_at,
-                    highlights=highlights,
+                    created_at=stored.created_at,
+                    highlights=[],
                 )
+            )
+
+        if not search_results:
+            return ReportSearchResponse(
+                answer="該当するRCAレポートが見つかりませんでした。",
+                results=[],
+                total_reports=total,
             )
 
         context = "\n".join(context_parts)
@@ -161,7 +178,6 @@ class KnowledgeSearchAgent:
         raw_content = response.content if hasattr(response, "content") else str(response)
 
         # LLMプロバイダによっては content がリスト形式のコンテンツブロックで返る場合がある
-        # 例: [{"type": "text", "text": "..."}]
         if isinstance(raw_content, list):
             text_parts = []
             for block in raw_content:

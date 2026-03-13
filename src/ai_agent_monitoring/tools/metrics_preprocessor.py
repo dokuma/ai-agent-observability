@@ -319,7 +319,7 @@ def _format_prometheus_summary(
 def summarize_prometheus_result(text: str) -> str | None:
     """prometheus_summary JSONから簡潔な統計要約テキストを生成.
 
-    QueryStore や ObservationStore で圧縮後の時系列データを保存する際に使用。
+    ObservationStore で圧縮後の時系列データを保存する際に使用。
     prometheus_summary でなければ None を返す。
     """
     try:

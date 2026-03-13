@@ -57,7 +57,7 @@ agent:
   #   - name: NO_PROXY
   #     value: "localhost,127.0.0.1,.svc.cluster.local"
   extraEnv: []
-  # 永続ボリューム（ReportStore DB, Datasource Preferences 等）
+  # 永続ボリューム（Datasource Preferences 等）
   persistence:
     enabled: true
     # storageClass: ""  # 空の場合はデフォルトの StorageClass を使用
@@ -320,11 +320,11 @@ config:
   mcpVerifySsl: "true"
   mcpCaBundle: ""
   # Qdrant / Embedding
-  qdrantEnabled: "false"
+  qdrantEnabled: "true"
   embeddingEndpoint: ""  # 空の場合は LLM_ENDPOINT を使用
   embeddingModel: "text-embedding-3-small"
   embeddingDimensions: "0"
-  # Search-First: レポート検索のスコア閾値（BM25スコアがこの値を超えれば検索結果で回答）
+  # Search-First: レポート検索のスコア閾値（ベクトル検索スコアがこの値を超えれば検索結果で回答）
   searchRelevanceThreshold: "0.3"
 
 # ===========================================================

@@ -25,7 +25,7 @@ from ai_agent_monitoring.api.schemas import (
     UserQueryRequest,
     UserQueryResponse,
 )
-from ai_agent_monitoring.core.models import Alert, Severity, TriggerType, UserQuery
+from ai_agent_monitoring.core.models import Alert, Severity, StoredRCAReport, TriggerType, UserQuery
 from ai_agent_monitoring.core.tracing import build_runnable_config
 
 logger = logging.getLogger(__name__)
@@ -203,57 +203,26 @@ async def submit_query(
     # ObservationStore 検索（レポート検索と並行して実行）
     obs_task = asyncio.create_task(_search_observation_store(request.query))
 
-    if app_state.report_store and app_state.report_store.count() > 0 and app_state.knowledge_search_agent:
-        # BM25 + ベクトル検索で関連レポートを検索
+    if app_state.vector_store and app_state.knowledge_search_agent:
+        # ベクトル検索で関連レポートを検索
         try:
-            is_hybrid = False
-            search_results = app_state.report_store.search(request.query, top_k=5)
-
-            # ハイブリッドサーチが利用可能ならそちらを使用
-            if app_state.hybrid_searcher:
-                search_results = await app_state.hybrid_searcher.search(request.query, top_k=5)
-                is_hybrid = True
+            search_results = await app_state.vector_store.search(request.query, top_k=5)
 
             # ObservationStore の結果を取得
             observation_context = await obs_task
 
-            # 検索結果のスコアが閾値を超えているか判定
-            # ハイブリッド検索(RRF)はスコアスケールが異なる（最大~0.033）ため、
-            # 結果が存在すればスコア > 0 で十分と判断する
-            if is_hybrid:
-                has_relevant_results = bool(search_results) and any(score > 0 for _, score, _ in search_results)
-            else:
-                has_relevant_results = any(score >= threshold for _, score, _ in search_results)
+            has_relevant_results = bool(search_results) and any(r.score > 0 for r in search_results)
 
             if has_relevant_results and search_results:
                 # ---- Step 3: バックグラウンドでレポート検索 → 不十分なら調査へ自動移行 ----
                 logger.info(
-                    "Search-first: relevant results found "
-                    "(top_score=%.3f, threshold=%.3f, hybrid=%s), routing to report_search",
-                    search_results[0][1] if search_results else 0,
+                    "Search-first: relevant results found (top_score=%.3f, threshold=%.3f), routing to report_search",
+                    search_results[0].score if search_results else 0,
                     threshold,
-                    is_hybrid,
                 )
                 inv_id = app_state.create_investigation("report_search")
                 app_state.update_investigation_stage(inv_id, "レポート検索中")
                 is_retrospective = _is_retrospective_query(request.query)
-                # 回顧的クエリの場合、QueryStore からクエリ履歴を検索して追加コンテキストとして渡す
-                query_history = ""
-                if is_retrospective and app_state.query_store:
-                    try:
-                        qh_results = app_state.query_store.search(request.query, top_k=20)
-                        if qh_results:
-                            qh_lines: list[str] = []
-                            for qr in qh_results:
-                                status_mark = "\u2713" if qr["status"] == "executed" else "\u2717"
-                                line = f"- [{qr['query_type']}] {status_mark} {qr['query_text']}"
-                                if qr["status"] == "failed" and qr["error_message"]:
-                                    line += f" \u2192 error: {qr['error_message']}"
-                                line += f" (inv: {qr['investigation_id']}, {qr['executed_at']})"
-                                qh_lines.append(line)
-                            query_history = "\n".join(qh_lines)
-                    except Exception:
-                        logger.warning("QueryStore search failed for retrospective query", exc_info=True)
 
                 background_tasks.add_task(
                     _run_report_search,
@@ -262,7 +231,6 @@ async def submit_query(
                     report_search_timeout,
                     observation_context,
                     is_retrospective,
-                    query_history,
                 )
                 return UserQueryResponse(
                     investigation_id=inv_id,
@@ -271,13 +239,11 @@ async def submit_query(
                     routed_to="report_search",
                 )
             else:
-                top_score = search_results[0][1] if search_results else 0
+                top_score = search_results[0].score if search_results else 0
                 logger.info(
-                    "Search-first: no relevant results "
-                    "(top_score=%.3f, threshold=%.3f, hybrid=%s), starting investigation",
+                    "Search-first: no relevant results (top_score=%.3f, threshold=%.3f), starting investigation",
                     top_score,
                     threshold,
-                    is_hybrid,
                 )
                 search_miss_message = "過去のレポートに関連する情報が見つからなかったため、新しく調査を開始します。"
         except Exception:
@@ -548,7 +514,6 @@ async def _run_report_search(
     timeout: int,
     observation_context: str = "",
     is_retrospective: bool = False,
-    query_history: str = "",
 ) -> None:
     """レポート検索をバックグラウンドで実行し、結果を InvestigationRecord に保存.
 
@@ -566,7 +531,6 @@ async def _run_report_search(
             app_state.knowledge_search_agent.search_and_answer(
                 query=query,
                 observation_context=observation_context,
-                query_history=query_history,
             ),
             timeout=timeout,
         )
@@ -906,11 +870,16 @@ async def search_reports(request: ReportSearchRequest) -> ReportSearchResponse:
 @router.get("/reports", response_model=ReportListResponse)
 async def list_reports(offset: int = 0, limit: int = 20) -> ReportListResponse:
     """保存済みRCAレポートの一覧を取得（ページング対応）."""
-    if not app_state.report_store:
-        raise HTTPException(status_code=503, detail="Report store not initialized")
-    reports, total = app_state.report_store.list_reports(offset=offset, limit=limit)
+    if not app_state.vector_store:
+        raise HTTPException(status_code=503, detail="Vector store not initialized")
+    results, total = await app_state.vector_store.scroll(limit=limit, offset=offset)
+    reports = []
+    for r in results:
+        stored = StoredRCAReport.from_qdrant_payload(r.payload)
+        if stored:
+            reports.append(stored.model_dump(mode="json"))
     return ReportListResponse(
-        reports=[r.model_dump(mode="json") for r in reports],
+        reports=reports,
         total=total,
         offset=offset,
         limit=limit,
@@ -920,9 +889,12 @@ async def list_reports(offset: int = 0, limit: int = 20) -> ReportListResponse:
 @router.get("/reports/{report_id}")
 async def get_report(report_id: str) -> dict[str, Any]:
     """個別のRCAレポートを取得."""
-    if not app_state.report_store:
-        raise HTTPException(status_code=503, detail="Report store not initialized")
-    report = app_state.report_store.get_report(report_id)
-    if not report:
+    if not app_state.vector_store:
+        raise HTTPException(status_code=503, detail="Vector store not initialized")
+    result = await app_state.vector_store.retrieve(report_id)
+    if not result:
         raise HTTPException(status_code=404, detail="Report not found")
-    return report.model_dump(mode="json")
+    stored = StoredRCAReport.from_qdrant_payload(result.payload)
+    if not stored:
+        raise HTTPException(status_code=404, detail="Report not found")
+    return stored.model_dump(mode="json")

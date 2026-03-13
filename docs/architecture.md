@@ -34,16 +34,11 @@ graph TD
     end
 
     subgraph Storage["ナレッジストア"]
-        qdrant["Qdrant<br/>ベクトル検索"]
-        sqlite["SQLite<br/>クエリ履歴"]
-        report_store["ReportStore<br/>RCAレポート"]
+        qdrant["Qdrant<br/>ベクトル検索 + レポート保存"]
     end
 
-    rca -->|レポート保存| report_store
-    rca -->|観測データ保存| qdrant
-    rca -->|クエリ履歴保存| sqlite
+    rca -->|レポート・観測データ保存| qdrant
     knowledge -->|検索| qdrant
-    knowledge -->|検索| report_store
 
     subgraph MCP["MCP Servers (HTTP/SSE)"]
         prom_mcp["Prometheus MCP :9091"]
@@ -80,7 +75,7 @@ graph TD
 ユーザクエリの受付時、まず過去のナレッジを検索してから調査を判断する:
 
 1. **retry パターン検出** — 「再調査」「やり直し」等は既存調査の継続・再実行にルーティング
-2. **レポート検索** — ReportStore (BM25) + Qdrant (ベクトル) のハイブリッド検索で関連レポートを探す
+2. **レポート検索** — Qdrant ベクトル検索で関連レポートを探す
 3. **スコア閾値判定** — 関連レポートのスコアが閾値を超えれば KnowledgeSearchAgent が回答を生成
 4. **自動調査フォールバック** — 回答に `[NEEDS_INVESTIGATION]` マーカーが含まれる場合、部分回答を保持しつつ自動的に新規調査を開始
 5. **新規調査** — 関連レポートがない場合は Orchestrator Agent による調査を開始
@@ -105,13 +100,13 @@ graph LR
 ```
 
 1. **discover_environment** — Grafana MCP 経由でデータソース一覧・ダッシュボード・メトリクス/ラベル情報を取得し、環境コンテキストを構築。データソースの自動選択とプリファレンス管理を行う
-2. **analyze_input** — アラートまたはユーザクエリの内容を LLM が分析。ObservationStore から過去の類似観測データ、QueryStore からクエリ履歴を取得し、分析のコンテキストに含める
+2. **analyze_input** — アラートまたはユーザクエリの内容を LLM が分析。ObservationStore から過去の類似観測データを取得し、分析のコンテキストに含める
 3. **plan_investigation** — PromQL / LogQL クエリと対象インスタンスを含む調査計画を策定 (LLM Structured Output)
 4. **validate_queries** — 生成されたクエリを QueryValidator でバリデーション。Query RAG で Few-shot 例を参照し、構文エラーを事前に検出・修正
 5. **resolve_time_range** — 時間範囲の確定 (Alert 時刻から自動推定 / クエリテキストから解析 / デフォルト値)
 6. **investigate_metrics** / **investigate_logs** / **investigate_kubernetes** — 並列に MCP 経由でデータ取得・分析 (ReAct ループ)
 7. **evaluate_results** — 結果が十分か判定。不十分なら再計画 (最大 `max_iterations` 回)
-8. **generate_rca** — 根本原因分析レポートを生成。完了後、ObservationStore にエージェント観測データを保存、QueryStore にクエリ実行履歴を保存
+8. **generate_rca** — 根本原因分析レポートを生成。完了後、ObservationStore にエージェント観測データを保存、Qdrant にレポートを保存
 
 ## ディレクトリ構成
 
@@ -137,11 +132,8 @@ ai-agent-observability/
 │   │   ├── state.py          # AgentState (LangGraph TypedDict)
 │   │   ├── tracing.py        # Langfuse トレーシング
 │   │   ├── renderer.py       # レポートレンダラー
-│   │   ├── report_store.py   # RCA レポートストア (BM25 検索)
 │   │   ├── observation_store.py  # 観測データストア (Qdrant ベクトル検索)
-│   │   ├── query_store.py    # クエリ実行履歴 (SQLite + BM25)
-│   │   ├── vector_store.py   # ベクトルストア基盤 (Qdrant)
-│   │   ├── hybrid_search.py  # ハイブリッド検索 (BM25 + ベクトル, RRF)
+│   │   ├── vector_store.py   # ベクトルストア基盤 (Qdrant, レポート保存・検索)
 │   │   ├── datasource.py     # データソース自動選択 + プリファレンス管理
 │   │   ├── json_repair.py    # LLM 出力の JSON 修復
 │   │   ├── llm_retry.py      # LLM リトライ
@@ -183,9 +175,8 @@ ai-agent-observability/
 | ログ | Loki, Promtail |
 | 可視化 | Grafana |
 | MCP サーバ | prometheus-mcp-server, loki-mcp, grafana-mcp, kubernetes-mcp-server |
-| ベクトル検索 | Qdrant (観測データ・レポート検索) |
-| テキスト検索 | BM25 (レポート・クエリ履歴), RRF ハイブリッド検索 |
-| クエリ履歴 | SQLite |
+| ベクトル検索 | Qdrant (RCA レポート・観測データの保存・検索) |
+| テキスト検索 | BM25 (クエリ Few-shot RAG) |
 | トレーシング | Langfuse (self-hosted) |
 | 型検査 / Lint | mypy (strict), Ruff |
 | テスト | pytest, pytest-asyncio |

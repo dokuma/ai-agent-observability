@@ -136,11 +136,10 @@ class TestUserQuery:
 
     def test_query_routed_to_report_search(self, client):
         """レポートがあり検索スコアが閾値以上の場合、report_search にルーティング（バックグラウンド）."""
-        mock_store = MagicMock()
-        mock_store.count.return_value = 3
-        # search が閾値以上のスコアを返す
-        mock_report = MagicMock()
-        mock_store.search.return_value = [(mock_report, 0.5, ["highlight"])]
+        mock_result = MagicMock()
+        mock_result.score = 0.5
+        mock_store = AsyncMock()
+        mock_store.search = AsyncMock(return_value=[mock_result])
 
         mock_search_agent = AsyncMock()
         mock_search_agent.search_and_answer.return_value = ReportSearchResponse(
@@ -149,9 +148,8 @@ class TestUserQuery:
             total_reports=3,
         )
 
-        app_state.report_store = mock_store
+        app_state.vector_store = mock_store
         app_state.knowledge_search_agent = mock_search_agent
-        app_state.hybrid_searcher = None
 
         response = client.post(
             "/api/v1/query",
@@ -164,20 +162,18 @@ class TestUserQuery:
         assert data["status"] == "running"
 
         # cleanup
-        app_state.report_store = None
+        app_state.vector_store = None
         app_state.knowledge_search_agent = None
 
     def test_query_routed_to_investigation_low_score(self, client):
         """検索スコアが閾値未満の場合、新規調査を開始."""
-        mock_store = MagicMock()
-        mock_store.count.return_value = 3
-        # search が閾値未満のスコアを返す
-        mock_report = MagicMock()
-        mock_store.search.return_value = [(mock_report, 0.1, [])]
+        mock_result = MagicMock()
+        mock_result.score = 0.0  # score == 0 → not relevant
+        mock_store = AsyncMock()
+        mock_store.search = AsyncMock(return_value=[mock_result])
 
-        app_state.report_store = mock_store
+        app_state.vector_store = mock_store
         app_state.knowledge_search_agent = MagicMock()
-        app_state.hybrid_searcher = None
 
         app_state.orchestrator = MagicMock()
         compiled = MagicMock()
@@ -197,15 +193,15 @@ class TestUserQuery:
         # 検索不一致メッセージが含まれる
         assert "見つからなかった" in data["message"]
 
-        app_state.report_store = None
+        app_state.vector_store = None
         app_state.knowledge_search_agent = None
 
     def test_report_search_needs_investigation_starts_followup(self, client):
         """report_search が [NEEDS_INVESTIGATION] を返した場合、自動的にフォローアップ調査を開始."""
-        mock_store = MagicMock()
-        mock_store.count.return_value = 3
-        mock_report = MagicMock()
-        mock_store.search.return_value = [(mock_report, 0.9, ["highlight"])]
+        mock_result = MagicMock()
+        mock_result.score = 0.9
+        mock_store = AsyncMock()
+        mock_store.search = AsyncMock(return_value=[mock_result])
 
         mock_search_agent = AsyncMock()
         mock_search_agent.search_and_answer.return_value = ReportSearchResponse(
@@ -214,9 +210,8 @@ class TestUserQuery:
             total_reports=1,
         )
 
-        app_state.report_store = mock_store
+        app_state.vector_store = mock_store
         app_state.knowledge_search_agent = mock_search_agent
-        app_state.hybrid_searcher = None
 
         # フォローアップ調査用のオーケストレータをセットアップ
         app_state.orchestrator = MagicMock()
@@ -234,30 +229,25 @@ class TestUserQuery:
         assert data["routed_to"] == "report_search"
         assert data["status"] == "running"
 
-        app_state.report_store = None
+        app_state.vector_store = None
         app_state.knowledge_search_agent = None
 
-    def test_query_hybrid_search_routes_to_report_search(self, client):
-        """ハイブリッド検索(RRF)でスコアが低くても結果があれば report_search にルーティング."""
-        mock_store = MagicMock()
-        mock_store.count.return_value = 3
-        mock_store.search.return_value = []  # BM25は使われない
-
-        mock_hybrid = AsyncMock()
-        mock_report = MagicMock()
-        # RRFスコアは0.033程度だが結果がある
-        mock_hybrid.search.return_value = [(mock_report, 0.033, ["highlight"])]
+    def test_query_vector_search_routes_to_report_search(self, client):
+        """ベクトル検索でスコアが低くても結果があれば report_search にルーティング."""
+        mock_result = MagicMock()
+        mock_result.score = 0.033
+        mock_store = AsyncMock()
+        mock_store.search = AsyncMock(return_value=[mock_result])
 
         mock_search_agent = AsyncMock()
         mock_search_agent.search_and_answer.return_value = ReportSearchResponse(
-            answer="RRF検索結果から回答します。",
+            answer="検索結果から回答します。",
             results=[],
             total_reports=3,
         )
 
-        app_state.report_store = mock_store
+        app_state.vector_store = mock_store
         app_state.knowledge_search_agent = mock_search_agent
-        app_state.hybrid_searcher = mock_hybrid
 
         response = client.post(
             "/api/v1/query",
@@ -268,14 +258,12 @@ class TestUserQuery:
         assert data["routed_to"] == "report_search"
         assert data["status"] == "running"
 
-        app_state.report_store = None
+        app_state.vector_store = None
         app_state.knowledge_search_agent = None
-        app_state.hybrid_searcher = None
 
     def test_query_routed_to_investigation_no_reports(self, client):
-        """レポートがない場合、常に新規調査を開始."""
-        app_state.report_store = MagicMock()
-        app_state.report_store.count.return_value = 0
+        """vector_store が None の場合、常に新規調査を開始."""
+        app_state.vector_store = None
 
         app_state.orchestrator = MagicMock()
         compiled = MagicMock()
@@ -290,8 +278,6 @@ class TestUserQuery:
         data = response.json()
         assert data["routed_to"] == "investigation"
         assert data["status"] == "running"
-
-        app_state.report_store = None
 
     def test_query_empty(self, client):
         response = client.post(
@@ -353,10 +339,10 @@ class TestUserQuery:
 
     def test_query_empty_search_answer_fallback(self, client):
         """report_search にルーティングされる（バックグラウンドで空回答フォールバック処理）."""
-        mock_store = MagicMock()
-        mock_store.count.return_value = 1
-        mock_report = MagicMock()
-        mock_store.search.return_value = [(mock_report, 0.5, [])]
+        mock_result = MagicMock()
+        mock_result.score = 0.5
+        mock_store = AsyncMock()
+        mock_store.search = AsyncMock(return_value=[mock_result])
 
         mock_search_agent = AsyncMock()
         mock_search_agent.search_and_answer.return_value = ReportSearchResponse(
@@ -365,9 +351,8 @@ class TestUserQuery:
             total_reports=1,
         )
 
-        app_state.report_store = mock_store
+        app_state.vector_store = mock_store
         app_state.knowledge_search_agent = mock_search_agent
-        app_state.hybrid_searcher = None
 
         response = client.post(
             "/api/v1/query",
@@ -379,7 +364,7 @@ class TestUserQuery:
         # バックグラウンドタスクなので status=running で返る
         assert data["status"] == "running"
 
-        app_state.report_store = None
+        app_state.vector_store = None
         app_state.knowledge_search_agent = None
 
 
@@ -631,14 +616,14 @@ class TestReportEndpoints:
     """RCAレポート検索・一覧エンドポイントのテスト."""
 
     def test_reports_list_not_initialized(self, client):
-        app_state.report_store = None
+        app_state.vector_store = None
         response = client.get("/api/v1/reports")
         assert response.status_code == 503
 
     def test_reports_list_empty(self, client):
-        mock_store = MagicMock()
-        mock_store.list_reports.return_value = ([], 0)
-        app_state.report_store = mock_store
+        mock_store = AsyncMock()
+        mock_store.scroll = AsyncMock(return_value=([], 0))
+        app_state.vector_store = mock_store
 
         response = client.get("/api/v1/reports")
         assert response.status_code == 200
@@ -674,9 +659,9 @@ class TestReportEndpoints:
         assert data["answer"] == "テスト回答"
 
     def test_reports_get_not_found(self, client):
-        mock_store = MagicMock()
-        mock_store.get_report.return_value = None
-        app_state.report_store = mock_store
+        mock_store = AsyncMock()
+        mock_store.retrieve = AsyncMock(return_value=None)
+        app_state.vector_store = mock_store
 
         response = client.get("/api/v1/reports/nonexistent")
         assert response.status_code == 404
@@ -694,17 +679,15 @@ class TestReportSearchTimeout:
 
     def test_report_search_timeout_returns_running(self, client):
         """report_search が遅い場合でも即座に running を返す（バックグラウンド）."""
-        mock_store = MagicMock()
-        mock_store.count.return_value = 3
-        # 閾値以上のスコアを返す
-        mock_report = MagicMock()
-        mock_store.search.return_value = [(mock_report, 0.5, [])]
+        mock_result = MagicMock()
+        mock_result.score = 0.5
+        mock_store = AsyncMock()
+        mock_store.search = AsyncMock(return_value=[mock_result])
 
         mock_search_agent = AsyncMock()
 
-        app_state.report_store = mock_store
+        app_state.vector_store = mock_store
         app_state.knowledge_search_agent = mock_search_agent
-        app_state.hybrid_searcher = None
 
         response = client.post(
             "/api/v1/query",
@@ -717,7 +700,7 @@ class TestReportSearchTimeout:
         assert data["status"] == "running"
 
         # cleanup
-        app_state.report_store = None
+        app_state.vector_store = None
         app_state.knowledge_search_agent = None
 
 
@@ -731,7 +714,7 @@ class TestSecondQueryAfterReport:
         compiled = MagicMock()
         compiled.ainvoke = AsyncMock(return_value={"rca_report": None})
         app_state.orchestrator.compile.return_value = compiled
-        app_state.report_store = None  # レポートストアなし → report_search スキップ
+        app_state.vector_store = None  # レポートストアなし → report_search スキップ
 
         resp1 = client.post(
             "/api/v1/query",
@@ -772,7 +755,7 @@ class TestSecondQueryAfterReport:
         compiled = MagicMock()
         compiled.ainvoke = AsyncMock(return_value={"rca_report": None})
         app_state.orchestrator.compile.return_value = compiled
-        app_state.report_store = None
+        app_state.vector_store = None
 
         resp1 = client.post(
             "/api/v1/query",
@@ -789,11 +772,10 @@ class TestSecondQueryAfterReport:
         asyncio.get_event_loop().run_until_complete(app_state.complete_investigation(inv_id_1, rca_report=report))
 
         # --- 2回目: report_search でバックグラウンド実行 ---
-        mock_store = MagicMock()
-        mock_store.count.return_value = 1
-        # 閾値以上のスコアを返す
-        mock_report_obj = MagicMock()
-        mock_store.search.return_value = [(mock_report_obj, 0.5, [])]
+        mock_vs = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.score = 0.5
+        mock_vs.search = AsyncMock(return_value=[mock_result])
 
         mock_search_agent = AsyncMock()
         mock_search_agent.search_and_answer.return_value = ReportSearchResponse(
@@ -801,9 +783,8 @@ class TestSecondQueryAfterReport:
             results=[],
             total_reports=1,
         )
-        app_state.report_store = mock_store
+        app_state.vector_store = mock_vs
         app_state.knowledge_search_agent = mock_search_agent
-        app_state.hybrid_searcher = None
 
         resp2 = client.post(
             "/api/v1/query",
@@ -816,7 +797,7 @@ class TestSecondQueryAfterReport:
         assert data2["status"] == "running"
 
         # cleanup
-        app_state.report_store = None
+        app_state.vector_store = None
         app_state.knowledge_search_agent = None
 
 
@@ -1038,10 +1019,10 @@ class TestRetrospectiveQuery:
 
     def test_retrospective_query_suppresses_followup(self, client):
         """回顧的クエリの場合、[NEEDS_INVESTIGATION] による自動フォローアップが抑制される."""
-        mock_store = MagicMock()
-        mock_store.count.return_value = 3
-        mock_report = MagicMock()
-        mock_store.search.return_value = [(mock_report, 0.5, ["highlight"])]
+        mock_vs = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.score = 0.5
+        mock_vs.search = AsyncMock(return_value=[mock_result])
 
         mock_search_agent = AsyncMock()
         mock_search_agent.search_and_answer.return_value = ReportSearchResponse(
@@ -1050,10 +1031,8 @@ class TestRetrospectiveQuery:
             total_reports=3,
         )
 
-        app_state.report_store = mock_store
+        app_state.vector_store = mock_vs
         app_state.knowledge_search_agent = mock_search_agent
-        app_state.hybrid_searcher = None
-        app_state.query_store = None
 
         response = client.post(
             "/api/v1/query",
@@ -1064,5 +1043,5 @@ class TestRetrospectiveQuery:
         assert data["routed_to"] == "report_search"
         assert data["status"] == "running"
 
-        app_state.report_store = None
+        app_state.vector_store = None
         app_state.knowledge_search_agent = None
