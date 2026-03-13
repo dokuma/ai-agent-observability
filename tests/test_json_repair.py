@@ -47,6 +47,37 @@ class TestExtractJson:
         result = extract_json(text)
         assert json.loads(result) == {"root_causes": []}
 
+    def test_embedded_code_block_in_json_string(self):
+        """JSON値内に ```promql ``` コードブロックが含まれる場合."""
+        text = (
+            "```json\n"
+            "{\n"
+            '  "root_causes": [{"description": "CPU高負荷", "confidence": 0.9, "evidence": ["spike"]}],\n'
+            '  "metrics_summary": "CPU分析:\\n```promql\\nrate(cpu[5m])\\n```\\nmax=95%",\n'
+            '  "recommendations": ["スケールアウト"]\n'
+            "}\n"
+            "```"
+        )
+        result = extract_json(text)
+        parsed = json.loads(result)
+        assert parsed["root_causes"][0]["description"] == "CPU高負荷"
+        assert "```promql" in parsed["metrics_summary"]
+
+    def test_multiple_embedded_code_blocks(self):
+        """JSON値内に複数のコードブロックが含まれる場合."""
+        text = (
+            "```json\n"
+            "{\n"
+            '  "metrics_summary": "```promql\\nrate(cpu[5m])\\n```\\nand\\n```logql\\n{app=\\"x\\"}\\n```",\n'
+            '  "root_causes": []\n'
+            "}\n"
+            "```"
+        )
+        result = extract_json(text)
+        parsed = json.loads(result)
+        assert "```promql" in parsed["metrics_summary"]
+        assert "```logql" in parsed["metrics_summary"]
+
 
 class TestRepairTruncatedJson:
     def test_unclosed_object(self):

@@ -61,6 +61,48 @@ def strip_json_comments(text: str) -> str:
     return "".join(result)
 
 
+def _find_closing_fence(text: str, start: int) -> int | None:
+    """コードフェンス ``` の正しい閉じ位置を探す.
+
+    JSON値の中にエスケープされた ``` が含まれる場合（例: summaryフィールド内の
+    ```promql ... ``` コードブロック）を考慮し、行頭の ``` のみを閉じフェンスとみなす。
+    JSON文字列リテラル内の ``` は無視する。
+    """
+    pos = start
+    while pos < len(text):
+        idx = text.find("```", pos)
+        if idx == -1:
+            return None
+
+        # JSON文字列リテラル内かどうかを判定:
+        # start から idx までの間で未閉じの " があれば文字列内
+        in_string = False
+        for i in range(start, idx):
+            ch = text[i]
+            if ch == "\\" and in_string:
+                continue
+            if i > 0 and text[i - 1] == "\\":
+                continue
+            if ch == '"':
+                in_string = not in_string
+
+        if in_string:
+            # 文字列リテラル内の ``` → スキップ
+            pos = idx + 3
+            continue
+
+        # 行頭の ``` を閉じフェンスとみなす
+        line_start = text.rfind("\n", start, idx)
+        prefix = text[line_start + 1 : idx] if line_start >= 0 else text[start:idx] if idx == start else text[:idx]
+        # 行頭（先頭空白のみ）の場合のみ閉じフェンス
+        if prefix.strip() == "":
+            return idx
+
+        pos = idx + 3
+
+    return None
+
+
 def extract_json(text: str) -> str:
     """テキストからJSON部分を抽出.
 
@@ -73,12 +115,13 @@ def extract_json(text: str) -> str:
     # ```json ... ``` 形式を優先
     if "```json" in text:
         start = text.index("```json") + 7
-        try:
-            end = text.index("```", start)
+        # JSON内に埋め込まれた ``` (PromQL等のコードブロック) を考慮し、
+        # 有効なJSONとしてパース可能な最長の範囲を探す
+        end = _find_closing_fence(text, start)
+        if end is not None:
             return text[start:end].strip()
-        except ValueError:
-            # 閉じ ``` がない（出力切り詰め）→ 残り全体を返す
-            return text[start:].strip()
+        # 閉じ ``` がない（出力切り詰め）→ 残り全体を返す
+        return text[start:].strip()
 
     # ``` ... ``` 形式（言語指定なし）
     if "```" in text:
@@ -86,10 +129,10 @@ def extract_json(text: str) -> str:
         # 改行をスキップ
         while start < len(text) and text[start] in "\n\r":
             start += 1
-        try:
-            end = text.index("```", start)
+        end = _find_closing_fence(text, start)
+        if end is not None:
             candidate = text[start:end].strip()
-        except ValueError:
+        else:
             candidate = text[start:].strip()
         if candidate.startswith("{"):
             return candidate

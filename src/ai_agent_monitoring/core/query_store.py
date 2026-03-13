@@ -37,10 +37,16 @@ class QueryStore:
                     status TEXT NOT NULL DEFAULT 'executed',
                     error_message TEXT NOT NULL DEFAULT '',
                     result_summary TEXT NOT NULL DEFAULT '',
+                    result_stats_json TEXT NOT NULL DEFAULT '',
                     executed_at TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 )"""
             )
+            # 既存DBへのマイグレーション: result_stats_json カラム追加
+            try:
+                conn.execute("ALTER TABLE executed_queries ADD COLUMN result_stats_json TEXT NOT NULL DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass  # カラムが既に存在する場合
             conn.commit()
 
             rows = conn.execute(
@@ -70,8 +76,8 @@ class QueryStore:
                 """INSERT INTO executed_queries
                 (id, investigation_id, query_type, tool_name, query_text,
                  parameters_json, status, error_message, result_summary,
-                 executed_at, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                 result_stats_json, executed_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     query_id,
                     investigation_id,
@@ -82,6 +88,7 @@ class QueryStore:
                     record.status,
                     record.error_message,
                     record.result_summary,
+                    record.result_stats_json,
                     record.executed_at.isoformat(),
                     now,
                 ),
@@ -111,7 +118,7 @@ class QueryStore:
         try:
             rows = conn.execute(
                 "SELECT id, query_type, tool_name, query_text, parameters_json, "
-                "status, error_message, result_summary, executed_at "
+                "status, error_message, result_summary, result_stats_json, executed_at "
                 "FROM executed_queries WHERE investigation_id = ? ORDER BY executed_at",
                 (investigation_id,),
             ).fetchall()
@@ -128,7 +135,8 @@ class QueryStore:
                 "status": r[5],
                 "error_message": r[6],
                 "result_summary": r[7],
-                "executed_at": r[8],
+                "result_stats_json": r[8],
+                "executed_at": r[9],
             }
             for r in rows
         ]
@@ -145,7 +153,8 @@ class QueryStore:
             placeholders = ",".join("?" for _ in ids)
             sql = (
                 "SELECT id, investigation_id, query_type, tool_name, query_text, "
-                "parameters_json, status, error_message, result_summary, executed_at "
+                "parameters_json, status, error_message, result_summary, "
+                "result_stats_json, executed_at "
                 "FROM executed_queries WHERE id IN (" + placeholders + ")"
             )
             rows = conn.execute(sql, ids).fetchall()
@@ -169,7 +178,8 @@ class QueryStore:
                         "status": r[6],
                         "error_message": r[7],
                         "result_summary": r[8],
-                        "executed_at": r[9],
+                        "result_stats_json": r[9],
+                        "executed_at": r[10],
                     }
                 )
         return output

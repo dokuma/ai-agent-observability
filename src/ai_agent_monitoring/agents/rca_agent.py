@@ -341,7 +341,7 @@ class RCAAgent:
                 rc["confidence"] = max(0.0, min(1.0, conf))
                 root_causes.append(RootCause(**rc))
         except Exception:
-            logger.warning("RCAレポートのパースに失敗。LLM出力をそのまま使用。content=%.500s", content)
+            logger.warning("RCAレポートのパースに失敗。LLM出力をそのまま使用。content=%.500s", content, exc_info=True)
             root_causes = [RootCause(description=content, confidence=0.5)]
             data = {}
 

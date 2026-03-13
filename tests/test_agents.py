@@ -1230,11 +1230,7 @@ class TestOrchestratorParseK8sTable:
     def test_parse_k8s_names_table_fallback(self):
         """テーブル形式にフォールバックして NAME カラムを抽出."""
         agent, _ = _make_orchestrator()
-        text = (
-            "APIVERSION  KIND       NAME\n"
-            "v1          Namespace  default\n"
-            "v1          Namespace  monitoring\n"
-        )
+        text = "APIVERSION  KIND       NAME\nv1          Namespace  default\nv1          Namespace  monitoring\n"
         result_input = {"content": [{"type": "text", "text": text}]}
         names = agent._parse_k8s_names(result_input)
         assert names == ["default", "monitoring"]

@@ -209,6 +209,7 @@ def extract_query_records(messages: Sequence[BaseMessage]) -> list[QueryRecord]:
             status = "executed"
             error_message = ""
             result_summary = ""
+            result_stats_json = ""
             for j in range(i + 1, len(msg_list)):
                 following = msg_list[j]
                 if isinstance(following, ToolMessage) and following.tool_call_id == tool_call_id:
@@ -220,6 +221,9 @@ def extract_query_records(messages: Sequence[BaseMessage]) -> list[QueryRecord]:
                         # prometheus_summary の場合は統計要約を生成
                         prom_summary = _summarize_prometheus(text)
                         result_summary = prom_summary if prom_summary else text[:500]
+                        # 生の prometheus_summary JSON を保持
+                        if prom_summary:
+                            result_stats_json = text
                     break
 
             records.append(
@@ -231,6 +235,7 @@ def extract_query_records(messages: Sequence[BaseMessage]) -> list[QueryRecord]:
                     status=status,
                     error_message=error_message,
                     result_summary=result_summary,
+                    result_stats_json=result_stats_json,
                 )
             )
 

@@ -175,6 +175,7 @@ class QueryRecord(BaseModel):
     status: str = "executed"  # "executed" | "failed"
     error_message: str = ""
     result_summary: str = ""  # 結果の要約（行数、データ有無等）
+    result_stats_json: str = ""  # prometheus_summary 等の生統計データJSON
     executed_at: datetime = Field(default_factory=datetime.now)
 
 
