@@ -49,6 +49,9 @@ _RETRY_PATTERN = re.compile(r"再調査|やり直|別の角度|深掘|もっと�
 _REINVESTIGATE_PATTERN = re.compile(r"再調査|やり直|別の角度")
 _CONTINUE_PATTERN = re.compile(r"深掘|もっと詳しく|追加で調査|続けて")
 
+# フォローアップ実行パターン（RCAレポートの推奨アクションを実行する意図）
+_FOLLOWUP_PATTERN = re.compile(r"実行して|実施して|お願いします|やってください|進めて|試して")
+
 # 回顧的クエリ検出用正規表現
 _RETROSPECTIVE_PATTERN = re.compile(
     r"前回|過去の|以前の|先ほど|さっき|履歴|"
@@ -155,6 +158,30 @@ def _detect_retry_pattern(query: str) -> str | None:
     return "retry:continue_investigation"
 
 
+def _build_followup_query(query: str) -> str | None:
+    """フォローアップ実行パターンを検出し、直前のRCA recommendations を組み込んだクエリを構築.
+
+    Returns:
+        recommendations を含むクエリ文字列、またはフォローアップでない場合 None
+    """
+    if not _FOLLOWUP_PATTERN.search(query):
+        return None
+
+    # 直近の completed 調査から recommendations を取得
+    for record in reversed(list(app_state.investigations.values())):
+        if record.status == "completed" and record.rca_report:
+            recommendations = record.rca_report.recommendations
+            if recommendations:
+                recs_text = "\n".join(f"- {r}" for r in recommendations)
+                return (
+                    f"前回の調査で以下の推奨アクションが提示されました:\n{recs_text}\n\n"
+                    f"ユーザの指示: {query}\n\n"
+                    "上記の推奨アクションに基づいて追加の調査・確認を実施してください。"
+                )
+            break
+    return None
+
+
 @router.post("/query", response_model=UserQueryResponse)
 async def submit_query(
     request: UserQueryRequest,
@@ -207,6 +234,21 @@ async def submit_query(
                 message=f"調査をやり直します ({retry_type.value})",
             )
         # completed 調査が見つからない場合は新規調査にフォールスルー
+
+    # ---- Step 1.5: フォローアップ実行パターン検出 ----
+    followup_query = _build_followup_query(request.query)
+    if followup_query:
+        user_query = UserQuery(
+            raw_input=followup_query,
+            target_instances=request.target_instances,
+        )
+        inv_id = app_state.create_investigation("user_query")
+        background_tasks.add_task(_run_user_query_investigation, inv_id, user_query)
+        return UserQueryResponse(
+            investigation_id=inv_id,
+            status="running",
+            message="前回の推奨アクションに基づいて追加調査を開始します",
+        )
 
     # ---- Step 2: レポート検索 + ObservationStore 検索（Search-First） ----
     search_miss_message: str | None = None
