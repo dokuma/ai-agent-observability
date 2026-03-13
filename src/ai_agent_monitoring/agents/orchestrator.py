@@ -38,6 +38,8 @@ from ai_agent_monitoring.core.state import (
     EvaluationFeedback,
     InvestigationPlan,
     InvestigationPlanSchema,
+    K8sEnvInfo,
+    K8sNamespaceSummary,
     LokiEnvInfo,
     PanelQuery,
     PrometheusEnvInfo,
@@ -45,6 +47,7 @@ from ai_agent_monitoring.core.state import (
     extract_query_records,
 )
 from ai_agent_monitoring.tools.grafana import GrafanaMCPTool
+from ai_agent_monitoring.tools.kubernetes import KubernetesMCPTool
 from ai_agent_monitoring.tools.query_rag import get_query_rag
 from ai_agent_monitoring.tools.query_validator import (
     QueryType,
@@ -221,6 +224,7 @@ class OrchestratorAgent:
 
         # KubernetesAgent: K8s MCPが健全な場合のみ生成
         kubernetes_mcp = registry.kubernetes.client if registry.kubernetes.healthy else None
+        self.kubernetes_tool = KubernetesMCPTool(kubernetes_mcp) if kubernetes_mcp else None
         self.kubernetes_agent = KubernetesAgent(self.llm, kubernetes_mcp=kubernetes_mcp) if kubernetes_mcp else None
 
         # サブエージェントの compile() 結果をキャッシュ
@@ -587,7 +591,142 @@ class OrchestratorAgent:
                     except Exception:
                         logger.warning("Retry also failed for %s uid=%s", ds_type, new_uid)
 
+        # Phase 5: K8s クラスタ情報の収集
+        if self.kubernetes_tool:
+            try:
+                await self._discover_k8s_environment(env)
+            except Exception as e:
+                self._log_discovery_error("k8s environment", e)
+
         return {"environment": env}
+
+    async def _discover_k8s_environment(self, env: EnvironmentContext) -> None:
+        """K8s MCP 経由でクラスタのトポロジ情報を収集."""
+        if self.kubernetes_tool is None:
+            return
+        k8s_env = K8sEnvInfo()
+        system_namespaces = {"kube-system", "kube-public", "kube-node-lease"}
+        max_ns_detail = 10
+
+        async with self.kubernetes_tool.session_context() as k8s:
+            # namespace 一覧
+            ns_result = await k8s.list_namespaces()
+            k8s_env.namespaces = self._parse_k8s_names(ns_result)
+            logger.info("K8s namespaces discovered: %s", k8s_env.namespaces)
+
+            # ノード一覧
+            try:
+                node_result = await k8s.get_resource(kind="Node")
+                k8s_env.node_names = self._parse_k8s_names(node_result)
+                k8s_env.node_count = len(k8s_env.node_names)
+            except Exception:
+                logger.warning("Failed to get K8s nodes", exc_info=True)
+
+            # 非システム namespace の Pod/Event サマリ
+            user_namespaces = [ns for ns in k8s_env.namespaces if ns not in system_namespaces][:max_ns_detail]
+
+            for ns in user_namespaces:
+                summary = K8sNamespaceSummary()
+                try:
+                    pod_result = await k8s.list_pods(ns)
+                    summary.pod_count, summary.pod_statuses = self._parse_k8s_pod_summary(pod_result)
+                except Exception:
+                    logger.warning("Failed to get pods for namespace %s", ns)
+                try:
+                    event_result = await k8s.list_events(ns)
+                    summary.warning_event_count = self._parse_k8s_warning_count(event_result)
+                except Exception:
+                    logger.warning("Failed to get events for namespace %s", ns)
+                k8s_env.namespace_summaries[ns] = summary
+
+        env.k8s_env = k8s_env
+
+    @staticmethod
+    def _get_mcp_text(result: dict[str, Any]) -> str:
+        """MCP ツール結果からテキストを抽出."""
+        for item in result.get("content", []):
+            if isinstance(item, dict) and item.get("type") == "text":
+                return str(item.get("text", ""))
+        return ""
+
+    def _parse_k8s_names(self, result: dict[str, Any]) -> list[str]:
+        """K8s リスト結果から名前一覧を抽出."""
+        text = self._get_mcp_text(result)
+        if not text:
+            return []
+        try:
+            data = json.loads(text)
+            if isinstance(data, dict) and "items" in data:
+                return [item.get("metadata", {}).get("name", "") for item in data["items"] if isinstance(item, dict)]
+            if isinstance(data, list):
+                return [
+                    item.get("metadata", {}).get("name", "")
+                    if isinstance(item, dict) and "metadata" in item
+                    else str(item)
+                    for item in data
+                ]
+        except (json.JSONDecodeError, TypeError):
+            pass
+        # テキスト行フォールバック
+        names = []
+        for line in text.strip().split("\n"):
+            parts = line.strip().split()
+            if parts and parts[0] not in ("NAME", "NAMESPACE", "---"):
+                names.append(parts[0])
+        return names
+
+    def _parse_k8s_pod_summary(self, result: dict[str, Any]) -> tuple[int, dict[str, int]]:
+        """Pod リスト結果から (総数, ステータス別カウント) を抽出."""
+        text = self._get_mcp_text(result)
+        statuses: dict[str, int] = {}
+        if not text:
+            return 0, statuses
+        try:
+            data = json.loads(text)
+            items = data.get("items", data) if isinstance(data, dict) else data
+            if isinstance(items, list):
+                for pod in items:
+                    if not isinstance(pod, dict):
+                        continue
+                    phase = (
+                        pod.get("status", {}).get("phase", "Unknown")
+                        if isinstance(pod.get("status"), dict)
+                        else "Unknown"
+                    )
+                    statuses[phase] = statuses.get(phase, 0) + 1
+                return sum(statuses.values()), statuses
+        except (json.JSONDecodeError, TypeError):
+            pass
+        # テキストフォールバック: Running/Pending 等をカウント
+        for word in (
+            "Running",
+            "Pending",
+            "Succeeded",
+            "Failed",
+            "Unknown",
+            "CrashLoopBackOff",
+            "Error",
+            "ImagePullBackOff",
+        ):
+            count = text.count(word)
+            if count > 0:
+                statuses[word] = count
+        total = sum(statuses.values()) if statuses else text.count("\n")
+        return total, statuses
+
+    def _parse_k8s_warning_count(self, result: dict[str, Any]) -> int:
+        """Event リスト結果から Warning イベント数を抽出."""
+        text = self._get_mcp_text(result)
+        if not text:
+            return 0
+        try:
+            data = json.loads(text)
+            items = data.get("items", data) if isinstance(data, dict) else data
+            if isinstance(items, list):
+                return sum(1 for ev in items if isinstance(ev, dict) and ev.get("type") == "Warning")
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return text.lower().count('"warning"') + text.lower().count("type: warning")
 
     def _log_discovery_error(self, phase: str, exc: Exception) -> None:
         """環境情報収集のエラーログ出力."""
@@ -1502,6 +1641,19 @@ class OrchestratorAgent:
             lines.append("\n### Lokiで利用可能なjobラベル値")
             for job in env.loki_jobs:
                 lines.append(f"  - {job}")
+
+        # K8sクラスタ情報
+        k8s = env.k8s_env
+        if k8s.namespaces:
+            lines.append("\n### K8s クラスタ情報")
+            if k8s.node_count:
+                lines.append(f"  - ノード数: {k8s.node_count} ({', '.join(k8s.node_names[:5])})")
+            lines.append(f"  - Namespace一覧: {', '.join(k8s.namespaces)}")
+            for ns, summary in k8s.namespace_summaries.items():
+                status_parts = [f"{s}: {c}" for s, c in summary.pod_statuses.items()]
+                status_str = ", ".join(status_parts) if status_parts else "不明"
+                warn_str = f", Warning events: {summary.warning_event_count}" if summary.warning_event_count else ""
+                lines.append(f"  - {ns}: Pod {summary.pod_count}個 ({status_str}){warn_str}")
 
         # 既存ダッシュボードからの例
         if env.example_promql_queries:

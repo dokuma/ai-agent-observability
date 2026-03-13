@@ -263,6 +263,23 @@ class PanelQuery(BaseModel):
     dashboard_title: str = ""
 
 
+class K8sNamespaceSummary(BaseModel):
+    """namespace ごとの K8s サマリ."""
+
+    pod_count: int = 0
+    pod_statuses: dict[str, int] = Field(default_factory=dict)
+    warning_event_count: int = 0
+
+
+class K8sEnvInfo(BaseModel):
+    """K8s クラスタの環境情報."""
+
+    namespaces: list[str] = Field(default_factory=list)
+    namespace_summaries: dict[str, K8sNamespaceSummary] = Field(default_factory=dict)
+    node_count: int = 0
+    node_names: list[str] = Field(default_factory=list)
+
+
 class PrometheusEnvInfo(BaseModel):
     """個別Prometheusデータソースの環境情報."""
 
@@ -308,6 +325,9 @@ class EnvironmentContext(BaseModel):
     # Lokiのラベル情報
     loki_labels: list[str] = Field(default_factory=list)
     loki_jobs: list[str] = Field(default_factory=list)
+
+    # K8sクラスタ情報
+    k8s_env: K8sEnvInfo = Field(default_factory=K8sEnvInfo)
 
     def merge_env_info(self) -> None:
         """DS別の環境情報をフラットフィールドにマージ."""

@@ -144,12 +144,16 @@ class KubernetesAgent:
                     "全namespaceを一括で取得するAPIコールは使わないでください。"
                 )
 
+            # 環境情報から取得済みの K8s サマリを含める
+            k8s_env_text = self._format_k8s_env_summary(state)
+
             setup_messages: list[BaseMessage] = [
                 SystemMessage(content=KUBERNETES_AGENT_SYSTEM_PROMPT),
                 HumanMessage(
                     content=(
                         f"Kubernetesクラスタの状態を調査してください:\n{details_text}\n"
                         f"時間範囲: {time_desc}\n"
+                        f"{k8s_env_text}"
                         f"{investigation_scope}"
                     )
                 ),
@@ -188,6 +192,33 @@ class KubernetesAgent:
             "messages": [response],
             "k8s_results": [result],
         }
+
+    @staticmethod
+    def _format_k8s_env_summary(state: AgentState) -> str:
+        """環境情報から取得済みのK8sクラスタサマリをフォーマット."""
+        env = state.get("environment")
+        if not env or not env.k8s_env.namespaces:
+            return ""
+
+        k8s = env.k8s_env
+        lines = ["\n## 取得済みクラスタ情報（再取得不要）"]
+        if k8s.node_count:
+            lines.append(f"ノード数: {k8s.node_count}")
+        lines.append(f"Namespace一覧: {', '.join(k8s.namespaces)}")
+        for ns, summary in k8s.namespace_summaries.items():
+            status_parts = [f"{s}: {c}" for s, c in summary.pod_statuses.items()]
+            status_str = ", ".join(status_parts) if status_parts else "不明"
+            line = f"- {ns}: Pod {summary.pod_count}個 ({status_str})"
+            if summary.warning_event_count:
+                line += f", Warning events: {summary.warning_event_count}"
+            lines.append(line)
+
+        lines.append(
+            "\n上記の情報はすでに取得済みです。"
+            "k8s_list_namespaces や概要レベルの k8s_list_pods は不要です。"
+            "異常が疑われるPodの詳細ログや特定リソースの調査に集中してください。\n"
+        )
+        return "\n".join(lines)
 
     @staticmethod
     def _should_use_tool(state: AgentState) -> str:
