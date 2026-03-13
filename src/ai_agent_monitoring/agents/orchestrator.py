@@ -601,39 +601,41 @@ class OrchestratorAgent:
         return {"environment": env}
 
     async def _discover_k8s_environment(self, env: EnvironmentContext) -> None:
-        """K8s MCP 経由でクラスタのトポロジ情報を収集."""
+        """K8s MCP 経由でクラスタのトポロジ情報を収集.
+
+        切り詰めなしの _raw メソッドを使用し、全 namespace/Pod/Event を取得する。
+        """
         if self.kubernetes_tool is None:
             return
         k8s_env = K8sEnvInfo()
         system_namespaces = {"kube-system", "kube-public", "kube-node-lease"}
-        max_ns_detail = 10
 
         async with self.kubernetes_tool.session_context() as k8s:
-            # namespace 一覧
-            ns_result = await k8s.list_namespaces()
+            # namespace 一覧（切り詰めなし）
+            ns_result = await k8s.list_namespaces_raw()
             k8s_env.namespaces = self._parse_k8s_names(ns_result)
-            logger.info("K8s namespaces discovered: %s", k8s_env.namespaces)
+            logger.info("K8s namespaces discovered: %d namespaces", len(k8s_env.namespaces))
 
             # ノード一覧
             try:
-                node_result = await k8s.get_resource(kind="Node")
+                node_result = await k8s._call_tool_raw("resources_list", {"kind": "Node", "apiVersion": "v1"})
                 k8s_env.node_names = self._parse_k8s_names(node_result)
                 k8s_env.node_count = len(k8s_env.node_names)
             except Exception:
                 logger.warning("Failed to get K8s nodes", exc_info=True)
 
-            # 非システム namespace の Pod/Event サマリ
-            user_namespaces = [ns for ns in k8s_env.namespaces if ns not in system_namespaces][:max_ns_detail]
+            # 非システム namespace の Pod/Event サマリ（全件）
+            user_namespaces = [ns for ns in k8s_env.namespaces if ns not in system_namespaces]
 
             for ns in user_namespaces:
                 summary = K8sNamespaceSummary()
                 try:
-                    pod_result = await k8s.list_pods(ns)
+                    pod_result = await k8s.list_pods_raw(ns)
                     summary.pod_count, summary.pod_statuses = self._parse_k8s_pod_summary(pod_result)
                 except Exception:
                     logger.warning("Failed to get pods for namespace %s", ns)
                 try:
-                    event_result = await k8s.list_events(ns)
+                    event_result = await k8s.list_events_raw(ns)
                     summary.warning_event_count = self._parse_k8s_warning_count(event_result)
                 except Exception:
                     logger.warning("Failed to get events for namespace %s", ns)

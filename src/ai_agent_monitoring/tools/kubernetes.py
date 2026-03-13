@@ -64,6 +64,10 @@ class KubernetesMCPTool(BaseMCPTool):
         logger.info("K8s list pods in namespace: %s", namespace)
         return await self._call_tool("pods_list_in_namespace", {"namespace": namespace})
 
+    async def list_pods_raw(self, namespace: str) -> dict[str, Any]:
+        """Pod一覧を取得（切り詰めなし、環境情報収集用）."""
+        return await self._call_tool_raw("pods_list_in_namespace", {"namespace": namespace})
+
     async def get_pod(self, name: str, namespace: str = "default") -> dict[str, Any]:
         """Pod詳細を取得."""
         params: dict[str, Any] = {"name": name, "namespace": namespace}
@@ -95,10 +99,20 @@ class KubernetesMCPTool(BaseMCPTool):
         logger.info("K8s list events: namespace=%s", namespace)
         return await self._call_tool("events_list", {"namespace": namespace})
 
+    async def list_events_raw(self, namespace: str) -> dict[str, Any]:
+        """Event一覧を取得（切り詰めなし、環境情報収集用）."""
+        if not namespace:
+            raise ValueError("namespace is required for list_events_raw")
+        return await self._call_tool_raw("events_list", {"namespace": namespace})
+
     async def list_namespaces(self) -> dict[str, Any]:
         """Namespace一覧を取得."""
         logger.info("K8s list namespaces")
         return await self._call_tool("namespaces_list", {})
+
+    async def list_namespaces_raw(self) -> dict[str, Any]:
+        """Namespace一覧を取得（切り詰めなし、環境情報収集用）."""
+        return await self._call_tool_raw("namespaces_list", {})
 
     async def get_nodes_top(self) -> dict[str, Any]:
         """Nodeリソース使用状況を取得."""

@@ -571,6 +571,20 @@ class BaseMCPTool:
         preprocessed = self._preprocess_result(tool_name, extracted)
         return _truncate_tool_result(preprocessed, self.mcp_client._max_tool_result_chars)
 
+    async def _call_tool_raw(self, tool_name: str, params: dict[str, Any]) -> dict[str, Any]:
+        """ツールを呼び出す（切り詰めなし）.
+
+        環境情報収集など、LLMコンテキストに渡さない内部処理で使用。
+        _truncate_tool_result を適用しない。
+        """
+        if self._current_session:
+            result = await self._current_session.call_tool(tool_name, params)
+        else:
+            async with self.mcp_client.session() as session:
+                result = await session.call_tool(tool_name, params)
+
+        return self.mcp_client._extract_result(result)
+
 
 class MCPSessionManager:
     """複数のMCPクライアントのセッションを管理.
