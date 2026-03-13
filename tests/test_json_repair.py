@@ -151,6 +151,41 @@ class TestRepairTruncatedJson:
         parsed = json.loads(result)
         assert parsed["url"] == "http://example.com/path"
 
+    def test_raw_newlines_in_string(self):
+        """文字列値内の生改行がエスケープされる."""
+        text = '{"description": "line1\nline2\nline3", "confidence": 0.9}'
+        result = repair_truncated_json(text)
+        parsed = json.loads(result)
+        assert parsed["description"] == "line1\nline2\nline3"
+        assert parsed["confidence"] == 0.9
+
+    def test_raw_newlines_multiline_rca(self):
+        """RCAレポートのような複数行テキストを含むJSON."""
+        text = (
+            "{\n"
+            '  "root_causes": [{\n'
+            '    "description": "CPU使用率が高い。\n'
+            "詳細:\n"
+            "- node-1: 95%\n"
+            '- node-2: 88%",\n'
+            '    "confidence": 0.85\n'
+            "  }],\n"
+            '  "metrics_summary": "概要:\n'
+            'rate(cpu[5m]) max=95%"\n'
+            "}"
+        )
+        result = repair_truncated_json(text)
+        parsed = json.loads(result)
+        assert parsed["root_causes"][0]["confidence"] == 0.85
+        assert "node-1" in parsed["root_causes"][0]["description"]
+
+    def test_escaped_newlines_preserved(self):
+        """既にエスケープ済みの \\n はそのまま保持される."""
+        text = '{"msg": "line1\\nline2"}'
+        result = repair_truncated_json(text)
+        parsed = json.loads(result)
+        assert parsed["msg"] == "line1\nline2"
+
 
 class TestStripJsonComments:
     def test_line_comment(self):

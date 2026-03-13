@@ -150,14 +150,65 @@ def extract_json(text: str) -> str:
     raise ValueError(f"No JSON found in text (length={len(text)}): {text[:500]}")
 
 
+def _escape_newlines_in_strings(text: str) -> str:
+    """JSON文字列値内の生の改行を \\n にエスケープする.
+
+    LLMが複数行テキストをJSON文字列値に直接埋め込む場合があり、
+    これは JSON 仕様違反のため json.loads が失敗する。
+    """
+    result: list[str] = []
+    i = 0
+    in_string = False
+    length = len(text)
+
+    while i < length:
+        ch = text[i]
+
+        if in_string:
+            if ch == "\\" and i + 1 < length:
+                # エスケープシーケンスはそのまま保持
+                result.append(text[i : i + 2])
+                i += 2
+                continue
+            if ch == '"':
+                in_string = False
+                result.append(ch)
+                i += 1
+                continue
+            if ch == "\n":
+                result.append("\\n")
+                i += 1
+                continue
+            if ch == "\r":
+                result.append("\\r")
+                i += 1
+                continue
+            if ch == "\t":
+                result.append("\\t")
+                i += 1
+                continue
+            result.append(ch)
+            i += 1
+            continue
+
+        if ch == '"':
+            in_string = True
+        result.append(ch)
+        i += 1
+
+    return "".join(result)
+
+
 def repair_truncated_json(text: str) -> str:
     """LLM出力が途中で切れた不完全なJSONを修復する.
 
     未閉じの文字列・配列・オブジェクトを閉じて有効なJSONにする。
-    コメント除去、末尾カンマ除去も行う。
+    コメント除去、末尾カンマ除去、文字列値内の生改行エスケープも行う。
     """
     # まずコメントを除去
     text = strip_json_comments(text)
+    # 文字列値内の生改行をエスケープ
+    text = _escape_newlines_in_strings(text)
 
     in_string = False
     escape_next = False
