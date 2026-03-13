@@ -667,13 +667,8 @@ class OrchestratorAgent:
                 ]
         except (json.JSONDecodeError, TypeError):
             pass
-        # テキスト行フォールバック
-        names = []
-        for line in text.strip().split("\n"):
-            parts = line.strip().split()
-            if parts and parts[0] not in ("NAME", "NAMESPACE", "---"):
-                names.append(parts[0])
-        return names
+        # テーブル形式フォールバック: ヘッダから NAME カラム位置を検出
+        return self._parse_table_column(text, "NAME")
 
     def _parse_k8s_pod_summary(self, result: dict[str, Any]) -> tuple[int, dict[str, int]]:
         """Pod リスト結果から (総数, ステータス別カウント) を抽出."""
@@ -727,6 +722,44 @@ class OrchestratorAgent:
         except (json.JSONDecodeError, TypeError):
             pass
         return text.lower().count('"warning"') + text.lower().count("type: warning")
+
+    @staticmethod
+    def _parse_table_column(text: str, column_name: str) -> list[str]:
+        """kubectl スタイルのテーブル出力から指定カラムの値を抽出.
+
+        例: "APIVERSION  KIND       NAME\\nv1  Namespace  default\\n"
+        column_name="NAME" → ["default"]
+        """
+        lines = text.strip().split("\n")
+        if not lines:
+            return []
+
+        header = lines[0]
+        # ヘッダ行内でカラム名の開始位置を見つける
+        col_start = header.upper().find(column_name.upper())
+        if col_start < 0:
+            return []
+
+        # 次のカラムの開始位置を探す（ヘッダの空白区切り）
+        # column_name の直後から次の非空白文字の位置がカラム終了
+        rest = header[col_start + len(column_name) :]
+        col_end = -1
+        if rest.lstrip() != rest and rest.strip():
+            # 次カラムがある場合: 空白の後の最初の非空白文字位置
+            stripped_start = len(rest) - len(rest.lstrip())
+            col_end = col_start + len(column_name) + stripped_start
+
+        values = []
+        for line in lines[1:]:
+            if not line.strip() or line.startswith("---"):
+                continue
+            if col_end > 0 and col_end <= len(line):
+                val = line[col_start:col_end].strip()
+            else:
+                val = line[col_start:].strip()
+            if val:
+                values.append(val.split()[0])
+        return values
 
     def _log_discovery_error(self, phase: str, exc: Exception) -> None:
         """環境情報収集のエラーログ出力."""

@@ -1173,6 +1173,73 @@ class TestOrchestratorEnvironmentDiscovery:
         assert logql == []
 
 
+class TestOrchestratorParseK8sTable:
+    """Orchestrator の K8s テーブルパースのテスト."""
+
+    def test_parse_table_column_namespaces(self):
+        """kubectl テーブル形式の namespace 一覧から NAME を抽出."""
+        agent, _ = _make_orchestrator()
+        text = (
+            "APIVERSION  KIND       NAME\n"
+            "v1          Namespace  default\n"
+            "v1          Namespace  kube-system\n"
+            "v1          Namespace  monitoring\n"
+        )
+        result = agent._parse_table_column(text, "NAME")
+        assert result == ["default", "kube-system", "monitoring"]
+
+    def test_parse_table_column_nodes(self):
+        """ノード一覧テーブルから NAME を抽出."""
+        agent, _ = _make_orchestrator()
+        text = (
+            "NAME          STATUS   ROLES    AGE   VERSION\n"
+            "node-1        Ready    master   30d   v1.28.0\n"
+            "node-2        Ready    <none>   30d   v1.28.0\n"
+        )
+        result = agent._parse_table_column(text, "NAME")
+        assert result == ["node-1", "node-2"]
+
+    def test_parse_table_column_missing_column(self):
+        """存在しないカラム名は空リストを返す."""
+        agent, _ = _make_orchestrator()
+        text = "APIVERSION  KIND       NAME\nv1          Namespace  default\n"
+        result = agent._parse_table_column(text, "NONEXISTENT")
+        assert result == []
+
+    def test_parse_table_column_empty(self):
+        """空テキストは空リストを返す."""
+        agent, _ = _make_orchestrator()
+        result = agent._parse_table_column("", "NAME")
+        assert result == []
+
+    def test_parse_k8s_names_json(self):
+        """JSON形式のレスポンスを正しくパース."""
+        agent, _ = _make_orchestrator()
+        import json
+
+        data = {
+            "items": [
+                {"metadata": {"name": "default"}},
+                {"metadata": {"name": "kube-system"}},
+            ]
+        }
+        result_input = {"content": [{"type": "text", "text": json.dumps(data)}]}
+        names = agent._parse_k8s_names(result_input)
+        assert names == ["default", "kube-system"]
+
+    def test_parse_k8s_names_table_fallback(self):
+        """テーブル形式にフォールバックして NAME カラムを抽出."""
+        agent, _ = _make_orchestrator()
+        text = (
+            "APIVERSION  KIND       NAME\n"
+            "v1          Namespace  default\n"
+            "v1          Namespace  monitoring\n"
+        )
+        result_input = {"content": [{"type": "text", "text": text}]}
+        names = agent._parse_k8s_names(result_input)
+        assert names == ["default", "monitoring"]
+
+
 class TestOrchestratorFormatEnvironmentContext:
     """Orchestrator の _format_environment_context テスト."""
 
