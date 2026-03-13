@@ -1043,21 +1043,15 @@ class OrchestratorAgent:
         env.available_metrics = self._extract_list_from_result(metrics_result)
         logger.info("Found %d Prometheus metrics", len(env.available_metrics))
 
-        # ラベル名一覧（全件、ページング）
-        labels_result = await grafana.list_prometheus_label_names_all(uid)
-        env.available_labels = self._extract_list_from_result(labels_result)
-
         # jobラベルの値を取得（全件、ページング）
-        if "job" in env.available_labels:
-            jobs_result = await grafana.list_prometheus_label_values_all(uid, "job")
-            env.available_jobs = self._extract_list_from_result(jobs_result)
-            logger.info("Found %d jobs: %s", len(env.available_jobs), env.available_jobs[:5])
+        jobs_result = await grafana.list_prometheus_label_values_all(uid, "job")
+        env.available_jobs = self._extract_list_from_result(jobs_result)
+        logger.info("Found %d jobs: %s", len(env.available_jobs), env.available_jobs[:5])
 
         # instanceラベルの値を取得（全件、ページング）
-        if "instance" in env.available_labels:
-            instances_result = await grafana.list_prometheus_label_values_all(uid, "instance")
-            env.available_instances = self._extract_list_from_result(instances_result)
-            logger.info("Found %d instances", len(env.available_instances))
+        instances_result = await grafana.list_prometheus_label_values_all(uid, "instance")
+        env.available_instances = self._extract_list_from_result(instances_result)
+        logger.info("Found %d instances", len(env.available_instances))
 
     async def _discover_prometheus_info(
         self,
@@ -1082,16 +1076,11 @@ class OrchestratorAgent:
         info.metrics = self._extract_list_from_result(metrics_result)
         logger.info("Found %d Prometheus metrics for uid=%s", len(info.metrics), uid)
 
-        labels_result = await grafana.list_prometheus_label_names_all(uid)
-        info.labels = self._extract_list_from_result(labels_result)
+        jobs_result = await grafana.list_prometheus_label_values_all(uid, "job")
+        info.jobs = self._extract_list_from_result(jobs_result)
 
-        if "job" in info.labels:
-            jobs_result = await grafana.list_prometheus_label_values_all(uid, "job")
-            info.jobs = self._extract_list_from_result(jobs_result)
-
-        if "instance" in info.labels:
-            instances_result = await grafana.list_prometheus_label_values_all(uid, "instance")
-            info.instances = self._extract_list_from_result(instances_result)
+        instances_result = await grafana.list_prometheus_label_values_all(uid, "instance")
+        info.instances = self._extract_list_from_result(instances_result)
 
         env.prometheus_env_by_uid[uid] = info
 
@@ -1100,17 +1089,12 @@ class OrchestratorAgent:
         grafana: GrafanaMCPTool,
         env: EnvironmentContext,
     ) -> None:
-        """先頭UIDでLokiラベル情報を取得（後方互換）."""
+        """先頭UIDでLoki job情報を取得（後方互換）."""
         uid = env.loki_datasource_uids[0] if env.loki_datasource_uids else ""
         if not uid:
             return
-        loki_labels_result = await grafana.list_loki_label_names_all(uid)
-        env.loki_labels = self._extract_list_from_result(loki_labels_result)
-        logger.info("Found %d Loki labels", len(env.loki_labels))
-
-        if "job" in env.loki_labels:
-            loki_jobs_result = await grafana.list_loki_label_values_all(uid, "job")
-            env.loki_jobs = self._extract_list_from_result(loki_jobs_result)
+        loki_jobs_result = await grafana.list_loki_label_values_all(uid, "job")
+        env.loki_jobs = self._extract_list_from_result(loki_jobs_result)
 
     async def _discover_loki_info(
         self,
@@ -1128,16 +1112,12 @@ class OrchestratorAgent:
         env: EnvironmentContext,
         uid: str,
     ) -> None:
-        """指定UIDのLokiラベル情報をDS別dictに格納."""
+        """指定UIDのLoki job情報をDS別dictに格納."""
         info = LokiEnvInfo()
 
-        loki_labels_result = await grafana.list_loki_label_names_all(uid)
-        info.labels = self._extract_list_from_result(loki_labels_result)
-        logger.info("Found %d Loki labels for uid=%s", len(info.labels), uid)
-
-        if "job" in info.labels:
-            loki_jobs_result = await grafana.list_loki_label_values_all(uid, "job")
-            info.jobs = self._extract_list_from_result(loki_jobs_result)
+        loki_jobs_result = await grafana.list_loki_label_values_all(uid, "job")
+        info.jobs = self._extract_list_from_result(loki_jobs_result)
+        logger.info("Found %d Loki jobs for uid=%s", len(info.jobs), uid)
 
         env.loki_env_by_uid[uid] = info
 
@@ -1662,12 +1642,7 @@ class OrchestratorAgent:
             if len(env.available_instances) > 10:
                 lines.append(f"  ... 他 {len(env.available_instances) - 10} 件")
 
-        # Lokiラベル情報
-        if env.loki_labels:
-            lines.append("\n### 利用可能なLokiラベル")
-            for label in env.loki_labels:
-                lines.append(f"  - {label}")
-
+        # Loki job情報
         if env.loki_jobs:
             lines.append("\n### Lokiで利用可能なjobラベル値")
             for job in env.loki_jobs:

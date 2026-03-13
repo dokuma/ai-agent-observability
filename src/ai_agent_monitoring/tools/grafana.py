@@ -268,29 +268,6 @@ class GrafanaMCPTool(BaseMCPTool):
             params["matches"] = matches
         return await self._call_tool("list_prometheus_label_names", params)
 
-    async def list_prometheus_label_names_all(
-        self,
-        datasource_uid: str,
-        page_size: int = 500,
-    ) -> dict[str, Any]:
-        """Prometheusラベル名を全件取得（ページング、切り詰めなし）."""
-        all_names: list[str] = []
-        page = 1
-        while True:
-            params: dict[str, Any] = {
-                "datasourceUid": datasource_uid,
-                "limit": page_size,
-                "page": page,
-            }
-            result = await self._call_tool_raw("list_prometheus_label_names", params)
-            names = self._extract_names_from_result(result)
-            all_names.extend(names)
-            if len(names) < page_size:
-                break
-            page += 1
-        logger.info("Grafana: fetched %d prometheus label names (all pages)", len(all_names))
-        return {"content": [{"type": "text", "text": "\n".join(all_names)}]}
-
     async def list_prometheus_label_values(
         self,
         datasource_uid: str,
@@ -378,29 +355,6 @@ class GrafanaMCPTool(BaseMCPTool):
             "list_loki_label_values",
             {"datasourceUid": datasource_uid, "labelName": label_name},
         )
-
-    async def list_loki_label_names_all(
-        self,
-        datasource_uid: str,
-        page_size: int = 500,
-    ) -> dict[str, Any]:
-        """Lokiラベル名を全件取得（ページング、切り詰めなし）."""
-        all_names: list[str] = []
-        page = 1
-        while True:
-            params: dict[str, Any] = {
-                "datasourceUid": datasource_uid,
-                "limit": page_size,
-                "page": page,
-            }
-            result = await self._call_tool_raw("list_loki_label_names", params)
-            names = self._extract_names_from_result(result)
-            all_names.extend(names)
-            if len(names) < page_size:
-                break
-            page += 1
-        logger.info("Grafana: fetched %d loki label names (all pages)", len(all_names))
-        return {"content": [{"type": "text", "text": "\n".join(all_names)}]}
 
     async def list_loki_label_values_all(
         self,

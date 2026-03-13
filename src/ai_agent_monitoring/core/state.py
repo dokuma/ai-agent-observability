@@ -188,7 +188,6 @@ class PrometheusEnvInfo(BaseModel):
     """個別Prometheusデータソースの環境情報."""
 
     metrics: list[str] = Field(default_factory=list)
-    labels: list[str] = Field(default_factory=list)
     jobs: list[str] = Field(default_factory=list)
     instances: list[str] = Field(default_factory=list)
 
@@ -196,7 +195,6 @@ class PrometheusEnvInfo(BaseModel):
 class LokiEnvInfo(BaseModel):
     """個別Lokiデータソースの環境情報."""
 
-    labels: list[str] = Field(default_factory=list)
     jobs: list[str] = Field(default_factory=list)
 
 
@@ -220,14 +218,12 @@ class EnvironmentContext(BaseModel):
     prometheus_env_by_uid: dict[str, PrometheusEnvInfo] = Field(default_factory=dict)
     loki_env_by_uid: dict[str, LokiEnvInfo] = Field(default_factory=dict)
 
-    # 利用可能なメトリクスとラベル（全DSのマージ結果）
+    # 利用可能なメトリクスとラベル値（全DSのマージ結果）
     available_metrics: list[str] = Field(default_factory=list)
-    available_labels: list[str] = Field(default_factory=list)
     available_jobs: list[str] = Field(default_factory=list)
     available_instances: list[str] = Field(default_factory=list)
 
-    # Lokiのラベル情報
-    loki_labels: list[str] = Field(default_factory=list)
+    # Lokiのjob情報
     loki_jobs: list[str] = Field(default_factory=list)
 
     # K8sクラスタ情報
@@ -237,11 +233,9 @@ class EnvironmentContext(BaseModel):
         """DS別の環境情報をフラットフィールドにマージ."""
         if self.prometheus_env_by_uid:
             metrics: list[str] = []
-            labels: list[str] = []
             jobs: list[str] = []
             instances: list[str] = []
             seen_m: set[str] = set()
-            seen_l: set[str] = set()
             seen_j: set[str] = set()
             seen_i: set[str] = set()
             for info in self.prometheus_env_by_uid.values():
@@ -249,10 +243,6 @@ class EnvironmentContext(BaseModel):
                     if v not in seen_m:
                         seen_m.add(v)
                         metrics.append(v)
-                for v in info.labels:
-                    if v not in seen_l:
-                        seen_l.add(v)
-                        labels.append(v)
                 for v in info.jobs:
                     if v not in seen_j:
                         seen_j.add(v)
@@ -262,25 +252,17 @@ class EnvironmentContext(BaseModel):
                         seen_i.add(v)
                         instances.append(v)
             self.available_metrics = metrics
-            self.available_labels = labels
             self.available_jobs = jobs
             self.available_instances = instances
 
         if self.loki_env_by_uid:
-            loki_labels: list[str] = []
             loki_jobs: list[str] = []
-            seen_ll: set[str] = set()
             seen_lj: set[str] = set()
             for loki_info in self.loki_env_by_uid.values():
-                for v in loki_info.labels:
-                    if v not in seen_ll:
-                        seen_ll.add(v)
-                        loki_labels.append(v)
                 for v in loki_info.jobs:
                     if v not in seen_lj:
                         seen_lj.add(v)
                         loki_jobs.append(v)
-            self.loki_labels = loki_labels
             self.loki_jobs = loki_jobs
 
     # 既存ダッシュボードから学習したクエリパターン

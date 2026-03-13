@@ -128,9 +128,9 @@ class LogsAgent:
                                 ds_name = f"{ds.name} (uid: `{uid}`)"
                                 break
                         loki_info = env.loki_env_by_uid.get(uid)
-                        if loki_info and loki_info.labels:
-                            examples = ", ".join(loki_info.labels[:5])
-                            ds_descriptions.append(f"- {ds_name}: ラベル例: [{examples}]")
+                        if loki_info and loki_info.jobs:
+                            examples = ", ".join(loki_info.jobs[:5])
+                            ds_descriptions.append(f"- {ds_name}: job例: [{examples}]")
                         else:
                             ds_descriptions.append(f"- {ds_name}")
                     else:
