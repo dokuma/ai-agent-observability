@@ -225,6 +225,32 @@ class GrafanaMCPTool(BaseMCPTool):
             params["regex"] = regex
         return await self._call_tool("list_prometheus_metric_names", params)
 
+    async def list_prometheus_metric_names_all(
+        self,
+        datasource_uid: str,
+        page_size: int = 500,
+    ) -> dict[str, Any]:
+        """Prometheusメトリクス名を全件取得（ページング、切り詰めなし）.
+
+        環境情報収集用。page_size ずつ取得し、全ページを結合する。
+        """
+        all_names: list[str] = []
+        page = 1
+        while True:
+            params: dict[str, Any] = {
+                "datasourceUid": datasource_uid,
+                "limit": page_size,
+                "page": page,
+            }
+            result = await self._call_tool_raw("list_prometheus_metric_names", params)
+            names = self._extract_names_from_result(result)
+            all_names.extend(names)
+            if len(names) < page_size:
+                break
+            page += 1
+        logger.info("Grafana: fetched %d prometheus metrics (all pages)", len(all_names))
+        return {"content": [{"type": "text", "text": "\n".join(all_names)}]}
+
     async def list_prometheus_label_names(
         self,
         datasource_uid: str,
@@ -241,6 +267,10 @@ class GrafanaMCPTool(BaseMCPTool):
         if matches:
             params["matches"] = matches
         return await self._call_tool("list_prometheus_label_names", params)
+
+    async def list_prometheus_label_names_raw(self, datasource_uid: str) -> dict[str, Any]:
+        """Prometheusラベル名を切り詰めなしで取得（環境情報収集用）."""
+        return await self._call_tool_raw("list_prometheus_label_names", {"datasourceUid": datasource_uid})
 
     async def list_prometheus_label_values(
         self,
@@ -267,6 +297,13 @@ class GrafanaMCPTool(BaseMCPTool):
         if matches:
             params["matches"] = matches
         return await self._call_tool("list_prometheus_label_values", params)
+
+    async def list_prometheus_label_values_raw(self, datasource_uid: str, label_name: str) -> dict[str, Any]:
+        """Prometheusラベル値を切り詰めなしで取得（環境情報収集用）."""
+        return await self._call_tool_raw(
+            "list_prometheus_label_values",
+            {"datasourceUid": datasource_uid, "labelName": label_name},
+        )
 
     async def list_loki_label_names(
         self,
@@ -300,6 +337,34 @@ class GrafanaMCPTool(BaseMCPTool):
             "list_loki_label_values",
             {"datasourceUid": datasource_uid, "labelName": label_name},
         )
+
+    async def list_loki_label_names_raw(self, datasource_uid: str) -> dict[str, Any]:
+        """Lokiラベル名を切り詰めなしで取得（環境情報収集用）."""
+        return await self._call_tool_raw("list_loki_label_names", {"datasourceUid": datasource_uid})
+
+    async def list_loki_label_values_raw(self, datasource_uid: str, label_name: str) -> dict[str, Any]:
+        """Lokiラベル値を切り詰めなしで取得（環境情報収集用）."""
+        return await self._call_tool_raw(
+            "list_loki_label_values",
+            {"datasourceUid": datasource_uid, "labelName": label_name},
+        )
+
+    def _extract_names_from_result(self, result: dict[str, Any]) -> list[str]:
+        """MCP応答からメトリクス名/ラベル名リストを抽出."""
+        import json as _json
+
+        for item in result.get("content", []):
+            if isinstance(item, dict) and item.get("type") == "text":
+                text = item.get("text", "")
+                try:
+                    data = _json.loads(text)
+                    if isinstance(data, list):
+                        return [str(v) for v in data]
+                except (_json.JSONDecodeError, TypeError):
+                    pass
+                # 改行区切りフォールバック
+                return [line.strip() for line in text.split("\n") if line.strip()]
+        return []
 
     async def get_dashboard_panel_queries(self, uid: str) -> dict[str, Any]:
         """ダッシュボードのパネルで使用されているクエリを取得.
