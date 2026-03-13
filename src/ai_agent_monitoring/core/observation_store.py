@@ -88,11 +88,8 @@ class ObservationStore:
                 "namespace": self._extract_namespace(mr.query),
                 "created_at_ts": now_ts,
                 "summary": mr.summary[:500],
+                "raw_tool_outputs": mr.tool_outputs,
             }
-            # tool_outputs から prometheus_summary の生データを保存
-            raw_stats = self._extract_prometheus_raw_stats(mr.tool_outputs)
-            if raw_stats:
-                metadata["prometheus_stats"] = raw_stats
             items.append((doc_id, text, metadata))
 
         for i, lr in enumerate(logs_results or []):
@@ -106,6 +103,7 @@ class ObservationStore:
                 "namespace": self._extract_namespace(lr.query),
                 "created_at_ts": now_ts,
                 "summary": lr.summary[:500],
+                "raw_tool_outputs": lr.tool_outputs,
             }
             items.append((doc_id, text, metadata))
 
@@ -124,6 +122,7 @@ class ObservationStore:
                 "namespace": ns,
                 "created_at_ts": now_ts,
                 "summary": kr.summary[:500],
+                "raw_tool_outputs": kr.tool_outputs,
             }
             items.append((doc_id, text, metadata))
 
@@ -252,22 +251,6 @@ class ObservationStore:
         for rs in kr.resource_states[:5]:
             parts.append(f"{rs.kind}/{rs.name} ({rs.namespace}): {rs.status}")
         return "\n".join(parts)
-
-    @staticmethod
-    def _extract_prometheus_raw_stats(tool_outputs: list[str]) -> list[dict[str, Any]]:
-        """tool_outputs から prometheus_summary JSON を生データとして抽出."""
-        import json
-
-        raw_stats: list[dict[str, Any]] = []
-        for output in tool_outputs:
-            try:
-                data = json.loads(output)
-            except (json.JSONDecodeError, TypeError):
-                continue
-            if not isinstance(data, dict) or data.get("type") != "prometheus_summary":
-                continue
-            raw_stats.append(data)
-        return raw_stats
 
     @staticmethod
     def _extract_namespace(query: str) -> str:

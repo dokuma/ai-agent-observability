@@ -100,7 +100,6 @@ def should_stop_tool_loop(
     return "tool_call"
 
 
-_TOOL_OUTPUT_MAX_CHARS = 2000
 _TOOL_OUTPUT_MAX_MESSAGES = 5
 
 
@@ -133,12 +132,14 @@ def _extract_text_from_content(content: Any) -> str:
 def extract_tool_outputs(messages: Sequence[BaseMessage]) -> list[str]:
     """ToolMessage からツール実行結果のテキストを抽出する.
 
-    最新 _TOOL_OUTPUT_MAX_MESSAGES 件に制限し、各メッセージは最大 _TOOL_OUTPUT_MAX_CHARS 文字。
+    最新 _TOOL_OUTPUT_MAX_MESSAGES 件に制限。
+    ツール結果はすでに _truncate_tool_result (8000文字) で制限されているため、
+    ここでは追加の切り詰めを行わない。
     """
     tool_msgs = [m for m in messages if isinstance(m, ToolMessage)]
     # 最新N件
     recent = tool_msgs[-_TOOL_OUTPUT_MAX_MESSAGES:]
-    return [_extract_text_from_content(m.content)[:_TOOL_OUTPUT_MAX_CHARS] for m in recent]
+    return [_extract_text_from_content(m.content) for m in recent]
 
 
 # ツール名 → クエリタイプのマッピング
@@ -209,7 +210,7 @@ def extract_query_records(messages: Sequence[BaseMessage]) -> list[QueryRecord]:
             status = "executed"
             error_message = ""
             result_summary = ""
-            result_stats_json = ""
+            raw_tool_output = ""
             for j in range(i + 1, len(msg_list)):
                 following = msg_list[j]
                 if isinstance(following, ToolMessage) and following.tool_call_id == tool_call_id:
@@ -218,12 +219,11 @@ def extract_query_records(messages: Sequence[BaseMessage]) -> list[QueryRecord]:
                         status = "failed"
                         error_message = text[:200]
                     else:
+                        # 生のツール出力を保存
+                        raw_tool_output = text
                         # prometheus_summary の場合は統計要約を生成
                         prom_summary = _summarize_prometheus(text)
                         result_summary = prom_summary if prom_summary else text[:500]
-                        # 生の prometheus_summary JSON を保持
-                        if prom_summary:
-                            result_stats_json = text
                     break
 
             records.append(
@@ -235,7 +235,7 @@ def extract_query_records(messages: Sequence[BaseMessage]) -> list[QueryRecord]:
                     status=status,
                     error_message=error_message,
                     result_summary=result_summary,
-                    result_stats_json=result_stats_json,
+                    raw_tool_output=raw_tool_output,
                 )
             )
 

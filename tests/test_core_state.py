@@ -7,6 +7,7 @@ from ai_agent_monitoring.core.state import (
     InvestigationPlan,
     TimeRange,
     count_tool_errors_by_name,
+    extract_tool_outputs,
     should_stop_tool_loop,
 )
 
@@ -75,6 +76,24 @@ class TestShouldStopToolLoop:
             ToolMessage(content="err", tool_call_id=str(i), name="k8s_list_pods", status="error") for i in range(3)
         ]
         assert should_stop_tool_loop([*errors, ai], max_react_steps=20, max_errors_per_tool=5) == "tool_call"
+
+
+class TestExtractToolOutputs:
+    def test_no_truncation(self):
+        """ツール出力が切り詰められないことを確認."""
+        long_text = "x" * 5000
+        messages = [ToolMessage(content=long_text, tool_call_id="1")]
+        result = extract_tool_outputs(messages)
+        assert len(result) == 1
+        assert len(result[0]) == 5000
+
+    def test_max_messages_limit(self):
+        """最新5件のみ抽出される."""
+        messages = [ToolMessage(content=f"msg-{i}", tool_call_id=str(i)) for i in range(8)]
+        result = extract_tool_outputs(messages)
+        assert len(result) == 5
+        assert result[0] == "msg-3"
+        assert result[4] == "msg-7"
 
 
 class TestAgentState:
