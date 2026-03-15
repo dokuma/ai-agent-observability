@@ -7,6 +7,7 @@ from typing import Any
 from langchain_core.tools import BaseTool, tool
 
 from ai_agent_monitoring.tools.base import BaseMCPTool, MCPClient
+from ai_agent_monitoring.tools.context_store import ContextStore
 from ai_agent_monitoring.tools.metrics_preprocessor import preprocess_prometheus_result
 
 logger = logging.getLogger(__name__)
@@ -68,9 +69,12 @@ class PrometheusMCPTool(BaseMCPTool):
         return await self._call_tool("get_label_values", {"label": label})
 
 
-def create_prometheus_tools(mcp_client: MCPClient) -> list[BaseTool]:
+def create_prometheus_tools(
+    mcp_client: MCPClient,
+    context_store: ContextStore | None = None,
+) -> list[BaseTool]:
     """LangChain Tool としてラップされた Prometheus ツール群を生成."""
-    prom = PrometheusMCPTool(mcp_client)
+    prom = PrometheusMCPTool(mcp_client, context_store=context_store)
 
     @tool
     async def query_prometheus_instant(query: str, time: str = "") -> dict[str, Any]:

@@ -6,6 +6,7 @@ from typing import Any
 from langchain_core.tools import BaseTool, tool
 
 from ai_agent_monitoring.tools.base import BaseMCPTool, MCPClient
+from ai_agent_monitoring.tools.context_store import ContextStore
 
 logger = logging.getLogger(__name__)
 
@@ -159,14 +160,16 @@ def create_kubernetes_tools(
     mcp_client: MCPClient,
     *,
     k8s_tool: KubernetesMCPTool | None = None,
+    context_store: ContextStore | None = None,
 ) -> list[BaseTool]:
     """LangChain Tool としてラップされた Kubernetes ツール群を生成.
 
     Args:
         mcp_client: MCPクライアント（k8s_tool未指定時の生成用）
         k8s_tool: 既存の KubernetesMCPTool インスタンス（セッション再利用時に指定）
+        context_store: Context Mode ストア
     """
-    k8s = k8s_tool or KubernetesMCPTool(mcp_client)
+    k8s = k8s_tool or KubernetesMCPTool(mcp_client, context_store=context_store)
 
     @tool
     async def k8s_list_pods(namespace: str) -> dict[str, Any]:

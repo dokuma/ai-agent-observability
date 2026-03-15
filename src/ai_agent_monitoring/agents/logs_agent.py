@@ -16,6 +16,7 @@ from ai_agent_monitoring.core.state import (
     should_stop_tool_loop,
 )
 from ai_agent_monitoring.tools.base import MCPClient
+from ai_agent_monitoring.tools.context_store import ContextStore
 from ai_agent_monitoring.tools.grafana import create_grafana_tools
 from ai_agent_monitoring.tools.loki import create_loki_tools
 
@@ -51,17 +52,18 @@ class LogsAgent:
         llm: Any,
         loki_mcp: MCPClient | None = None,
         grafana_mcp: MCPClient | None = None,
+        context_store: ContextStore | None = None,
     ) -> None:
         self.tools: list[Any] = []
 
         # Grafana MCPを優先（Grafana経由でLokiにアクセス可能）
         if grafana_mcp:
-            self.tools += create_grafana_tools(grafana_mcp)
+            self.tools += create_grafana_tools(grafana_mcp, context_store=context_store)
             logger.info("LogsAgent: Using Grafana MCP (primary)")
 
         # Loki MCPはフォールバック
         if loki_mcp:
-            self.tools += create_loki_tools(loki_mcp)
+            self.tools += create_loki_tools(loki_mcp, context_store=context_store)
             logger.info("LogsAgent: Using Loki MCP (fallback)")
 
         if not self.tools:

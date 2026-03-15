@@ -25,7 +25,7 @@ from tenacity import (
 )
 
 if TYPE_CHECKING:
-    pass
+    from ai_agent_monitoring.tools.context_store import ContextStore
 
 # Langfuse observe デコレータ（未インストール時はno-op）
 try:
@@ -511,13 +511,19 @@ class BaseMCPTool:
             result2 = await ctx.another_method()
     """
 
-    def __init__(self, mcp_client: MCPClient):
+    def __init__(
+        self,
+        mcp_client: MCPClient,
+        context_store: ContextStore | None = None,
+    ):
         """BaseMCPToolを初期化.
 
         Args:
             mcp_client: MCPクライアントインスタンス
+            context_store: Context Mode ストア（None の場合は従来の truncate を使用）
         """
         self.mcp_client = mcp_client
+        self._context_store = context_store
         self._current_session: ClientSession | None = None
 
     @asynccontextmanager
@@ -569,6 +575,13 @@ class BaseMCPTool:
 
         extracted = self.mcp_client._extract_result(result)
         preprocessed = self._preprocess_result(tool_name, extracted)
+
+        if self._context_store:
+            original_chars = len(json.dumps(preprocessed, ensure_ascii=False, default=str))
+            source_label = self._context_store.index(tool_name, preprocessed)
+            chunks = self._context_store.get_by_source(source_label)
+            return self._context_store.format_as_tool_result(chunks, original_chars)
+
         return _truncate_tool_result(preprocessed, self.mcp_client._max_tool_result_chars)
 
     async def _call_tool_raw(self, tool_name: str, params: dict[str, Any]) -> dict[str, Any]:

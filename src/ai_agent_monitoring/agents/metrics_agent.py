@@ -16,6 +16,7 @@ from ai_agent_monitoring.core.state import (
     should_stop_tool_loop,
 )
 from ai_agent_monitoring.tools.base import MCPClient
+from ai_agent_monitoring.tools.context_store import ContextStore
 from ai_agent_monitoring.tools.grafana import create_grafana_tools
 from ai_agent_monitoring.tools.prometheus import create_prometheus_tools
 
@@ -51,17 +52,18 @@ class MetricsAgent:
         llm: Any,
         prometheus_mcp: MCPClient | None = None,
         grafana_mcp: MCPClient | None = None,
+        context_store: ContextStore | None = None,
     ) -> None:
         self.tools: list[Any] = []
 
         # Grafana MCPを優先（Grafana経由でPrometheusにアクセス可能）
         if grafana_mcp:
-            self.tools += create_grafana_tools(grafana_mcp)
+            self.tools += create_grafana_tools(grafana_mcp, context_store=context_store)
             logger.info("MetricsAgent: Using Grafana MCP (primary)")
 
         # Prometheus MCPはフォールバック
         if prometheus_mcp:
-            self.tools += create_prometheus_tools(prometheus_mcp)
+            self.tools += create_prometheus_tools(prometheus_mcp, context_store=context_store)
             logger.info("MetricsAgent: Using Prometheus MCP (fallback)")
 
         if not self.tools:

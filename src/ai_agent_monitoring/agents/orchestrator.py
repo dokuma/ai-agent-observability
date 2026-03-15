@@ -44,6 +44,7 @@ from ai_agent_monitoring.core.state import (
     PrometheusEnvInfo,
     TimeRange,
 )
+from ai_agent_monitoring.tools.context_store import ContextStore
 from ai_agent_monitoring.tools.grafana import GrafanaMCPTool
 from ai_agent_monitoring.tools.kubernetes import KubernetesMCPTool
 from ai_agent_monitoring.tools.query_rag import get_query_rag
@@ -191,6 +192,15 @@ class OrchestratorAgent:
         """registryの健全性に基づきサブエージェントとグラフを再構築."""
         registry = self.registry
 
+        # Context Mode: 設定に基づき ContextStore を生成
+        context_store: ContextStore | None = None
+        if self.settings.context_mode_enabled:
+            context_store = ContextStore(
+                max_chunk_chars=self.settings.context_mode_max_chunk_chars,
+                search_limit=self.settings.context_mode_search_limit,
+            )
+        self._context_store = context_store
+
         # 各Agentはregistryから健全なMCPクライアントを使用
         # Grafana優先で、unhealthyなMCPはスキップ
         self.grafana_mcp = registry.grafana.client if registry.grafana.healthy else None
@@ -198,13 +208,14 @@ class OrchestratorAgent:
         loki_mcp = registry.loki.client if registry.loki.healthy else None
 
         # Grafana MCP Toolクラス（環境発見用）
-        self.grafana_tool = GrafanaMCPTool(self.grafana_mcp) if self.grafana_mcp else None
+        self.grafana_tool = GrafanaMCPTool(self.grafana_mcp, context_store=context_store) if self.grafana_mcp else None
 
         self.metrics_agent = (
             MetricsAgent(
                 self.llm,
                 prometheus_mcp=prometheus_mcp,
                 grafana_mcp=self.grafana_mcp,
+                context_store=context_store,
             )
             if prometheus_mcp or self.grafana_mcp
             else None
@@ -215,6 +226,7 @@ class OrchestratorAgent:
                 self.llm,
                 loki_mcp=loki_mcp,
                 grafana_mcp=self.grafana_mcp,
+                context_store=context_store,
             )
             if loki_mcp or self.grafana_mcp
             else None
@@ -224,8 +236,14 @@ class OrchestratorAgent:
 
         # KubernetesAgent: K8s MCPが健全な場合のみ生成
         kubernetes_mcp = registry.kubernetes.client if registry.kubernetes.healthy else None
-        self.kubernetes_tool = KubernetesMCPTool(kubernetes_mcp) if kubernetes_mcp else None
-        self.kubernetes_agent = KubernetesAgent(self.llm, kubernetes_mcp=kubernetes_mcp) if kubernetes_mcp else None
+        self.kubernetes_tool = (
+            KubernetesMCPTool(kubernetes_mcp, context_store=context_store) if kubernetes_mcp else None
+        )
+        self.kubernetes_agent = (
+            KubernetesAgent(self.llm, kubernetes_mcp=kubernetes_mcp, context_store=context_store)
+            if kubernetes_mcp
+            else None
+        )
 
         # サブエージェントの compile() 結果をキャッシュ
         self._compiled_metrics: Pregel[Any] | None = (

@@ -7,6 +7,7 @@ from typing import Any
 from langchain_core.tools import BaseTool, tool
 
 from ai_agent_monitoring.tools.base import BaseMCPTool, MCPClient
+from ai_agent_monitoring.tools.context_store import ContextStore
 
 logger = logging.getLogger(__name__)
 
@@ -75,9 +76,12 @@ class LokiMCPTool(BaseMCPTool):
         return await self._call_tool("find_error_patterns", params)
 
 
-def create_loki_tools(mcp_client: MCPClient) -> list[BaseTool]:
+def create_loki_tools(
+    mcp_client: MCPClient,
+    context_store: ContextStore | None = None,
+) -> list[BaseTool]:
     """LangChain Tool としてラップされた Loki ツール群を生成."""
-    loki = LokiMCPTool(mcp_client)
+    loki = LokiMCPTool(mcp_client, context_store=context_store)
 
     @tool
     async def query_loki_logs(

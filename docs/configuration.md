@@ -50,6 +50,17 @@
 | `MAX_TOOL_RESULT_CHARS` | `8000` | MCP ツール結果の最大文字数 |
 | `SEARCH_RELEVANCE_THRESHOLD` | `0.3` | Search-First のレポート検索スコア閾値 |
 
+### Context Mode
+
+| 変数名 | デフォルト | 説明 |
+|--------|-----------|------|
+| `CONTEXT_MODE_ENABLED` | `true` | Context Mode の有効化。`false` で従来の文字数打ち切りに戻る |
+| `CONTEXT_MODE_MAX_CHUNK_CHARS` | `500` | チャンク分割の最大文字数 |
+| `CONTEXT_MODE_SEARCH_LIMIT` | `5` | BM25 検索で返す上位チャンク数 |
+
+> **注:** Context Mode はツール出力を FTS5 インデックスに格納し、BM25 検索で関連性の高いチャンクのみを LLM に返す。
+> `MAX_TOOL_RESULT_CHARS` は Context Mode 無効時のフォールバックとして引き続き使用される。
+
 ### LLM レートリミット
 
 | 変数名 | デフォルト | 説明 |
@@ -139,6 +150,11 @@ QDRANT_URL=http://qdrant:6333
 # Embedding
 EMBEDDING_ENDPOINT=http://ollama:11434/v1
 EMBEDDING_MODEL=text-embedding-3-small
+
+# Context Mode
+CONTEXT_MODE_ENABLED=true
+# CONTEXT_MODE_MAX_CHUNK_CHARS=500
+# CONTEXT_MODE_SEARCH_LIMIT=5
 
 # Langfuse
 LANGFUSE_ENABLED=true

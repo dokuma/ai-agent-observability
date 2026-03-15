@@ -108,6 +108,55 @@ graph LR
 7. **evaluate_results** — 結果が十分か判定。不十分なら再計画 (最大 `max_iterations` 回)
 8. **generate_rca** — 根本原因分析レポートを生成。完了後、ObservationStore にエージェント観測データを保存、Qdrant にレポートを保存
 
+## Context Mode — ツール出力のインテリジェント圧縮
+
+MCP ツールの出力は大量のテキストを含むことがあり（Prometheus 時系列データ、K8s Pod 一覧等）、
+LLM のコンテキストウィンドウを圧迫する。Context Mode はこの問題を解決するレイヤーである。
+
+### 従来方式 vs Context Mode
+
+```
+従来方式:
+  MCP Tool Output → _truncate_tool_result() → 8000文字で盲目的に打ち切り → LLM
+
+Context Mode:
+  MCP Tool Output → _preprocess_result() → FTS5 Index → BM25 Top-K チャンク → LLM
+                                             ↑ 共存         ↑ 情報品質を維持
+```
+
+### 仕組み
+
+1. **チャンキング** — ツール出力を段落・行単位で分割（`max_chunk_chars` 文字目安）
+2. **FTS5 インデックス** — SQLite FTS5 仮想テーブルに全チャンクを格納（porter トークナイザー）
+3. **BM25 取得** — 同一ツール出力から関連性の高い上位チャンクのみを ToolMessage に返却
+4. **透過的統合** — `BaseMCPTool._call_tool()` パイプライン内で自動実行。追加ラウンドトリップなし
+
+### データフロー
+
+```mermaid
+graph LR
+    A["MCP Server<br/>生の出力"] --> B["_preprocess_result()<br/>ドメイン固有の前処理"]
+    B --> C["ContextStore.index()<br/>FTS5 インデックス"]
+    C --> D["ContextStore.get_by_source()<br/>BM25 Top-K"]
+    D --> E["ToolMessage<br/>圧縮済み結果"]
+    E --> F["LLM<br/>ReAct ループ"]
+```
+
+### 設計判断
+
+- **SQLite インメモリ DB** を使用（調査セッションごとに生成・破棄）。追加インフラ不要
+- **`_preprocess_result()` と共存** — Prometheus 時系列の統計圧縮（`metrics_preprocessor.py`）は FTS5 の手前で引き続き動作
+- **フォールバック** — `CONTEXT_MODE_ENABLED=false` で従来の 8000 文字打ち切りに戻せる
+- **context-mode MCP サーバー（mksglu/context-mode）を使用しない理由** — LangGraph には PreToolUse フックがなく、エージェントが明示的に `ctx_index` → `ctx_search` を呼ぶ必要があり、ラウンドトリップが3倍に増加するため
+
+### 関連ファイル
+
+| ファイル | 役割 |
+|---|---|
+| `tools/context_store.py` | ContextStore クラス（FTS5 テーブル管理、チャンキング、BM25 検索） |
+| `tools/base.py` | `_call_tool()` パイプラインへの統合 |
+| `core/config.py` | `CONTEXT_MODE_*` 設定 |
+
 ## ディレクトリ構成
 
 ```
@@ -145,6 +194,7 @@ ai-agent-observability/
 │   │   ├── grafana.py        # Grafana MCP ツール
 │   │   ├── kubernetes.py     # Kubernetes MCP ツール
 │   │   ├── registry.py       # ツールレジストリ
+│   │   ├── context_store.py  # Context Mode (FTS5 + BM25 圧縮)
 │   │   ├── query_validator.py  # PromQL/LogQL バリデータ
 │   │   ├── query_rag.py      # クエリ Few-shot RAG (BM25)
 │   │   └── time.py           # 時間関連ツール
@@ -176,7 +226,7 @@ ai-agent-observability/
 | 可視化 | Grafana |
 | MCP サーバ | prometheus-mcp-server, loki-mcp, grafana-mcp, kubernetes-mcp-server |
 | ベクトル検索 | Qdrant (RCA レポート・観測データの保存・検索) |
-| テキスト検索 | BM25 (クエリ Few-shot RAG) |
+| テキスト検索 | BM25 (クエリ Few-shot RAG, Context Mode ツール出力圧縮) |
 | トレーシング | Langfuse (self-hosted) |
 | 型検査 / Lint | mypy (strict), Ruff |
 | テスト | pytest, pytest-asyncio |

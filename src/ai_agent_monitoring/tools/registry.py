@@ -8,6 +8,7 @@ from langchain_core.tools import BaseTool
 
 from ai_agent_monitoring.core.config import Settings
 from ai_agent_monitoring.tools.base import MCPClient
+from ai_agent_monitoring.tools.context_store import ContextStore
 from ai_agent_monitoring.tools.grafana import create_grafana_tools
 from ai_agent_monitoring.tools.kubernetes import create_kubernetes_tools
 from ai_agent_monitoring.tools.loki import create_loki_tools
@@ -165,11 +166,16 @@ class ToolRegistry:
             results[conn.name] = detected
         return results
 
-    def create_all_tools(self, healthy_only: bool = True) -> list[BaseTool]:
+    def create_all_tools(
+        self,
+        healthy_only: bool = True,
+        context_store: ContextStore | None = None,
+    ) -> list[BaseTool]:
         """全MCP Serverから利用可能なLangChain Toolを一括生成.
 
         Args:
             healthy_only: Trueの場合、healthyなMCPのみからツールを生成
+            context_store: Context Mode ストア（有効時に各ツールへ注入）
 
         Returns:
             利用可能なツールのリスト
@@ -180,28 +186,32 @@ class ToolRegistry:
         tools += create_time_tools()
 
         if not healthy_only or self.prometheus.healthy:
-            tools += create_prometheus_tools(self.prometheus.client)
+            tools += create_prometheus_tools(self.prometheus.client, context_store=context_store)
         else:
             logger.warning("Prometheus MCP is unhealthy, skipping tools")
 
         if not healthy_only or self.loki.healthy:
-            tools += create_loki_tools(self.loki.client)
+            tools += create_loki_tools(self.loki.client, context_store=context_store)
         else:
             logger.warning("Loki MCP is unhealthy, skipping tools")
 
         if not healthy_only or self.grafana.healthy:
-            tools += create_grafana_tools(self.grafana.client)
+            tools += create_grafana_tools(self.grafana.client, context_store=context_store)
         else:
             logger.warning("Grafana MCP is unhealthy, skipping tools")
 
         if not healthy_only or self.kubernetes.healthy:
-            tools += create_kubernetes_tools(self.kubernetes.client)
+            tools += create_kubernetes_tools(self.kubernetes.client, context_store=context_store)
         else:
             logger.warning("Kubernetes MCP is unhealthy, skipping tools")
 
         return tools
 
-    def create_prioritized_tools(self, grafana_first: bool = True) -> list[BaseTool]:
+    def create_prioritized_tools(
+        self,
+        grafana_first: bool = True,
+        context_store: ContextStore | None = None,
+    ) -> list[BaseTool]:
         """優先順位付きでツールを生成.
 
         Grafana MCPを優先し、unhealthyなMCPはスキップする。
@@ -210,6 +220,7 @@ class ToolRegistry:
 
         Args:
             grafana_first: Grafanaツールを優先する場合True
+            context_store: Context Mode ストア
 
         Returns:
             優先順位付きのツールリスト
@@ -221,30 +232,30 @@ class ToolRegistry:
 
         if grafana_first and self.grafana.healthy:
             # Grafana MCPが健全ならGrafanaツールを優先
-            tools += create_grafana_tools(self.grafana.client)
+            tools += create_grafana_tools(self.grafana.client, context_store=context_store)
             logger.info("Grafana MCP tools added (primary)")
 
             # Grafana経由でアクセスできない場合のフォールバック
             if self.prometheus.healthy:
-                tools += create_prometheus_tools(self.prometheus.client)
+                tools += create_prometheus_tools(self.prometheus.client, context_store=context_store)
                 logger.info("Prometheus MCP tools added (fallback)")
 
             if self.loki.healthy:
-                tools += create_loki_tools(self.loki.client)
+                tools += create_loki_tools(self.loki.client, context_store=context_store)
                 logger.info("Loki MCP tools added (fallback)")
         else:
             # Grafanaが使えない場合は直接アクセス
             if self.grafana.healthy:
-                tools += create_grafana_tools(self.grafana.client)
+                tools += create_grafana_tools(self.grafana.client, context_store=context_store)
 
             if self.prometheus.healthy:
-                tools += create_prometheus_tools(self.prometheus.client)
+                tools += create_prometheus_tools(self.prometheus.client, context_store=context_store)
                 logger.info("Prometheus MCP tools added (direct)")
             else:
                 logger.warning("Prometheus MCP is unhealthy, skipping")
 
             if self.loki.healthy:
-                tools += create_loki_tools(self.loki.client)
+                tools += create_loki_tools(self.loki.client, context_store=context_store)
                 logger.info("Loki MCP tools added (direct)")
             else:
                 logger.warning("Loki MCP is unhealthy, skipping")

@@ -93,6 +93,11 @@ class Settings(BaseSettings):
     # Environment cache TTL（秒）— discover_environment の結果をキャッシュする時間
     environment_cache_ttl_seconds: int = 3600
 
+    # Context Mode
+    context_mode_enabled: bool = True
+    context_mode_max_chunk_chars: int = 500
+    context_mode_search_limit: int = 5
+
     # CORS
     cors_allowed_origins: list[str] = ["http://localhost:3000"]
 

@@ -16,6 +16,7 @@ from ai_agent_monitoring.core.state import (
     should_stop_tool_loop,
 )
 from ai_agent_monitoring.tools.base import MCPClient
+from ai_agent_monitoring.tools.context_store import ContextStore
 from ai_agent_monitoring.tools.kubernetes import KubernetesMCPTool, create_kubernetes_tools
 
 # Langfuse observe デコレータ（未インストール時はno-op）
@@ -49,6 +50,7 @@ class KubernetesAgent:
         self,
         llm: Any,
         kubernetes_mcp: MCPClient | None = None,
+        context_store: ContextStore | None = None,
     ) -> None:
         self.tools: list[Any] = []
         self._k8s_tool: KubernetesMCPTool | None = None
@@ -56,8 +58,8 @@ class KubernetesAgent:
         if kubernetes_mcp:
             # session_context() でセッション再利用するため、
             # @tool クロージャと同一インスタンスを共有する
-            self._k8s_tool = KubernetesMCPTool(kubernetes_mcp)
-            self.tools = create_kubernetes_tools(kubernetes_mcp, k8s_tool=self._k8s_tool)
+            self._k8s_tool = KubernetesMCPTool(kubernetes_mcp, context_store=context_store)
+            self.tools = create_kubernetes_tools(kubernetes_mcp, k8s_tool=self._k8s_tool, context_store=context_store)
             logger.info("KubernetesAgent: Using Kubernetes MCP")
 
         if not self.tools:

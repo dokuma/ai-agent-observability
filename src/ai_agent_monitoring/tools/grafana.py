@@ -8,6 +8,7 @@ import httpx
 from langchain_core.tools import BaseTool, tool
 
 from ai_agent_monitoring.tools.base import BaseMCPTool, MCPClient
+from ai_agent_monitoring.tools.context_store import ContextStore
 from ai_agent_monitoring.tools.metrics_preprocessor import preprocess_prometheus_result
 
 logger = logging.getLogger(__name__)
@@ -399,9 +400,12 @@ class GrafanaMCPTool(BaseMCPTool):
         return await self._call_tool("get_dashboard_panel_queries", {"uid": uid})
 
 
-def create_grafana_tools(mcp_client: MCPClient) -> list[BaseTool]:
+def create_grafana_tools(
+    mcp_client: MCPClient,
+    context_store: ContextStore | None = None,
+) -> list[BaseTool]:
     """LangChain Tool としてラップされた Grafana ツール群を生成."""
-    grafana = GrafanaMCPTool(mcp_client)
+    grafana = GrafanaMCPTool(mcp_client, context_store=context_store)
 
     @tool
     async def grafana_list_dashboards() -> dict[str, Any]:
