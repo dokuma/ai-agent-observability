@@ -164,7 +164,7 @@ class ObservationStore:
                 観測のみ返す（namespace 未設定の観測も含む）。
         """
         # フィルタ構築
-        must_conditions: list[FieldCondition] = []
+        must_conditions: list[Any] = []
         if observation_type:
             must_conditions.append(
                 FieldCondition(
