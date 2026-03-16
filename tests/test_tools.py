@@ -695,3 +695,46 @@ class TestTruncateToolResult:
 
         truncated_text = out["content"][0]["text"]
         assert original_text.startswith(truncated_text)
+
+
+class TestParseSelector:
+    """_parse_selector / _parse_selectors のテスト."""
+
+    def test_single_matcher(self):
+        from ai_agent_monitoring.tools.grafana import _parse_selector
+
+        result = _parse_selector('{job="node-exporter"}')
+        assert result == {"filters": [{"name": "job", "value": "node-exporter", "type": "="}]}
+
+    def test_multiple_matchers(self):
+        from ai_agent_monitoring.tools.grafana import _parse_selector
+
+        result = _parse_selector('{job="node-exporter", namespace=~"monitoring.*"}')
+        assert result == {
+            "filters": [
+                {"name": "job", "value": "node-exporter", "type": "="},
+                {"name": "namespace", "value": "monitoring.*", "type": "=~"},
+            ]
+        }
+
+    def test_all_match_types(self):
+        from ai_agent_monitoring.tools.grafana import _parse_selector
+
+        result = _parse_selector('{a="1", b!="2", c=~"3", d!~"4"}')
+        assert len(result["filters"]) == 4
+        types = [f["type"] for f in result["filters"]]
+        assert types == ["=", "!=", "=~", "!~"]
+
+    def test_empty_selector(self):
+        from ai_agent_monitoring.tools.grafana import _parse_selector
+
+        result = _parse_selector("{}")
+        assert result == {"filters": []}
+
+    def test_parse_selectors_list(self):
+        from ai_agent_monitoring.tools.grafana import _parse_selectors
+
+        result = _parse_selectors(['{job="a"}', '{namespace="b"}'])
+        assert len(result) == 2
+        assert result[0]["filters"] == [{"name": "job", "value": "a", "type": "="}]
+        assert result[1]["filters"] == [{"name": "namespace", "value": "b", "type": "="}]

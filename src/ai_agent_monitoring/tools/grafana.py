@@ -1,6 +1,7 @@
 """Grafana MCP Tool — ダッシュボード・アラート操作."""
 
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
@@ -12,6 +13,33 @@ from ai_agent_monitoring.tools.context_store import ContextStore
 from ai_agent_monitoring.tools.metrics_preprocessor import preprocess_prometheus_result
 
 logger = logging.getLogger(__name__)
+
+# Grafana MCP の Selector / LabelMatcher 構造体に対応する型
+# Go定義: Selector{Filters []LabelMatcher}
+#          LabelMatcher{Name, Value, Type string}
+_MATCHER_RE = re.compile(
+    r'(\w+)\s*(!=|!~|=~|=)\s*"([^"]*)"',
+)
+
+
+def _parse_selector(selector_str: str) -> dict[str, Any]:
+    """PromQLセレクタ文字列を Grafana MCP の Selector 構造体に変換.
+
+    例: '{job="node-exporter", namespace=~"monitoring.*"}'
+    →  {"filters": [
+          {"name": "job", "value": "node-exporter", "type": "="},
+          {"name": "namespace", "value": "monitoring.*", "type": "=~"}
+        ]}
+    """
+    filters: list[dict[str, str]] = []
+    for m in _MATCHER_RE.finditer(selector_str):
+        filters.append({"name": m.group(1), "value": m.group(3), "type": m.group(2)})
+    return {"filters": filters}
+
+
+def _parse_selectors(selectors: list[str]) -> list[dict[str, Any]]:
+    """セレクタ文字列の配列を Selector 構造体の配列に変換."""
+    return [_parse_selector(s) for s in selectors]
 
 
 class GrafanaMCPTool(BaseMCPTool):
@@ -255,13 +283,13 @@ class GrafanaMCPTool(BaseMCPTool):
     async def list_prometheus_label_names(
         self,
         datasource_uid: str,
-        matches: list[str] | None = None,
+        matches: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Prometheusで利用可能なラベル名一覧を取得.
 
         Args:
             datasource_uid: データソースのUID
-            matches: フィルタ用のメトリクスセレクタ（配列）
+            matches: Selector 構造体の配列（_parse_selectors で生成）
         """
         logger.info("Grafana: list prometheus label names datasource=%s", datasource_uid)
         params: dict[str, Any] = {"datasourceUid": datasource_uid}
@@ -273,14 +301,14 @@ class GrafanaMCPTool(BaseMCPTool):
         self,
         datasource_uid: str,
         label_name: str,
-        matches: list[str] | None = None,
+        matches: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Prometheusの特定ラベルの値一覧を取得.
 
         Args:
             datasource_uid: データソースのUID
             label_name: ラベル名
-            matches: フィルタ用のメトリクスセレクタ（配列）
+            matches: Selector 構造体の配列（_parse_selectors で生成）
         """
         logger.info(
             "Grafana: list prometheus label values datasource=%s label=%s",
@@ -502,8 +530,9 @@ def create_grafana_tools(
         matches: list[str] | None = None,
     ) -> dict[str, Any]:
         """Prometheusで利用可能なラベル名一覧を取得します。
-        matchesはメトリクスセレクタの配列です。例: ['{job="node-exporter"}']"""
-        return await grafana.list_prometheus_label_names(datasource_uid, matches)
+        matchesはPromQLセレクタ文字列の配列です。例: ['{job="node-exporter"}']"""
+        parsed = _parse_selectors(matches) if matches else None
+        return await grafana.list_prometheus_label_names(datasource_uid, parsed)
 
     @tool
     async def grafana_list_prometheus_label_values(
@@ -513,8 +542,9 @@ def create_grafana_tools(
     ) -> dict[str, Any]:
         """Prometheusの特定ラベルの値一覧を取得します。
         例: label_name='job'でjobラベルの全値を取得。
-        matchesはメトリクスセレクタの配列です。例: ['{job="node-exporter"}']"""
-        return await grafana.list_prometheus_label_values(datasource_uid, label_name, matches)
+        matchesはPromQLセレクタ文字列の配列です。例: ['{job="node-exporter"}']"""
+        parsed = _parse_selectors(matches) if matches else None
+        return await grafana.list_prometheus_label_values(datasource_uid, label_name, parsed)
 
     @tool
     async def grafana_list_loki_labels(datasource_uid: str) -> dict[str, Any]:
