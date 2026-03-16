@@ -253,6 +253,15 @@ class AppState:
         is_debug = os.environ.get("OPENAI_LOG", "").lower() == "debug"
 
         http_client, http_async_client = _build_http_clients(custom_headers, verify_ssl, is_debug)
+        # extra_body: ChatOpenAI は max_tokens を max_completion_tokens に変換する。
+        # OpenAI 互換サーバーが max_tokens を期待する場合は extra_body 経由で
+        # リクエストボディに直接注入し、変換を回避する。
+        extra_body: dict[str, Any] = {}
+        if self.settings.llm_max_tokens > 0:
+            extra_body["max_tokens"] = self.settings.llm_max_tokens
+        if self.settings.llm_temperature >= 0:
+            extra_body["temperature"] = self.settings.llm_temperature
+
         llm_kwargs: dict[str, Any] = {
             "base_url": self.settings.llm_endpoint,
             "model": self.settings.llm_model,
@@ -261,10 +270,8 @@ class AppState:
             "http_client": http_client,
             "http_async_client": http_async_client,
         }
-        if self.settings.llm_max_tokens > 0:
-            llm_kwargs["max_tokens"] = self.settings.llm_max_tokens
-        if self.settings.llm_temperature >= 0:
-            llm_kwargs["temperature"] = self.settings.llm_temperature
+        if extra_body:
+            llm_kwargs["extra_body"] = extra_body
         raw_llm = ChatOpenAI(**llm_kwargs)
         llm = RateLimitRetryWrapper(
             raw_llm,
