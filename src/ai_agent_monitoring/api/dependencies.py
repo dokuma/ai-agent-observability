@@ -170,7 +170,7 @@ def _build_http_clients(
             if request.headers.get("content-type", "").startswith("application/json") and request.content:
                 try:
                     body = json.loads(request.content)
-                    body.update(body_overrides)  # type: ignore[union-attr]
+                    body.update(body_overrides)
                     raw = json.dumps(body).encode("utf-8")
                     request._content = raw
                     request.headers["content-length"] = str(len(raw))
