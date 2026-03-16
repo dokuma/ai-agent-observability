@@ -2306,9 +2306,7 @@ class OrchestratorAgent:
     }
 
     @staticmethod
-    def _extract_namespaces_from_query(
-        raw_input: str, env: EnvironmentContext | None
-    ) -> list[str]:
+    def _extract_namespaces_from_query(raw_input: str, env: EnvironmentContext | None) -> list[str]:
         """ユーザクエリの自然言語テキストから namespace を抽出.
 
         環境発見で取得済みの namespace 一覧と照合し、
@@ -2393,9 +2391,7 @@ class OrchestratorAgent:
 
             # user_query の自然言語テキストから namespace を抽出
             if not plan.target_namespaces:
-                extracted = self._extract_namespaces_from_query(
-                    user_query.raw_input, env
-                )
+                extracted = self._extract_namespaces_from_query(user_query.raw_input, env)
                 if extracted:
                     plan.target_namespaces = extracted
                     logger.info(

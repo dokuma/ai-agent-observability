@@ -463,41 +463,31 @@ class TestExtractNamespacesFromQuery:
     def test_extracts_multiple_namespaces(self):
         """複数の namespace が含まれる場合すべて抽出される."""
         env = self._make_env(["monitoring", "app-production", "default"])
-        result = OrchestratorAgent._extract_namespaces_from_query(
-            "monitoringとapp-productionのログを確認", env
-        )
+        result = OrchestratorAgent._extract_namespaces_from_query("monitoringとapp-productionのログを確認", env)
         assert set(result) == {"monitoring", "app-production"}
 
     def test_no_match_returns_empty(self):
         """クエリに namespace 名が含まれない場合は空リスト."""
         env = self._make_env(["monitoring", "default"])
-        result = OrchestratorAgent._extract_namespaces_from_query(
-            "CPU使用率が高い原因を調査して", env
-        )
+        result = OrchestratorAgent._extract_namespaces_from_query("CPU使用率が高い原因を調査して", env)
         assert result == []
 
     def test_short_namespace_word_boundary(self):
         """3文字以下の namespace は単語境界チェックで誤マッチを防ぐ."""
         env = self._make_env(["ai", "default"])
         # "said" に "ai" が含まれるが単語境界で弾く
-        result = OrchestratorAgent._extract_namespaces_from_query(
-            "He said something about the cluster", env
-        )
+        result = OrchestratorAgent._extract_namespaces_from_query("He said something about the cluster", env)
         assert "ai" not in result
 
     def test_short_namespace_exact_match(self):
         """3文字以下でも単語として出現すれば抽出される."""
         env = self._make_env(["ai", "default"])
-        result = OrchestratorAgent._extract_namespaces_from_query(
-            "ai 名前空間のDeploymentを確認して", env
-        )
+        result = OrchestratorAgent._extract_namespaces_from_query("ai 名前空間のDeploymentを確認して", env)
         assert result == ["ai"]
 
     def test_no_env_returns_empty(self):
         """env が None の場合は空リスト."""
-        result = OrchestratorAgent._extract_namespaces_from_query(
-            "monitoring名前空間を調査", None
-        )
+        result = OrchestratorAgent._extract_namespaces_from_query("monitoring名前空間を調査", None)
         assert result == []
 
     def test_populate_system_fields_user_query_namespace(self, sample_user_query):
