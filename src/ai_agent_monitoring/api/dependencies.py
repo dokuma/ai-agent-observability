@@ -1,5 +1,6 @@
 """API 依存注入 — アプリケーション全体の共有リソース管理."""
 
+import json
 import logging
 import os
 from dataclasses import dataclass, field
@@ -134,10 +135,16 @@ def _build_http_clients(
     custom_headers: dict[str, str],
     verify_ssl: bool,
     is_debug: bool,
+    body_overrides: dict[str, Any] | None = None,
 ) -> tuple[httpx.Client | None, httpx.AsyncClient | None]:
     """カスタムヘッダー・SSL・デバッグログ付き httpx クライアントを構築.
 
     LLM と Embedding の両方で利用する。呼び出しごとに新しいインスタンスを返す。
+
+    Args:
+        body_overrides: リクエストボディに強制注入するパラメータ。
+            ChatOpenAI が max_tokens を max_completion_tokens に変換してしまうため、
+            httpx フックで直接 JSON ボディを書き換えて回避する。
     """
     request_hooks_sync: list[object] = []
     request_hooks_async: list[object] = []
@@ -157,13 +164,32 @@ def _build_http_clients(
         request_hooks_sync.append(_apply)
         request_hooks_async.append(_apply_async)
 
+    if body_overrides:
+
+        def _inject_body(request: httpx.Request) -> None:
+            if request.headers.get("content-type", "").startswith("application/json") and request.content:
+                try:
+                    body = json.loads(request.content)
+                    body.update(body_overrides)  # type: ignore[union-attr]
+                    raw = json.dumps(body).encode("utf-8")
+                    request._content = raw
+                    request.headers["content-length"] = str(len(raw))
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    pass
+
+        async def _inject_body_async(request: httpx.Request) -> None:
+            _inject_body(request)
+
+        request_hooks_sync.append(_inject_body)
+        request_hooks_async.append(_inject_body_async)
+
     if is_debug:
         request_hooks_sync.append(_log_llm_request)
         request_hooks_async.append(_log_llm_request_async)
         response_hooks_sync.append(_log_llm_response)
         response_hooks_async.append(_log_llm_response_async)
 
-    need_custom_client = bool(custom_headers) or not verify_ssl or is_debug
+    need_custom_client = bool(custom_headers) or not verify_ssl or is_debug or bool(body_overrides)
     if not need_custom_client:
         return None, None
 
@@ -252,27 +278,26 @@ class AppState:
         verify_ssl = self.settings.llm_verify_ssl
         is_debug = os.environ.get("OPENAI_LOG", "").lower() == "debug"
 
-        http_client, http_async_client = _build_http_clients(custom_headers, verify_ssl, is_debug)
-        # extra_body: ChatOpenAI は max_tokens を max_completion_tokens に変換する。
-        # OpenAI 互換サーバーが max_tokens を期待する場合は extra_body 経由で
-        # リクエストボディに直接注入し、変換を回避する。
-        extra_body: dict[str, Any] = {}
+        # body_overrides: ChatOpenAI は max_tokens を max_completion_tokens に変換する。
+        # OpenAI 互換サーバーが max_tokens を期待する場合は httpx フックで
+        # リクエストボディを直接書き換えて回避する。
+        body_overrides: dict[str, Any] = {}
         if self.settings.llm_max_tokens > 0:
-            extra_body["max_tokens"] = self.settings.llm_max_tokens
+            body_overrides["max_tokens"] = self.settings.llm_max_tokens
         if self.settings.llm_temperature >= 0:
-            extra_body["temperature"] = self.settings.llm_temperature
+            body_overrides["temperature"] = self.settings.llm_temperature
 
-        llm_kwargs: dict[str, Any] = {
-            "base_url": self.settings.llm_endpoint,
-            "model": self.settings.llm_model,
-            "api_key": SecretStr(self.settings.llm_api_key),
-            "max_retries": self.settings.llm_max_retries,
-            "http_client": http_client,
-            "http_async_client": http_async_client,
-        }
-        if extra_body:
-            llm_kwargs["extra_body"] = extra_body
-        raw_llm = ChatOpenAI(**llm_kwargs)
+        http_client, http_async_client = _build_http_clients(
+            custom_headers, verify_ssl, is_debug, body_overrides=body_overrides or None
+        )
+        raw_llm = ChatOpenAI(
+            base_url=self.settings.llm_endpoint,
+            model=self.settings.llm_model,
+            api_key=SecretStr(self.settings.llm_api_key),
+            max_retries=self.settings.llm_max_retries,
+            http_client=http_client,
+            http_async_client=http_async_client,
+        )
         llm = RateLimitRetryWrapper(
             raw_llm,
             max_attempts=self.settings.llm_rate_limit_max_attempts,
