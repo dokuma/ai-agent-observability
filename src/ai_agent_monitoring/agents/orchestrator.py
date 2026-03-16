@@ -232,7 +232,11 @@ class OrchestratorAgent:
             else None
         )
 
-        self.rca_agent = RCAAgent(self.llm, grafana_mcp=self.grafana_mcp)
+        self.rca_agent = RCAAgent(
+            self.llm,
+            grafana_mcp=self.grafana_mcp,
+            use_structured_output=self.settings.llm_use_structured_output,
+        )
 
         # KubernetesAgent: K8s MCPが健全な場合のみ生成
         kubernetes_mcp = registry.kubernetes.client if registry.kubernetes.healthy else None
@@ -2441,7 +2445,13 @@ class OrchestratorAgent:
         LLMのStructured Output機能を使い、スキーマに沿ったJSONを直接生成させる。
         datasource_uid はスキーマから除外し、LLM に生成させない。
         Structured Output が失敗した場合は、従来のテキストパースにフォールバックする。
+        llm_use_structured_output=False の場合は直接テキストパースを使用する。
         """
+        if not self.settings.llm_use_structured_output:
+            logger.info("Structured output 無効、テキストパースを使用")
+            response = await self.llm.ainvoke(messages)
+            return self._parse_plan(response.content)
+
         try:
             structured_llm = self.llm.with_structured_output(InvestigationPlanSchema)
             result = await structured_llm.ainvoke(messages)

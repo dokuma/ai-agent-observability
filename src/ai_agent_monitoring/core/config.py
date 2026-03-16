@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     llm_max_retries: int = 5
     llm_max_tokens: int = 0  # 0 の場合は指定しない（モデルデフォルト）
     llm_temperature: float = -1.0  # 負値の場合は指定しない（モデルデフォルト）
+    llm_use_structured_output: bool = True  # False で Structured Output をスキップ
 
     @model_validator(mode="after")
     def _parse_llm_custom_header_env(self) -> "Settings":

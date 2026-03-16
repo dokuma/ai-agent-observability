@@ -51,10 +51,12 @@ class RCAAgent:
         llm: Any,
         grafana_mcp: MCPClient | None = None,
         output_dir: str = "/tmp/rca_reports",  # noqa: S108
+        use_structured_output: bool = True,
     ) -> None:
         self.llm = llm
         self.grafana = GrafanaMCPTool(grafana_mcp) if grafana_mcp else None
         self.output_dir = Path(output_dir)
+        self._use_structured_output = use_structured_output
         self.graph = self._build_graph()
 
     def _build_graph(self) -> StateGraph[AgentState]:
@@ -169,8 +171,8 @@ class RCAAgent:
         )
         messages = [*state["messages"], HumanMessage(content=report_prompt)]
 
-        # Structured Output を試行
-        schema_result = await self._invoke_structured_report(messages)
+        # Structured Output を試行（無効化されている場合はスキップ）
+        schema_result = await self._invoke_structured_report(messages) if self._use_structured_output else None
         if schema_result is not None:
             report = self._build_report_from_schema(schema_result, state)
         else:
