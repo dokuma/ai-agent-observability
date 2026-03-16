@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from qdrant_client.models import FieldCondition, Filter, MatchValue
+from qdrant_client.models import FieldCondition, Filter, MatchAny, MatchValue
 
 from ai_agent_monitoring.core.models import KubernetesResult, LogsResult, MetricsResult
 from ai_agent_monitoring.core.vector_store import VectorStore
@@ -152,6 +152,7 @@ class ObservationStore:
         query: str,
         top_k: int = 5,
         observation_type: str | None = None,
+        target_namespaces: list[str] | None = None,
     ) -> list[ObservationSearchResult]:
         """類似の過去観測を検索し、time_decay でリスコアリング.
 
@@ -159,18 +160,28 @@ class ObservationStore:
             query: 検索クエリテキスト
             top_k: 返却する最大件数
             observation_type: フィルタ（"metrics" | "logs" | "k8s"）。None で全種別。
+            target_namespaces: namespace フィルタ。指定時は該当 namespace の
+                観測のみ返す（namespace 未設定の観測も含む）。
         """
         # フィルタ構築
-        query_filter: Filter | None = None
+        must_conditions: list[FieldCondition] = []
         if observation_type:
-            query_filter = Filter(
-                must=[
-                    FieldCondition(
-                        key="observation_type",
-                        match=MatchValue(value=observation_type),
-                    )
-                ]
+            must_conditions.append(
+                FieldCondition(
+                    key="observation_type",
+                    match=MatchValue(value=observation_type),
+                )
             )
+        if target_namespaces:
+            # 指定 namespace + namespace 未設定（""）の観測を含める
+            allowed = [*target_namespaces, ""]
+            must_conditions.append(
+                FieldCondition(
+                    key="namespace",
+                    match=MatchAny(any=allowed),
+                )
+            )
+        query_filter: Filter | None = Filter(must=must_conditions) if must_conditions else None
 
         # 多めに取得してリスコアリング後に絞り込む
         fetch_k = top_k * 3

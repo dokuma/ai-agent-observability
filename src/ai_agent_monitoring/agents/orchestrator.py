@@ -1548,8 +1548,11 @@ class OrchestratorAgent:
         # RAGから関連ドキュメントを取得
         rag_context = self._get_rag_context(query_text)
 
-        # 過去の類似観測データを検索
-        past_observations = await self._search_past_observations(query_text)
+        # 過去の類似観測データを検索（namespace でフィルタ）
+        analyze_namespaces = self._resolve_target_namespaces(state)
+        past_observations = await self._search_past_observations(
+            query_text, target_namespaces=analyze_namespaces or None
+        )
 
         system_prompt = ORCHESTRATOR_SYSTEM_PROMPT.format(
             max_iterations=state.get("max_iterations", 3),
@@ -1771,8 +1774,9 @@ class OrchestratorAgent:
                 "ラベル名やメトリクス名を参考にしてください:\n" + panel_templates
             )
 
-        # 過去の類似観測データ
-        past_observations = await self._search_past_observations(query_text)
+        # 過去の類似観測データ（namespace でフィルタ）
+        plan_namespaces = self._resolve_target_namespaces(state)
+        past_observations = await self._search_past_observations(query_text, target_namespaces=plan_namespaces or None)
         if past_observations:
             plan_prompt_parts.append(
                 "## 過去の類似観測データ\n"
@@ -2256,7 +2260,11 @@ class OrchestratorAgent:
         except Exception:
             logger.warning("Failed to save observations for %s", inv_id, exc_info=True)
 
-    async def _search_past_observations(self, query_text: str) -> str:
+    async def _search_past_observations(
+        self,
+        query_text: str,
+        target_namespaces: list[str] | None = None,
+    ) -> str:
         """過去の類似観測を検索しプロンプト用テキストを生成."""
         if not self.observation_store:
             return ""
@@ -2264,6 +2272,7 @@ class OrchestratorAgent:
             results = await self.observation_store.search_similar(
                 query=query_text,
                 top_k=5,
+                target_namespaces=target_namespaces,
             )
         except Exception:
             logger.warning("Failed to search past observations", exc_info=True)
@@ -2304,6 +2313,33 @@ class OrchestratorAgent:
         "pods": "target_pods",
         "resource_kinds": "k8s_resource_kinds",
     }
+
+    def _resolve_target_namespaces(self, state: AgentState) -> list[str]:
+        """state から target_namespaces を解決する.
+
+        前回の plan、alert labels、user_query テキストの順で namespace を探す。
+        """
+        # 前回の plan に設定済みの namespace があればそれを使う
+        previous_plan = state.get("plan")
+        if previous_plan and previous_plan.target_namespaces:
+            return list(previous_plan.target_namespaces)
+
+        # alert の labels から namespace を取得
+        alert = state.get("alert")
+        if alert and alert.labels:
+            ns = alert.labels.get("namespace", "")
+            if ns:
+                return [ns]
+
+        # user_query のテキストから namespace を抽出
+        user_query = state.get("user_query")
+        env = state.get("environment")
+        if user_query:
+            extracted = self._extract_namespaces_from_query(user_query.raw_input, env)
+            if extracted:
+                return extracted
+
+        return []
 
     @staticmethod
     def _extract_namespaces_from_query(raw_input: str, env: EnvironmentContext | None) -> list[str]:

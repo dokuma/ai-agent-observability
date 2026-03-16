@@ -507,6 +507,64 @@ class TestExtractNamespacesFromQuery:
         assert plan.target_namespaces == ["monitoring"]
 
 
+class TestResolveTargetNamespaces:
+    """_resolve_target_namespaces のテスト."""
+
+    def setup_method(self):
+        self.agent, _ = _make_orchestrator()
+
+    def test_from_previous_plan(self):
+        """前回の plan に target_namespaces があればそれを返す."""
+        plan = InvestigationPlan(promql_queries=["up"], target_namespaces=["monitoring"])
+        state = AgentState(messages=[], trigger_type=TriggerType.USER_QUERY, plan=plan)
+        result = self.agent._resolve_target_namespaces(state)
+        assert result == ["monitoring"]
+
+    def test_from_alert_labels(self, sample_alert):
+        """alert の labels から namespace を取得."""
+        sample_alert.labels = {"namespace": "production"}
+        state = AgentState(messages=[], trigger_type=TriggerType.ALERT, alert=sample_alert)
+        result = self.agent._resolve_target_namespaces(state)
+        assert result == ["production"]
+
+    def test_from_user_query(self, sample_user_query):
+        """user_query のテキストから namespace を抽出."""
+        sample_user_query.raw_input = "monitoring名前空間のPodを調査して"
+        env = EnvironmentContext(k8s_env=K8sEnvInfo(namespaces=["monitoring", "default"]))
+        state = AgentState(
+            messages=[],
+            trigger_type=TriggerType.USER_QUERY,
+            user_query=sample_user_query,
+            environment=env,
+        )
+        result = self.agent._resolve_target_namespaces(state)
+        assert result == ["monitoring"]
+
+    def test_returns_empty_when_no_namespace_info(self, sample_user_query):
+        """namespace 情報がない場合は空リスト."""
+        sample_user_query.raw_input = "CPU使用率を調査して"
+        state = AgentState(
+            messages=[],
+            trigger_type=TriggerType.USER_QUERY,
+            user_query=sample_user_query,
+        )
+        result = self.agent._resolve_target_namespaces(state)
+        assert result == []
+
+    def test_plan_takes_priority_over_alert(self, sample_alert):
+        """plan の namespace が alert より優先される."""
+        sample_alert.labels = {"namespace": "old-ns"}
+        plan = InvestigationPlan(promql_queries=["up"], target_namespaces=["new-ns"])
+        state = AgentState(
+            messages=[],
+            trigger_type=TriggerType.ALERT,
+            alert=sample_alert,
+            plan=plan,
+        )
+        result = self.agent._resolve_target_namespaces(state)
+        assert result == ["new-ns"]
+
+
 class TestOrchestratorExtractJson:
     """Orchestrator 経由の JSON 抽出テスト（共通ユーティリティに委譲）."""
 

@@ -242,6 +242,48 @@ class TestSearchSimilar:
         assert call_kwargs["query_filter"] is None
 
     @pytest.mark.asyncio
+    async def test_filter_by_namespace(self, observation_store, mock_vector_store):
+        """target_namespaces 指定時は namespace フィルタが適用される."""
+        await observation_store.search_similar("test", target_namespaces=["prod"])
+        call_kwargs = mock_vector_store.search.call_args[1]
+        query_filter = call_kwargs["query_filter"]
+        assert query_filter is not None
+        # namespace フィルタがある
+        ns_condition = next(c for c in query_filter.must if c.key == "namespace")
+        # prod と "" (namespace 未設定) が含まれる
+        assert "prod" in ns_condition.match.any
+        assert "" in ns_condition.match.any
+
+    @pytest.mark.asyncio
+    async def test_filter_by_multiple_namespaces(self, observation_store, mock_vector_store):
+        """複数 namespace 指定時はすべてがフィルタに含まれる."""
+        await observation_store.search_similar("test", target_namespaces=["prod", "staging"])
+        call_kwargs = mock_vector_store.search.call_args[1]
+        query_filter = call_kwargs["query_filter"]
+        ns_condition = next(c for c in query_filter.must if c.key == "namespace")
+        assert "prod" in ns_condition.match.any
+        assert "staging" in ns_condition.match.any
+        assert "" in ns_condition.match.any
+
+    @pytest.mark.asyncio
+    async def test_no_namespace_filter_when_none(self, observation_store, mock_vector_store):
+        """target_namespaces が None の場合はフィルタなし."""
+        await observation_store.search_similar("test", target_namespaces=None)
+        call_kwargs = mock_vector_store.search.call_args[1]
+        assert call_kwargs["query_filter"] is None
+
+    @pytest.mark.asyncio
+    async def test_combined_type_and_namespace_filter(self, observation_store, mock_vector_store):
+        """observation_type と target_namespaces の同時指定で両方のフィルタが適用される."""
+        await observation_store.search_similar("test", observation_type="metrics", target_namespaces=["prod"])
+        call_kwargs = mock_vector_store.search.call_args[1]
+        query_filter = call_kwargs["query_filter"]
+        assert query_filter is not None
+        assert len(query_filter.must) == 2
+        keys = {c.key for c in query_filter.must}
+        assert keys == {"observation_type", "namespace"}
+
+    @pytest.mark.asyncio
     async def test_handles_search_failure(self, observation_store, mock_vector_store):
         mock_vector_store.search = AsyncMock(side_effect=Exception("search error"))
         results = await observation_store.search_similar("test")
