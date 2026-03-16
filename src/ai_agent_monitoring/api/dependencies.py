@@ -253,14 +253,19 @@ class AppState:
         is_debug = os.environ.get("OPENAI_LOG", "").lower() == "debug"
 
         http_client, http_async_client = _build_http_clients(custom_headers, verify_ssl, is_debug)
-        raw_llm = ChatOpenAI(
-            base_url=self.settings.llm_endpoint,
-            model=self.settings.llm_model,
-            api_key=SecretStr(self.settings.llm_api_key),
-            max_retries=self.settings.llm_max_retries,
-            http_client=http_client,
-            http_async_client=http_async_client,
-        )
+        llm_kwargs: dict[str, Any] = {
+            "base_url": self.settings.llm_endpoint,
+            "model": self.settings.llm_model,
+            "api_key": SecretStr(self.settings.llm_api_key),
+            "max_retries": self.settings.llm_max_retries,
+            "http_client": http_client,
+            "http_async_client": http_async_client,
+        }
+        if self.settings.llm_max_tokens > 0:
+            llm_kwargs["max_tokens"] = self.settings.llm_max_tokens
+        if self.settings.llm_temperature >= 0:
+            llm_kwargs["temperature"] = self.settings.llm_temperature
+        raw_llm = ChatOpenAI(**llm_kwargs)
         llm = RateLimitRetryWrapper(
             raw_llm,
             max_attempts=self.settings.llm_rate_limit_max_attempts,
