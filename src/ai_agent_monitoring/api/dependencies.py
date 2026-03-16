@@ -173,6 +173,7 @@ def _build_http_clients(
                     body.update(body_overrides)
                     raw = json.dumps(body).encode("utf-8")
                     request._content = raw
+                    request.stream = httpx.ByteStream(raw)
                     request.headers["content-length"] = str(len(raw))
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     pass
