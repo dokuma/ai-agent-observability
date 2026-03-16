@@ -167,7 +167,8 @@ def _build_http_clients(
     if body_overrides:
 
         def _inject_body(request: httpx.Request) -> None:
-            if request.headers.get("content-type", "").startswith("application/json") and request.content:
+            content_type = request.headers.get("content-type", "")
+            if content_type.startswith("application/json") and request.content:
                 try:
                     body = json.loads(request.content)
                     body.update(body_overrides)
@@ -175,8 +176,19 @@ def _build_http_clients(
                     request._content = raw
                     request.stream = httpx.ByteStream(raw)
                     request.headers["content-length"] = str(len(raw))
+                    logger.info(
+                        "LLM body_overrides injected: %s (body keys: %s)",
+                        body_overrides,
+                        list(body.keys()),
+                    )
                 except (json.JSONDecodeError, UnicodeDecodeError):
-                    pass
+                    logger.warning("Failed to inject body_overrides: decode error")
+            else:
+                logger.debug(
+                    "LLM body_overrides skipped: content-type=%s, has_content=%s",
+                    content_type,
+                    bool(request.content),
+                )
 
         async def _inject_body_async(request: httpx.Request) -> None:
             _inject_body(request)
