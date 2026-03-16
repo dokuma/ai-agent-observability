@@ -28,6 +28,7 @@ from ai_agent_monitoring.core.state import (
     EnvironmentContext,
     InvestigationPlan,
     InvestigationPlanSchema,
+    K8sEnvInfo,
     PanelQuery,
     TimeRange,
 )
@@ -440,6 +441,80 @@ class TestOrchestratorPopulateSystemFields:
         self.agent._populate_system_fields(new_plan, state)
 
         assert new_plan.time_range is None
+
+
+class TestExtractNamespacesFromQuery:
+    """_extract_namespaces_from_query のテスト."""
+
+    def setup_method(self):
+        self.agent, _ = _make_orchestrator()
+
+    def _make_env(self, namespaces: list[str]) -> EnvironmentContext:
+        return EnvironmentContext(k8s_env=K8sEnvInfo(namespaces=namespaces))
+
+    def test_extracts_namespace_from_query(self):
+        """クエリ中に実在する namespace 名があれば抽出される."""
+        env = self._make_env(["monitoring", "default", "app-production"])
+        result = OrchestratorAgent._extract_namespaces_from_query(
+            "monitoring名前空間のPodの状態を調査してください", env
+        )
+        assert result == ["monitoring"]
+
+    def test_extracts_multiple_namespaces(self):
+        """複数の namespace が含まれる場合すべて抽出される."""
+        env = self._make_env(["monitoring", "app-production", "default"])
+        result = OrchestratorAgent._extract_namespaces_from_query(
+            "monitoringとapp-productionのログを確認", env
+        )
+        assert set(result) == {"monitoring", "app-production"}
+
+    def test_no_match_returns_empty(self):
+        """クエリに namespace 名が含まれない場合は空リスト."""
+        env = self._make_env(["monitoring", "default"])
+        result = OrchestratorAgent._extract_namespaces_from_query(
+            "CPU使用率が高い原因を調査して", env
+        )
+        assert result == []
+
+    def test_short_namespace_word_boundary(self):
+        """3文字以下の namespace は単語境界チェックで誤マッチを防ぐ."""
+        env = self._make_env(["ai", "default"])
+        # "said" に "ai" が含まれるが単語境界で弾く
+        result = OrchestratorAgent._extract_namespaces_from_query(
+            "He said something about the cluster", env
+        )
+        assert "ai" not in result
+
+    def test_short_namespace_exact_match(self):
+        """3文字以下でも単語として出現すれば抽出される."""
+        env = self._make_env(["ai", "default"])
+        result = OrchestratorAgent._extract_namespaces_from_query(
+            "ai 名前空間のDeploymentを確認して", env
+        )
+        assert result == ["ai"]
+
+    def test_no_env_returns_empty(self):
+        """env が None の場合は空リスト."""
+        result = OrchestratorAgent._extract_namespaces_from_query(
+            "monitoring名前空間を調査", None
+        )
+        assert result == []
+
+    def test_populate_system_fields_user_query_namespace(self, sample_user_query):
+        """UserQuery の raw_input から namespace が plan に設定される."""
+        sample_user_query.raw_input = "monitoring名前空間のPodを調査して"
+        plan = InvestigationPlan(promql_queries=["up"])
+        env = self._make_env(["monitoring", "default", "kube-system"])
+        state = AgentState(
+            messages=[],
+            trigger_type=TriggerType.USER_QUERY,
+            user_query=sample_user_query,
+            environment=env,
+        )
+
+        self.agent._populate_system_fields(plan, state)
+
+        assert plan.target_namespaces == ["monitoring"]
 
 
 class TestOrchestratorExtractJson:

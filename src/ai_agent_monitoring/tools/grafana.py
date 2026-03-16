@@ -255,13 +255,13 @@ class GrafanaMCPTool(BaseMCPTool):
     async def list_prometheus_label_names(
         self,
         datasource_uid: str,
-        matches: str = "",
+        matches: list[str] | None = None,
     ) -> dict[str, Any]:
         """Prometheusで利用可能なラベル名一覧を取得.
 
         Args:
             datasource_uid: データソースのUID
-            matches: フィルタ用のメトリクスセレクタ
+            matches: フィルタ用のメトリクスセレクタ（配列）
         """
         logger.info("Grafana: list prometheus label names datasource=%s", datasource_uid)
         params: dict[str, Any] = {"datasourceUid": datasource_uid}
@@ -273,14 +273,14 @@ class GrafanaMCPTool(BaseMCPTool):
         self,
         datasource_uid: str,
         label_name: str,
-        matches: str = "",
+        matches: list[str] | None = None,
     ) -> dict[str, Any]:
         """Prometheusの特定ラベルの値一覧を取得.
 
         Args:
             datasource_uid: データソースのUID
             label_name: ラベル名
-            matches: フィルタ用のメトリクスセレクタ
+            matches: フィルタ用のメトリクスセレクタ（配列）
         """
         logger.info(
             "Grafana: list prometheus label values datasource=%s label=%s",
@@ -499,19 +499,21 @@ def create_grafana_tools(
     @tool
     async def grafana_list_prometheus_labels(
         datasource_uid: str,
-        matches: str = "",
+        matches: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Prometheusで利用可能なラベル名一覧を取得します。"""
+        """Prometheusで利用可能なラベル名一覧を取得します。
+        matchesはメトリクスセレクタの配列です。例: ['{job="node-exporter"}']"""
         return await grafana.list_prometheus_label_names(datasource_uid, matches)
 
     @tool
     async def grafana_list_prometheus_label_values(
         datasource_uid: str,
         label_name: str,
-        matches: str = "",
+        matches: list[str] | None = None,
     ) -> dict[str, Any]:
         """Prometheusの特定ラベルの値一覧を取得します。
-        例: label_name='job'でjobラベルの全値を取得。"""
+        例: label_name='job'でjobラベルの全値を取得。
+        matchesはメトリクスセレクタの配列です。例: ['{job="node-exporter"}']"""
         return await grafana.list_prometheus_label_values(datasource_uid, label_name, matches)
 
     @tool

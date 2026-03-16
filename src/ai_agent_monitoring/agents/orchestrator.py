@@ -2305,6 +2305,38 @@ class OrchestratorAgent:
         "resource_kinds": "k8s_resource_kinds",
     }
 
+    @staticmethod
+    def _extract_namespaces_from_query(
+        raw_input: str, env: EnvironmentContext | None
+    ) -> list[str]:
+        """ユーザクエリの自然言語テキストから namespace を抽出.
+
+        環境発見で取得済みの namespace 一覧と照合し、
+        実在する namespace のみを返す。
+        """
+        if not env or not env.k8s_env.namespaces:
+            return []
+
+        query_lower = raw_input.lower()
+        matched: list[str] = []
+        for ns in env.k8s_env.namespaces:
+            # 完全一致（大小無視）でクエリ中に namespace 名が含まれるか
+            if ns.lower() in query_lower:
+                matched.append(ns)
+
+        # 短すぎる namespace 名の誤マッチを防ぐ（例: "ai" が "said" にマッチ）
+        # namespace 名が3文字以下の場合は単語境界チェック
+        verified: list[str] = []
+        for ns in matched:
+            if len(ns) <= 3:
+                pattern = rf"\b{re.escape(ns)}\b"
+                if re.search(pattern, raw_input, re.IGNORECASE):
+                    verified.append(ns)
+            else:
+                verified.append(ns)
+
+        return verified
+
     def _populate_system_fields(self, plan: InvestigationPlan, state: AgentState) -> None:
         """システム固有フィールドをコンテキストから設定.
 
@@ -2355,8 +2387,21 @@ class OrchestratorAgent:
                 if instance:
                     plan.target_instances = [instance]
 
-        if user_query is not None and user_query.target_instances:
-            plan.target_instances = user_query.target_instances
+        if user_query is not None:
+            if user_query.target_instances:
+                plan.target_instances = user_query.target_instances
+
+            # user_query の自然言語テキストから namespace を抽出
+            if not plan.target_namespaces:
+                extracted = self._extract_namespaces_from_query(
+                    user_query.raw_input, env
+                )
+                if extracted:
+                    plan.target_namespaces = extracted
+                    logger.info(
+                        "ユーザクエリから namespace を抽出: %s",
+                        plan.target_namespaces,
+                    )
 
     async def _invoke_structured_plan(self, messages: list[Any]) -> InvestigationPlan:
         """Structured Output でLLMを呼び出し、InvestigationPlanを取得.
