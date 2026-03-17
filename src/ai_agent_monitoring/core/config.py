@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     llm_max_tokens: int = 0  # 0 の場合は指定しない（モデルデフォルト）
     llm_temperature: float = -1.0  # 負値の場合は指定しない（モデルデフォルト）
     llm_use_structured_output: bool = True  # False で Structured Output をスキップ
+    llm_tool_choice: str = ""  # 空の場合は指定しない。gpt-oss-120b では "auto" を設定
 
     @model_validator(mode="after")
     def _parse_llm_custom_header_env(self) -> "Settings":

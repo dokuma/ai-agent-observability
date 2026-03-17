@@ -299,6 +299,8 @@ class AppState:
             body_overrides["max_tokens"] = self.settings.llm_max_tokens
         if self.settings.llm_temperature >= 0:
             body_overrides["temperature"] = self.settings.llm_temperature
+        if self.settings.llm_tool_choice:
+            body_overrides["tool_choice"] = self.settings.llm_tool_choice
 
         http_client, http_async_client = _build_http_clients(
             custom_headers, verify_ssl, is_debug, body_overrides=body_overrides or None
