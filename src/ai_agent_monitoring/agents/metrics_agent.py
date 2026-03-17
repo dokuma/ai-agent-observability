@@ -13,7 +13,6 @@ from ai_agent_monitoring.core.state import (
     AgentState,
     extract_tool_observations,
     extract_tool_outputs,
-    sanitize_tool_call_messages,
     should_stop_tool_loop,
 )
 from ai_agent_monitoring.tools.base import MCPClient
