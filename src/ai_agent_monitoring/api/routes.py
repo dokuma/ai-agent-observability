@@ -166,26 +166,63 @@ def _detect_retry_pattern(query: str) -> str | None:
 
 
 def _build_followup_query(query: str) -> str | None:
-    """フォローアップ実行パターンを検出し、直前のRCA recommendations を組み込んだクエリを構築.
+    """フォローアップ実行パターンを検出し、直前のRCA/検索結果を組み込んだクエリを構築.
+
+    RCAレポートの推奨事項やナレッジ検索の回答に含まれるコマンド・クエリを
+    MCPツールで実行するための明確な指示を構築する。
 
     Returns:
-        recommendations を含むクエリ文字列、またはフォローアップでない場合 None
+        実行指示を含むクエリ文字列、またはフォローアップでない場合 None
     """
     if not _FOLLOWUP_PATTERN.search(query):
         return None
 
-    # 直近の completed 調査から recommendations を取得
+    # 直近の completed 調査からコンテキストを取得
     for record in reversed(list(app_state.investigations.values())):
-        if record.status == "completed" and record.rca_report:
-            recommendations = record.rca_report.recommendations
-            if recommendations:
-                recs_text = "\n".join(f"- {r}" for r in recommendations)
-                return (
-                    f"前回の調査で以下の推奨アクションが提示されました:\n{recs_text}\n\n"
-                    f"ユーザの指示: {query}\n\n"
-                    "上記の推奨アクションに基づいて追加の調査・確認を実施してください。"
-                )
-            break
+        if record.status != "completed":
+            continue
+
+        # RCAレポートの推奨事項 + 実行済みクエリ
+        if record.rca_report and record.rca_report.recommendations:
+            recs_text = "\n".join(f"- {r}" for r in record.rca_report.recommendations)
+            parts = [f"## 前回の推奨アクション\n{recs_text}"]
+
+            # agent_tool_outputs から実行済みクエリを参考情報として追加
+            tool_outputs = record.rca_report.agent_tool_outputs
+            if tool_outputs:
+                queries_ref: list[str] = []
+                for source, outputs in tool_outputs.items():
+                    for out in outputs[:3]:
+                        if len(out) < 500:
+                            queries_ref.append(f"- [{source}] {out}")
+                if queries_ref:
+                    parts.append("## 前回実行されたクエリ（参考）\n" + "\n".join(queries_ref[:10]))
+
+            parts.append(f"## ユーザの指示\n{query}")
+            parts.append(
+                "## 実行方針\n"
+                "上記の推奨アクションを実際にMCPツールで実行・検証してください。\n"
+                "- PromQL/LogQLクエリ → Grafana MCP で実行\n"
+                "- K8sリソースの確認 → Kubernetes MCP で実行\n"
+                "- 設定変更の推奨 → 現在の設定状態を確認して報告\n"
+                "推奨アクションを「調査」するのではなく、可能なものは「実行」してください。"
+            )
+            return "\n\n".join(parts)
+
+        # ナレッジ検索の回答からのフォローアップ
+        if record.report_search_answer:
+            answer_text = record.report_search_answer[:3000]
+            return (
+                f"## 前回の検索結果\n{answer_text}\n\n"
+                f"## ユーザの指示\n{query}\n\n"
+                "## 実行方針\n"
+                "上記の情報に含まれるコマンドやクエリをMCPツールで実行し、結果を報告してください。\n"
+                "- PromQL/LogQLクエリ → Grafana MCP で実行\n"
+                "- K8sリソースの確認 → Kubernetes MCP で実行\n"
+                "推奨アクションを「調査」するのではなく、可能なものは「実行」してください。"
+            )
+
+        break
     return None
 
 

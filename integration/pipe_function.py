@@ -163,9 +163,21 @@ class Pipe:
 
     @staticmethod
     def _summarize_assistant_message(content: str) -> str:
-        """アシスタントメッセージを要約（長いRCAレポートを切り詰め）."""
+        """アシスタントメッセージを要約（推奨事項を優先抽出）."""
         # investigation_id マーカーを除去
         cleaned = re.sub(r"<!-- investigation_id:.*?-->", "", content).strip()
+
+        # 推奨事項セクションがあれば優先抽出
+        rec_match = re.search(
+            r"(##?\s*推奨事項.*?)(?=\n##?\s|\Z)",
+            cleaned,
+            re.DOTALL,
+        )
+        if rec_match and len(rec_match.group(1)) > 50:
+            summary = rec_match.group(1).strip()
+            if len(summary) > 1500:
+                summary = summary[:1500] + "...(省略)"
+            return summary
 
         # 長すぎるメッセージは先頭を抽出
         if len(cleaned) > 1000:

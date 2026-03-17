@@ -1111,3 +1111,63 @@ class TestChatContext:
             json={"query": "CPU使用率を調べて"},
         )
         assert response.status_code == 200
+
+
+class TestBuildFollowupQuery:
+    """_build_followup_query のテスト."""
+
+    def test_followup_from_rca_recommendations(self):
+        """RCAレポートの推奨事項からフォローアップクエリが構築される."""
+        from ai_agent_monitoring.api.routes import _build_followup_query
+
+        # テスト用のRCAレポートを設定
+        report = RCAReport(
+            trigger_type=TriggerType.USER_QUERY,
+            root_causes=[],
+            recommendations=["Pod のリソースリミットを見直す", "ログを確認する"],
+            agent_tool_outputs={"metrics": ["up{namespace='monitoring'}"]},
+        )
+        record = app_state.create_investigation("user_query")
+        inv = app_state.get_investigation(record)
+        inv.status = "completed"
+        inv.rca_report = report
+
+        result = _build_followup_query("実行してください")
+        assert result is not None
+        assert "推奨アクション" in result
+        assert "Pod のリソースリミットを見直す" in result
+        assert "MCPツールで実行" in result
+        assert "実行方針" in result
+
+        # cleanup
+        app_state.investigations.clear()
+
+    def test_followup_from_report_search_answer(self):
+        """ナレッジ検索の回答からフォローアップクエリが構築される."""
+        from ai_agent_monitoring.api.routes import _build_followup_query
+
+        record = app_state.create_investigation("report_search")
+        inv = app_state.get_investigation(record)
+        inv.status = "completed"
+        inv.report_search_answer = "CPUが高騰しています。`kubectl top pods -n monitoring` で確認してください。"
+
+        result = _build_followup_query("実行して")
+        assert result is not None
+        assert "前回の検索結果" in result
+        assert "kubectl top pods" in result
+        assert "MCPツールで実行" in result
+
+        app_state.investigations.clear()
+
+    def test_no_followup_without_pattern(self):
+        """フォローアップパターンがなければ None を返す."""
+        from ai_agent_monitoring.api.routes import _build_followup_query
+
+        assert _build_followup_query("CPU使用率を調べて") is None
+
+    def test_no_followup_without_completed_investigation(self):
+        """完了した調査がなければ None を返す."""
+        from ai_agent_monitoring.api.routes import _build_followup_query
+
+        app_state.investigations.clear()
+        assert _build_followup_query("実行してください") is None
