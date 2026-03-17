@@ -220,7 +220,7 @@ class KubernetesAgent:
             "観察結果に含まれない情報は記述しないでください。\n\n" + obs_text
         )
         response = await self.llm.ainvoke([HumanMessage(content=summary_prompt)])
-        return response.content
+        return str(response.content)
 
     @staticmethod
     def _format_k8s_env_summary(state: AgentState) -> str:

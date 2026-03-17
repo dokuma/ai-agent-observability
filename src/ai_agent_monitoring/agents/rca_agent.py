@@ -82,7 +82,7 @@ class RCAAgent:
         return self.graph.compile()
 
     @staticmethod
-    def _format_observations(results: list, label: str) -> list[str]:
+    def _format_observations(results: list[Any], label: str) -> list[str]:
         """Result の observations をフォーマットしてエビデンスに追加."""
         parts: list[str] = []
         for r in results:

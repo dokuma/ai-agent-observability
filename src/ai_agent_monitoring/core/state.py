@@ -177,7 +177,7 @@ def extract_tool_observations(messages: Sequence[BaseMessage]) -> list[dict[str,
             else:
                 tool_input = str(args)
 
-            tool_output = tool_msg_map.get(tool_call_id, "")
+            tool_output = tool_msg_map.get(tool_call_id or "", "")
             if tool_output:
                 observations.append(
                     {

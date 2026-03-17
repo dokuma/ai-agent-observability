@@ -227,7 +227,7 @@ class MetricsAgent:
             "観察結果に含まれない情報は記述しないでください。\n\n" + obs_text
         )
         response = await self.llm.ainvoke([HumanMessage(content=summary_prompt)])
-        return response.content
+        return str(response.content)
 
     @staticmethod
     def _should_use_tool(state: AgentState) -> str:
