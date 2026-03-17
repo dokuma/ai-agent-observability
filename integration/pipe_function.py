@@ -18,6 +18,7 @@ Note:
 """
 
 import asyncio
+import re
 from collections.abc import Awaitable, Callable
 
 import requests
@@ -50,6 +51,9 @@ class Pipe:
 
     # キャンセルキーワード
     _CANCEL_KEYWORDS = ["中止", "キャンセル", "停止", "cancel", "stop"]
+
+    # フォローアップ検出（代名詞・指示語・詳細要求）
+    _FOLLOWUP_INDICATORS = re.compile(r"その|それ|別の|他の|同じ|こちら|あの|上記|先ほど|さっき|もっと|詳しく|詳細")
 
     async def _emit_status(
         self,
@@ -117,6 +121,57 @@ class Pipe:
             # 汎用（時間範囲指定など、valueが文字列の場合）
             prompt = pending_input if isinstance(pending_input, str) else message
             return f"{prompt}\n\n{marker}"
+
+    def _build_chat_context(self, messages: list) -> str:
+        """チャット履歴からフォローアップ用コンテキストを構築.
+
+        最新メッセージがフォローアップ的（指示語・代名詞を含む）場合、
+        直近の会話ペアからコンテキストを生成する。
+
+        Returns:
+            コンテキスト文字列。フォローアップでなければ空文字。
+        """
+        if len(messages) < 2:
+            return ""
+
+        latest = messages[-1].get("content", "")
+        if not self._FOLLOWUP_INDICATORS.search(latest):
+            return ""
+
+        # 直近3ペアの会話を収集（新しい順）
+        pairs: list[str] = []
+        history = messages[:-1]  # 最新メッセージを除く
+        for msg in reversed(history):
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            if not content:
+                continue
+
+            if role == "assistant":
+                # RCAレポートやレポート検索回答の要約を抽出
+                content = self._summarize_assistant_message(content)
+
+            pairs.append(f"[{role}]: {content}")
+            if len(pairs) >= 6:  # 3ペア = 6メッセージ
+                break
+
+        if not pairs:
+            return ""
+
+        pairs.reverse()
+        return "\n".join(pairs)
+
+    @staticmethod
+    def _summarize_assistant_message(content: str) -> str:
+        """アシスタントメッセージを要約（長いRCAレポートを切り詰め）."""
+        # investigation_id マーカーを除去
+        cleaned = re.sub(r"<!-- investigation_id:.*?-->", "", content).strip()
+
+        # 長すぎるメッセージは先頭を抽出
+        if len(cleaned) > 1000:
+            cleaned = cleaned[:1000] + "...(省略)"
+
+        return cleaned
 
     def _extract_inv_id_from_messages(self, messages: list) -> str | None:
         """メッセージ履歴から直近の investigation_id を抽出."""
@@ -275,13 +330,18 @@ class Pipe:
         except Exception:
             pass  # ヘルスチェック失敗は調査を妨げない
 
-        # 1. 調査開始
+        # 1. 調査開始（チャットコンテキスト付き）
+        chat_context = self._build_chat_context(messages)
         await self._emit_status(__event_emitter__, "🔍 調査を開始中...")
+
+        payload: dict = {"query": query}
+        if chat_context:
+            payload["chat_context"] = chat_context
 
         try:
             res = requests.post(
                 f"{base}/query",
-                json={"query": query},
+                json=payload,
                 timeout=30,
             )
             res.raise_for_status()

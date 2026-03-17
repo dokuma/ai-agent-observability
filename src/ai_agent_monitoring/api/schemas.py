@@ -43,6 +43,11 @@ class UserQueryRequest(BaseModel):
         default_factory=list,
         description="調査対象インスタンス（省略時は全て）",
     )
+    chat_context: str = Field(
+        default="",
+        max_length=20000,
+        description="チャット履歴からの会話コンテキスト（省略可）",
+    )
 
 
 class UserQueryResponse(BaseModel):

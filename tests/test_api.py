@@ -1045,3 +1045,69 @@ class TestRetrospectiveQuery:
 
         app_state.vector_store = None
         app_state.knowledge_search_agent = None
+
+
+class TestSkipSearchPattern:
+    """レポート検索スキップパターンのテスト."""
+
+    def test_skip_patterns_detected(self):
+        from ai_agent_monitoring.api.routes import _SKIP_SEARCH_PATTERN
+
+        assert _SKIP_SEARCH_PATTERN.search("過去のレポートを参照せずに調査して")
+        assert _SKIP_SEARCH_PATTERN.search("レポートを検索しないで調査して")
+        assert _SKIP_SEARCH_PATTERN.search("過去の検索不要で調査開始")
+        assert _SKIP_SEARCH_PATTERN.search("新規調査してください")
+        assert _SKIP_SEARCH_PATTERN.search("新規で調査をお願いします")
+        assert _SKIP_SEARCH_PATTERN.search("直接調査してください")
+        assert _SKIP_SEARCH_PATTERN.search("新しく調査して")
+
+    def test_non_skip_patterns_not_detected(self):
+        from ai_agent_monitoring.api.routes import _SKIP_SEARCH_PATTERN
+
+        assert not _SKIP_SEARCH_PATTERN.search("CPU使用率が高い原因を調べて")
+        assert not _SKIP_SEARCH_PATTERN.search("monitoring名前空間のPodを調査して")
+        assert not _SKIP_SEARCH_PATTERN.search("前回の調査結果を教えて")
+
+    def test_skip_search_routes_to_investigation(self, client):
+        """スキップパターンのクエリはレポート検索をバイパスして調査に直行する."""
+        mock_vs = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.score = 0.9
+        mock_vs.search = AsyncMock(return_value=[mock_result])
+        app_state.vector_store = mock_vs
+        app_state.knowledge_search_agent = AsyncMock()
+
+        response = client.post(
+            "/api/v1/query",
+            json={"query": "過去を参照せずにmonitoring名前空間を直接調査して"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["routed_to"] == "investigation"
+        mock_vs.search.assert_not_called()
+
+        app_state.vector_store = None
+        app_state.knowledge_search_agent = None
+
+
+class TestChatContext:
+    """chat_context 付きクエリのテスト."""
+
+    def test_chat_context_accepted(self, client):
+        """chat_context フィールドが受け入れられる."""
+        response = client.post(
+            "/api/v1/query",
+            json={
+                "query": "そのnamespaceの詳細を調べて",
+                "chat_context": "[user]: monitoring名前空間を調査して\n[assistant]: 調査完了...",
+            },
+        )
+        assert response.status_code == 200
+
+    def test_empty_chat_context_backward_compatible(self, client):
+        """chat_context なしの従来リクエストが動作する."""
+        response = client.post(
+            "/api/v1/query",
+            json={"query": "CPU使用率を調べて"},
+        )
+        assert response.status_code == 200

@@ -52,6 +52,13 @@ _CONTINUE_PATTERN = re.compile(r"深掘|もっと詳しく|追加で調査|続�
 # フォローアップ実行パターン（RCAレポートの推奨アクションを実行する意図）
 _FOLLOWUP_PATTERN = re.compile(r"実行して|実施して|お願いします|やってください|進めて|試して")
 
+# レポート検索スキップパターン（ユーザが過去レポートの参照を明示的に拒否）
+_SKIP_SEARCH_PATTERN = re.compile(
+    r"過去.{0,5}(参照|検索|使用)(しない|せず|不要|なし)|"
+    r"レポート.{0,5}(参照|検索)(しない|せず|不要|なし)|"
+    r"新規(で|に)?調査|直接調査|新しく調査"
+)
+
 # 回顧的クエリ検出用正規表現
 _RETROSPECTIVE_PATTERN = re.compile(
     r"前回|過去の|以前の|先ほど|さっき|履歴|"
@@ -250,17 +257,28 @@ async def submit_query(
             message="前回の推奨アクションに基づいて追加調査を開始します",
         )
 
+    # ---- Step 1.7: レポート検索スキップ検出 ----
+    skip_report_search = bool(_SKIP_SEARCH_PATTERN.search(request.query))
+    if skip_report_search:
+        logger.info("Skip report search: user requested direct investigation")
+
+    # ---- Step 1.8: chat_context 付きクエリの構築 ----
+    effective_query = request.query
+    if request.chat_context:
+        effective_query = f"【会話コンテキスト】\n{request.chat_context}\n\n【現在の質問】\n{request.query}"
+        logger.info("Chat context attached (%d chars)", len(request.chat_context))
+
     # ---- Step 2: レポート検索 + ObservationStore 検索（Search-First） ----
     search_miss_message: str | None = None
     observation_context = ""
 
     # ObservationStore 検索（レポート検索と並行して実行）
-    obs_task = asyncio.create_task(_search_observation_store(request.query))
+    obs_task = asyncio.create_task(_search_observation_store(effective_query))
 
-    if app_state.vector_store and app_state.knowledge_search_agent:
+    if not skip_report_search and app_state.vector_store and app_state.knowledge_search_agent:
         # ベクトル検索で関連レポートを検索
         try:
-            search_results = await app_state.vector_store.search(request.query, top_k=5)
+            search_results = await app_state.vector_store.search(effective_query, top_k=5)
 
             # ObservationStore の結果を取得
             observation_context = await obs_task
@@ -281,7 +299,7 @@ async def submit_query(
                 background_tasks.add_task(
                     _run_report_search,
                     inv_id,
-                    request.query,
+                    effective_query,
                     report_search_timeout,
                     observation_context,
                     is_retrospective,
@@ -310,7 +328,7 @@ async def submit_query(
 
     # ---- Step 4: 新規調査開始 ----
     user_query = UserQuery(
-        raw_input=request.query,
+        raw_input=effective_query,
         target_instances=request.target_instances,
     )
 
