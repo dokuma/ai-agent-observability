@@ -340,6 +340,7 @@ class AppState:
         self.knowledge_search_agent = KnowledgeSearchAgent(
             llm=llm,
             vector_store=self.vector_store,
+            use_context_store=self.settings.context_mode_enabled,
         )
 
         # Environment cache TTL

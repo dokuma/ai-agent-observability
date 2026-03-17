@@ -83,6 +83,40 @@ class ContextStore:
         )
         return source_label
 
+    def index_text(
+        self,
+        source_name: str,
+        text: str,
+    ) -> str:
+        """テキストを直接チャンク分割して FTS5 に格納する.
+
+        Args:
+            source_name: ソース識別名（例: "report_1"）
+            text: インデックスするテキスト
+
+        Returns:
+            source_label
+        """
+        source_label = f"{source_name}_{uuid.uuid4().hex[:8]}"
+        if not text:
+            return source_label
+
+        chunks = self._chunk_text(text)
+        with self._db:
+            for i, chunk in enumerate(chunks):
+                self._db.execute(
+                    "INSERT INTO chunks(source_label, tool_name, chunk_index, content) VALUES (?, ?, ?, ?)",
+                    (source_label, source_name, str(i), chunk),
+                )
+
+        logger.debug(
+            "Indexed %d text chunks for %s (total %d chars)",
+            len(chunks),
+            source_label,
+            len(text),
+        )
+        return source_label
+
     def get_by_source(
         self,
         source_label: str,

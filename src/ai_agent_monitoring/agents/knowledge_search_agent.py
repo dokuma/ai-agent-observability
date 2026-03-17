@@ -9,6 +9,7 @@ from ai_agent_monitoring.agents.prompts import KNOWLEDGE_SEARCH_SYSTEM_PROMPT
 from ai_agent_monitoring.api.schemas import ReportSearchResponse, ReportSearchResult
 from ai_agent_monitoring.core.models import StoredRCAReport
 from ai_agent_monitoring.core.vector_store import VectorStore
+from ai_agent_monitoring.tools.context_store import ContextStore
 
 logger = logging.getLogger(__name__)
 
@@ -31,9 +32,15 @@ except ImportError:
 class KnowledgeSearchAgent:
     """過去のRCAレポートと観測データを検索し、LLMで回答を生成するエージェント."""
 
-    def __init__(self, llm: Any, vector_store: VectorStore | None = None) -> None:
+    def __init__(
+        self,
+        llm: Any,
+        vector_store: VectorStore | None = None,
+        use_context_store: bool = False,
+    ) -> None:
         self._llm = llm
         self._vector_store = vector_store
+        self._use_context_store = use_context_store
 
     @_observe(name="knowledge_search_translate_keywords", as_type="span")
     async def _translate_query_to_keywords(self, query: str) -> str:
@@ -100,6 +107,11 @@ class KnowledgeSearchAgent:
         # Build context from search results
         context_parts: list[str] = []
         search_results: list[ReportSearchResult] = []
+
+        # ContextStore: レポートのツール出力を全文インデックスし、
+        # クエリに関連するチャンクのみをプロンプトに含める
+        ctx_store = ContextStore(max_chunk_chars=800, search_limit=10) if self._use_context_store else None
+
         for i, vr in enumerate(vector_results, 1):
             stored = StoredRCAReport.from_qdrant_payload(vr.payload)
             if not stored:
@@ -107,16 +119,24 @@ class KnowledgeSearchAgent:
             rca = stored.report
             root_causes_summary = "; ".join(rc.description for rc in rca.root_causes[:3]) if rca.root_causes else "不明"
 
-            # agent_tool_outputs のコンテキスト（各ソース先頭1500文字）
+            # agent_tool_outputs のコンテキスト
             tool_output_context = ""
             if rca.agent_tool_outputs:
-                tool_parts: list[str] = []
-                for source, outputs in rca.agent_tool_outputs.items():
-                    combined = " ".join(outputs)[:1500]
-                    if combined:
-                        tool_parts.append(f"  {source}: {combined}")
-                if tool_parts:
-                    tool_output_context = "\nツール実行結果:\n" + "\n".join(tool_parts) + "\n"
+                if ctx_store:
+                    # ContextStore: 全文をインデックス（切り詰めなし）
+                    for source, outputs in rca.agent_tool_outputs.items():
+                        full_text = " ".join(outputs)
+                        if full_text:
+                            ctx_store.index_text(f"report_{i}_{source}", full_text)
+                else:
+                    # 従来方式: 各ソース先頭1500文字で切り詰め
+                    tool_parts: list[str] = []
+                    for source, outputs in rca.agent_tool_outputs.items():
+                        combined = " ".join(outputs)[:1500]
+                        if combined:
+                            tool_parts.append(f"  {source}: {combined}")
+                    if tool_parts:
+                        tool_output_context = "\nツール実行結果:\n" + "\n".join(tool_parts) + "\n"
 
             # 環境スナップショット
             env_summary = stored.get_environment_summary()
@@ -155,6 +175,8 @@ class KnowledgeSearchAgent:
             )
 
         if not search_results:
+            if ctx_store:
+                ctx_store.close()
             return ReportSearchResponse(
                 answer="該当するRCAレポートが見つかりませんでした。",
                 results=[],
@@ -162,6 +184,18 @@ class KnowledgeSearchAgent:
             )
 
         context = "\n".join(context_parts)
+
+        # ContextStore: クエリに関連するツール出力チャンクを追加
+        if ctx_store:
+            relevant_chunks = ctx_store.search(combined_query, limit=15)
+            if relevant_chunks:
+                chunk_texts = [c["content"] for c in relevant_chunks]
+                context += "\n\n## 関連するツール実行結果（BM25検索）\n" + "\n---\n".join(chunk_texts)
+                logger.info(
+                    "ContextStore: %d relevant chunks added from report tool outputs",
+                    len(relevant_chunks),
+                )
+            ctx_store.close()
 
         # Generate answer with LLM
         logger.info("Generating LLM answer for knowledge search")
