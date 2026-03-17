@@ -311,7 +311,9 @@ class AppState:
         tool_choice = self.settings.llm_tool_choice or None
 
         http_client, http_async_client = _build_http_clients(
-            custom_headers, verify_ssl, is_debug,
+            custom_headers,
+            verify_ssl,
+            is_debug,
             body_overrides=body_overrides or None,
             tool_choice=tool_choice,
         )
