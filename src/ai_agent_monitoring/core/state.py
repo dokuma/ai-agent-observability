@@ -150,17 +150,23 @@ def extract_tool_observations(messages: Sequence[BaseMessage]) -> list[dict[str,
     各ツール実行の入力（ツール名+引数）と出力をペアにして返す。
     ReAct ループ内の全ツール実行を対象とする。
 
+    AIMessage.tool_calls がない場合（モデルが function calling 非対応等）は、
+    ToolMessage の name 属性からフォールバック抽出を試みる。
+
     Returns:
         [{"tool_name": "...", "tool_input": "...", "tool_output": "..."}, ...]
     """
-    # tool_call_id → ToolMessage の内容マップ
+    # tool_call_id → ToolMessage の情報マップ
     tool_msg_map: dict[str, str] = {}
+    tool_msgs: list[ToolMessage] = []
     for m in messages:
         if isinstance(m, ToolMessage):
             tool_msg_map[m.tool_call_id] = _extract_text_from_content(m.content)
+            tool_msgs.append(m)
 
     # AIMessage の tool_calls から入力を取得し、ToolMessage と紐付け
     observations: list[dict[str, str]] = []
+    matched_tool_call_ids: set[str] = set()
     for m in messages:
         if not isinstance(m, AIMessage) or not m.tool_calls:
             continue
@@ -171,7 +177,6 @@ def extract_tool_observations(messages: Sequence[BaseMessage]) -> list[dict[str,
 
             # 引数をクエリ/コマンドとして文字列化
             if isinstance(args, dict):
-                # query, expr, namespace 等の主要引数を優先表示
                 key_args = {k: v for k, v in args.items() if k not in ("datasourceUid",)}
                 tool_input = ", ".join(f"{k}={v}" for k, v in key_args.items())
             else:
@@ -183,6 +188,28 @@ def extract_tool_observations(messages: Sequence[BaseMessage]) -> list[dict[str,
                     {
                         "tool_name": tool_name,
                         "tool_input": tool_input,
+                        "tool_output": tool_output[:_TOOL_OUTPUT_TRUNCATE_CHARS],
+                    }
+                )
+                if tool_call_id:
+                    matched_tool_call_ids.add(tool_call_id)
+
+    # フォールバック: AIMessage.tool_calls が見つからない場合、
+    # ToolMessage の name 属性から直接抽出
+    if not observations and tool_msgs:
+        logger.info(
+            "extract_tool_observations: no AIMessage.tool_calls found, "
+            "falling back to ToolMessage.name (%d ToolMessages)",
+            len(tool_msgs),
+        )
+        for tm in tool_msgs:
+            tool_name = getattr(tm, "name", "") or "unknown_tool"
+            tool_output = _extract_text_from_content(tm.content)
+            if tool_output:
+                observations.append(
+                    {
+                        "tool_name": tool_name,
+                        "tool_input": "",
                         "tool_output": tool_output[:_TOOL_OUTPUT_TRUNCATE_CHARS],
                     }
                 )

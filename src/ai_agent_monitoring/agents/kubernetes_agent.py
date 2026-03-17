@@ -172,8 +172,14 @@ class KubernetesAgent:
     async def _summarize(self, state: AgentState) -> dict[str, Any]:
         """Tool実行結果をペアごとの観察に基づくKubernetesResultに変換."""
         raw_observations = extract_tool_observations(state["messages"])
-        observations = await self._build_observations(raw_observations)
-        summary = await self._build_grounded_summary(observations)
+        observations: list[ToolObservation] = []
+
+        if raw_observations:
+            observations = await self._build_observations(raw_observations)
+            summary = await self._build_grounded_summary(observations)
+        else:
+            logger.info("KubernetesAgent: tool observations not found, using message-based summary")
+            summary = await self._build_message_based_summary(state)
 
         result = KubernetesResult(
             summary=summary,
@@ -185,6 +191,26 @@ class KubernetesAgent:
             "messages": [HumanMessage(content=summary)],
             "k8s_results": [result],
         }
+
+    async def _build_message_based_summary(self, state: AgentState) -> str:
+        """フォールバック: メッセージ履歴全体からsummaryを生成（従来方式）."""
+        from ai_agent_monitoring.core.state import sanitize_tool_call_messages
+
+        messages = [
+            *sanitize_tool_call_messages(state["messages"]),
+            HumanMessage(
+                content=(
+                    "これまでのKubernetesクラスタ調査結果をまとめてください。\n"
+                    "- 確認したリソースと状態\n"
+                    "- 検出した異常\n"
+                    "- 重要なイベント\n"
+                    "- 全体のサマリ\n\n"
+                    "**重要**: ツール実行結果に含まれない情報は記述しないでください。"
+                )
+            ),
+        ]
+        response = await self.llm.ainvoke(messages)
+        return str(response.content)
 
     async def _build_observations(self, raw_observations: list[dict[str, str]]) -> list[ToolObservation]:
         """各ツール実行ペアからLLMで事実を抽出."""

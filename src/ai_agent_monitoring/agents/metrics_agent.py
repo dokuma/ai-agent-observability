@@ -175,10 +175,15 @@ class MetricsAgent:
         """Tool実行結果をペアごとの観察に基づくMetricsResultに変換."""
         # 1. ツール実行ペアを抽出
         raw_observations = extract_tool_observations(state["messages"])
-        observations = await self._build_observations(raw_observations)
+        observations: list[ToolObservation] = []
 
-        # 2. 観察結果を統合してsummaryを生成
-        summary = await self._build_grounded_summary(observations)
+        if raw_observations:
+            observations = await self._build_observations(raw_observations)
+            summary = await self._build_grounded_summary(observations)
+        else:
+            # フォールバック: tool_callsが見つからない場合は従来方式
+            logger.info("MetricsAgent: tool observations not found, using message-based summary")
+            summary = await self._build_message_based_summary(state)
 
         plan = state.get("plan")
         result = MetricsResult(
@@ -192,6 +197,25 @@ class MetricsAgent:
             "messages": [HumanMessage(content=summary)],
             "metrics_results": [result],
         }
+
+    async def _build_message_based_summary(self, state: AgentState) -> str:
+        """フォールバック: メッセージ履歴全体からsummaryを生成（従来方式）."""
+        from ai_agent_monitoring.core.state import sanitize_tool_call_messages
+
+        messages = [
+            *sanitize_tool_call_messages(state["messages"]),
+            HumanMessage(
+                content=(
+                    "これまでのメトリクス調査結果をまとめてください。\n"
+                    "- 実行したクエリとその結果\n"
+                    "- 検出した異常パターン\n"
+                    "- 全体のサマリ\n\n"
+                    "**重要**: ツール実行結果に含まれない情報は記述しないでください。"
+                )
+            ),
+        ]
+        response = await self.llm.ainvoke(messages)
+        return str(response.content)
 
     async def _build_observations(self, raw_observations: list[dict[str, str]]) -> list[ToolObservation]:
         """各ツール実行ペアからLLMで事実を抽出."""
