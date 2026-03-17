@@ -6,7 +6,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from ai_agent_monitoring.agents.logs_agent import LogsAgent
 from ai_agent_monitoring.agents.metrics_agent import MetricsAgent
@@ -1656,12 +1656,20 @@ class TestMetricsAgentSummarize:
         response.content = "CPU使用率が異常に高い"
         self.agent.llm.ainvoke = AsyncMock(return_value=response)
 
-        state = AgentState(messages=[AIMessage(content="tool結果")], plan=sample_plan)
+        # tool_calls を含む AIMessage + 対応する ToolMessage でペアを構成
+        ai_msg = AIMessage(
+            content="",
+            tool_calls=[{"id": "tc1", "name": "query_prometheus", "args": {"expr": "up"}}],
+        )
+        tool_msg = ToolMessage(content="up{instance='localhost'} 1", tool_call_id="tc1")
+        state = AgentState(messages=[ai_msg, tool_msg], plan=sample_plan)
         result = await self.agent._summarize(state)
 
         assert "metrics_results" in result
         assert len(result["metrics_results"]) == 1
         assert result["metrics_results"][0].summary == "CPU使用率が異常に高い"
+        assert len(result["metrics_results"][0].observations) == 1
+        assert result["metrics_results"][0].observations[0].tool_name == "query_prometheus"
         assert "rate(node_cpu_seconds_total" in result["metrics_results"][0].query
 
 
@@ -1752,12 +1760,18 @@ class TestLogsAgentSummarize:
         response.content = "OOMエラーを検出"
         self.agent.llm.ainvoke = AsyncMock(return_value=response)
 
-        state = AgentState(messages=[AIMessage(content="tool結果")], plan=sample_plan)
+        ai_msg = AIMessage(
+            content="",
+            tool_calls=[{"id": "tc1", "name": "query_loki_logs", "args": {"query": '{app="web"}'}}],
+        )
+        tool_msg = ToolMessage(content="OOMKilled detected", tool_call_id="tc1")
+        state = AgentState(messages=[ai_msg, tool_msg], plan=sample_plan)
         result = await self.agent._summarize(state)
 
         assert "logs_results" in result
         assert len(result["logs_results"]) == 1
         assert result["logs_results"][0].summary == "OOMエラーを検出"
+        assert len(result["logs_results"][0].observations) == 1
 
 
 class TestLogsAgentShouldUseTool:

@@ -81,24 +81,49 @@ class RCAAgent:
         """グラフをコンパイル."""
         return self.graph.compile()
 
+    @staticmethod
+    def _format_observations(results: list, label: str) -> list[str]:
+        """Result の observations をフォーマットしてエビデンスに追加."""
+        parts: list[str] = []
+        for r in results:
+            if hasattr(r, "observations") and r.observations:
+                for obs in r.observations:
+                    parts.append(f"### [{label}] {obs.tool_name}({obs.tool_input})\n{obs.observation}")
+        return parts
+
     @_observe(name="rca_correlate", as_type="span")
     async def _correlate(self, state: AgentState) -> dict[str, Any]:
         """メトリクスとログの相関分析."""
         evidence_parts = []
-        for mr in state.get("metrics_results", []):
+
+        metrics_results = state.get("metrics_results", [])
+        logs_results = state.get("logs_results", [])
+        k8s_results = state.get("k8s_results", [])
+
+        # 各エージェントのsummary
+        for mr in metrics_results:
             evidence_parts.append(f"## メトリクス分析結果\nクエリ: {mr.query}\n{mr.summary}")
             if mr.anomalies:
                 evidence_parts.append("検出異常: " + ", ".join(mr.anomalies))
-        for lr in state.get("logs_results", []):
+        for lr in logs_results:
             evidence_parts.append(f"## ログ分析結果\nクエリ: {lr.query}\n{lr.summary}")
             if lr.error_patterns:
                 evidence_parts.append("エラーパターン: " + ", ".join(lr.error_patterns))
-        for kr in state.get("k8s_results", []):
+        for kr in k8s_results:
             evidence_parts.append(f"## Kubernetes分析結果\n{kr.summary}")
             if kr.anomalies:
                 evidence_parts.append("K8s異常: " + ", ".join(kr.anomalies))
             if kr.events:
                 evidence_parts.append("K8sイベント: " + ", ".join(kr.events[:10]))
+
+        # ツール実行ペアごとの観察結果（根拠の明示）
+        obs_parts = (
+            self._format_observations(metrics_results, "Metrics")
+            + self._format_observations(logs_results, "Logs")
+            + self._format_observations(k8s_results, "K8s")
+        )
+        if obs_parts:
+            evidence_parts.append("## ツール実行の観察結果（根拠）\n" + "\n\n".join(obs_parts))
 
         evidence_text = "\n\n".join(evidence_parts) if evidence_parts else "調査結果なし"
 

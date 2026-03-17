@@ -4,7 +4,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from ai_agent_monitoring.agents.kubernetes_agent import KubernetesAgent
 from ai_agent_monitoring.core.models import KubernetesResult
@@ -150,8 +150,13 @@ class TestKubernetesAgentSummarize:
         response.tool_calls = []
         self.llm.ainvoke = AsyncMock(return_value=response)
 
+        ai_msg = AIMessage(
+            content="",
+            tool_calls=[{"id": "tc1", "name": "k8s_list_events", "args": {"namespace": "monitoring"}}],
+        )
+        tool_msg = ToolMessage(content="CrashLoopBackOff event detected", tool_call_id="tc1")
         state: dict[str, Any] = {
-            "messages": [HumanMessage(content="調査結果をまとめてください")],
+            "messages": [ai_msg, tool_msg],
             "plan": InvestigationPlan(),
         }
         result = await self.agent._summarize(state)
@@ -161,6 +166,7 @@ class TestKubernetesAgentSummarize:
         k8s_result = result["k8s_results"][0]
         assert isinstance(k8s_result, KubernetesResult)
         assert "CrashLoopBackOff" in k8s_result.summary
+        assert len(k8s_result.observations) == 1
 
 
 # ================================================================

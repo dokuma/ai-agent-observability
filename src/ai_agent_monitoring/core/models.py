@@ -54,6 +54,19 @@ class MetricDataPoint(BaseModel):
     value: float
 
 
+class ToolObservation(BaseModel):
+    """ツール実行の入力・出力・観察のペア.
+
+    各ツール呼び出しの結果を構造化して保持し、
+    summaryの根拠を明示することでハルシネーションを防止する。
+    """
+
+    tool_name: str  # "query_prometheus", "k8s_list_events" 等
+    tool_input: str  # 実行したクエリ/コマンド
+    tool_output: str  # 生の出力（切り詰め済み）
+    observation: str  # この結果から読み取れる事実（tool_outputに基づく）
+
+
 class MetricsResult(BaseModel):
     """Prometheus メトリクス分析結果."""
 
@@ -61,6 +74,7 @@ class MetricsResult(BaseModel):
     data_points: list[MetricDataPoint] = Field(default_factory=list)
     anomalies: list[str] = Field(default_factory=list)
     summary: str = ""
+    observations: list[ToolObservation] = Field(default_factory=list)
     tool_outputs: list[str] = Field(default_factory=list)
 
 
@@ -80,6 +94,7 @@ class LogsResult(BaseModel):
     entries: list[LogEntry] = Field(default_factory=list)
     error_patterns: list[str] = Field(default_factory=list)
     summary: str = ""
+    observations: list[ToolObservation] = Field(default_factory=list)
     tool_outputs: list[str] = Field(default_factory=list)
 
 
@@ -101,6 +116,7 @@ class KubernetesResult(BaseModel):
     events: list[str] = Field(default_factory=list)
     anomalies: list[str] = Field(default_factory=list)
     summary: str = ""
+    observations: list[ToolObservation] = Field(default_factory=list)
     tool_outputs: list[str] = Field(default_factory=list)
 
 

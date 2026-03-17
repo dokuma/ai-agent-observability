@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Annotated, Any
 
-from langchain_core.messages import BaseMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langgraph.graph import MessagesState
 from pydantic import BaseModel, Field
 
@@ -139,6 +139,55 @@ def extract_tool_outputs(messages: Sequence[BaseMessage]) -> list[str]:
     # 最新N件
     recent = tool_msgs[-_TOOL_OUTPUT_MAX_MESSAGES:]
     return [_extract_text_from_content(m.content) for m in recent]
+
+
+_TOOL_OUTPUT_TRUNCATE_CHARS = 2000
+
+
+def extract_tool_observations(messages: Sequence[BaseMessage]) -> list[dict[str, str]]:
+    """AIMessage.tool_calls と対応する ToolMessage をペアで抽出.
+
+    各ツール実行の入力（ツール名+引数）と出力をペアにして返す。
+    ReAct ループ内の全ツール実行を対象とする。
+
+    Returns:
+        [{"tool_name": "...", "tool_input": "...", "tool_output": "..."}, ...]
+    """
+    # tool_call_id → ToolMessage の内容マップ
+    tool_msg_map: dict[str, str] = {}
+    for m in messages:
+        if isinstance(m, ToolMessage):
+            tool_msg_map[m.tool_call_id] = _extract_text_from_content(m.content)
+
+    # AIMessage の tool_calls から入力を取得し、ToolMessage と紐付け
+    observations: list[dict[str, str]] = []
+    for m in messages:
+        if not isinstance(m, AIMessage) or not m.tool_calls:
+            continue
+        for tc in m.tool_calls:
+            tool_call_id = tc.get("id", "")
+            tool_name = tc.get("name", "")
+            args = tc.get("args", {})
+
+            # 引数をクエリ/コマンドとして文字列化
+            if isinstance(args, dict):
+                # query, expr, namespace 等の主要引数を優先表示
+                key_args = {k: v for k, v in args.items() if k not in ("datasourceUid",)}
+                tool_input = ", ".join(f"{k}={v}" for k, v in key_args.items())
+            else:
+                tool_input = str(args)
+
+            tool_output = tool_msg_map.get(tool_call_id, "")
+            if tool_output:
+                observations.append(
+                    {
+                        "tool_name": tool_name,
+                        "tool_input": tool_input,
+                        "tool_output": tool_output[:_TOOL_OUTPUT_TRUNCATE_CHARS],
+                    }
+                )
+
+    return observations
 
 
 class TimeRange(BaseModel):
