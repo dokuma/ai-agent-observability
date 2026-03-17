@@ -136,6 +136,7 @@ def _build_http_clients(
     verify_ssl: bool,
     is_debug: bool,
     body_overrides: dict[str, Any] | None = None,
+    tool_choice: str | None = None,
 ) -> tuple[httpx.Client | None, httpx.AsyncClient | None]:
     """カスタムヘッダー・SSL・デバッグログ付き httpx クライアントを構築.
 
@@ -145,6 +146,7 @@ def _build_http_clients(
         body_overrides: リクエストボディに強制注入するパラメータ。
             ChatOpenAI が max_tokens を max_completion_tokens に変換してしまうため、
             httpx フックで直接 JSON ボディを書き換えて回避する。
+        tool_choice: ツール選択モード。リクエストに tools が含まれる場合のみ注入。
     """
     request_hooks_sync: list[object] = []
     request_hooks_async: list[object] = []
@@ -164,28 +166,33 @@ def _build_http_clients(
         request_hooks_sync.append(_apply)
         request_hooks_async.append(_apply_async)
 
-    if body_overrides:
+    if body_overrides or tool_choice:
 
         def _inject_body(request: httpx.Request) -> None:
             content_type = request.headers.get("content-type", "")
             if content_type.startswith("application/json") and request.content:
                 try:
                     body = json.loads(request.content)
-                    body.update(body_overrides)
+                    if body_overrides:
+                        body.update(body_overrides)
+                    # tool_choice は tools フィールドが存在するリクエストのみに注入
+                    if tool_choice and "tools" in body:
+                        body["tool_choice"] = tool_choice
                     raw = json.dumps(body).encode("utf-8")
                     request._content = raw
                     request.stream = httpx.ByteStream(raw)
                     request.headers["content-length"] = str(len(raw))
                     logger.info(
-                        "LLM body_overrides injected: %s (body keys: %s)",
+                        "LLM body injected: overrides=%s, tool_choice=%s (body keys: %s)",
                         body_overrides,
+                        tool_choice if "tools" in body else None,
                         list(body.keys()),
                     )
                 except (json.JSONDecodeError, UnicodeDecodeError):
-                    logger.warning("Failed to inject body_overrides: decode error")
+                    logger.warning("Failed to inject body overrides: decode error")
             else:
                 logger.debug(
-                    "LLM body_overrides skipped: content-type=%s, has_content=%s",
+                    "LLM body injection skipped: content-type=%s, has_content=%s",
                     content_type,
                     bool(request.content),
                 )
@@ -202,7 +209,7 @@ def _build_http_clients(
         response_hooks_sync.append(_log_llm_response)
         response_hooks_async.append(_log_llm_response_async)
 
-    need_custom_client = bool(custom_headers) or not verify_ssl or is_debug or bool(body_overrides)
+    need_custom_client = bool(custom_headers) or not verify_ssl or is_debug or bool(body_overrides) or bool(tool_choice)
     if not need_custom_client:
         return None, None
 
@@ -299,11 +306,14 @@ class AppState:
             body_overrides["max_tokens"] = self.settings.llm_max_tokens
         if self.settings.llm_temperature >= 0:
             body_overrides["temperature"] = self.settings.llm_temperature
-        if self.settings.llm_tool_choice:
-            body_overrides["tool_choice"] = self.settings.llm_tool_choice
+        # tool_choice は tools フィールドが存在するリクエストのみに注入するため
+        # body_overrides ではなく _build_http_clients に別途渡す
+        tool_choice = self.settings.llm_tool_choice or None
 
         http_client, http_async_client = _build_http_clients(
-            custom_headers, verify_ssl, is_debug, body_overrides=body_overrides or None
+            custom_headers, verify_ssl, is_debug,
+            body_overrides=body_overrides or None,
+            tool_choice=tool_choice,
         )
         raw_llm = ChatOpenAI(
             base_url=self.settings.llm_endpoint,
