@@ -3,7 +3,7 @@
 import logging
 from typing import Any
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 
@@ -12,16 +12,14 @@ from ai_agent_monitoring.core.models import LogsResult, ToolObservation
 from ai_agent_monitoring.core.state import (
     AgentState,
     _extract_text_from_content,
+    build_context_aware_messages,
     extract_tool_observations,
     extract_tool_outputs,
+    extract_tool_search_query,
     should_stop_tool_loop,
 )
 from ai_agent_monitoring.tools.base import MCPClient
-from ai_agent_monitoring.tools.context_store import (
-    ContextStore,
-    extract_logql_search_terms,
-    extract_promql_search_terms,
-)
+from ai_agent_monitoring.tools.context_store import ContextStore, extract_logql_search_terms
 from ai_agent_monitoring.tools.grafana import create_grafana_tools
 from ai_agent_monitoring.tools.loki import create_loki_tools
 
@@ -173,113 +171,41 @@ class LogsAgent:
             response = await self.llm.ainvoke(setup_messages)
             return {"messages": [*setup_messages, response]}
         else:
-            messages = self._build_context_aware_messages(state, "Logs Agent")
+            messages = self._get_context_aware_messages(state)
 
         response = await self.llm.ainvoke(messages)
         return {"messages": [response]}
 
-    def _build_context_aware_messages(
-        self,
-        state: AgentState,
-        agent_identifier: str,
-    ) -> list[BaseMessage]:
-        """Orchestratorメッセージを除外し、古いToolMessageを圧縮したメッセージリストを構築."""
-        all_messages = list(state["messages"])
-
-        agent_start_idx = 0
-        for i, m in enumerate(all_messages):
-            if isinstance(m, SystemMessage) and agent_identifier in m.content:
-                agent_start_idx = i
-                break
-        agent_messages: list[BaseMessage] = list(all_messages[agent_start_idx:])
-
-        if not self._context_store or len(agent_messages) <= 3:
-            return agent_messages
-
+    def _get_context_aware_messages(self, state: AgentState) -> list[BaseMessage]:
+        """ContextStoreから関連環境情報を取得し、過去のツール出力を圧縮したメッセージを構築."""
         plan = state.get("plan")
-        search_query = self._build_search_query(plan, agent_messages)
-        return self._compress_old_messages(agent_messages, search_query)
+        env_query = self._build_env_search_query(plan)
+        tool_query = extract_tool_search_query(state["messages"])
 
-    def _build_search_query(
-        self,
-        plan: Any,
-        messages: list[BaseMessage],
-    ) -> str:
-        """調査計画と最新のAIMessageからContextStore検索クエリを構築.
+        return build_context_aware_messages(
+            messages=state["messages"],
+            agent_identifier="Logs Agent",
+            context_store=self._context_store,
+            env_search_query=env_query,
+            tool_search_query=tool_query,
+        )
 
-        LogsAgent用: LogQLクエリからラベル値とフィルタ文字列を抽出し、
-        構文要素を除去した有効な検索語を生成する。
+    @staticmethod
+    def _build_env_search_query(plan: Any) -> str:
+        """調査計画からログ環境情報検索用クエリを構築.
+
+        LogQLクエリからラベル値とフィルタ文字列を抽出し、
+        ContextStoreにインデックスされた環境情報から
+        関連するdatasource・job・ラベルの情報を取得する。
         """
         terms: list[str] = []
         if plan:
             if hasattr(plan, "logql_queries") and plan.logql_queries:
                 for q in plan.logql_queries:
                     terms.extend(extract_logql_search_terms(q))
-            if hasattr(plan, "promql_queries") and plan.promql_queries:
-                for q in plan.promql_queries:
-                    terms.extend(extract_promql_search_terms(q))
             if hasattr(plan, "target_instances") and plan.target_instances:
                 terms.extend(plan.target_instances)
-
-        # 最新のAIMessageからも検索語を抽出
-        for m in reversed(messages):
-            if isinstance(m, AIMessage) and isinstance(m.content, str) and m.content:
-                terms.extend(extract_logql_search_terms(m.content))
-                break
-
-        return " ".join(terms) if terms else "logs loki query error"
-
-    def _compress_old_messages(
-        self,
-        messages: list[BaseMessage],
-        search_query: str,
-    ) -> list[BaseMessage]:
-        """古いToolMessageの内容をContextStore検索結果で置換して圧縮."""
-        if not self._context_store:
-            return messages
-
-        last_tool_idx = -1
-        for i in range(len(messages) - 1, -1, -1):
-            if isinstance(messages[i], ToolMessage):
-                last_tool_idx = i
-                break
-
-        last_ai_idx = -1
-        for i in range(last_tool_idx, -1, -1):
-            if isinstance(messages[i], AIMessage):
-                last_ai_idx = i
-                break
-
-        protect_from = last_ai_idx if last_ai_idx >= 0 else len(messages)
-
-        compressed: list[BaseMessage] = []
-        for i, msg in enumerate(messages):
-            if i >= protect_from:
-                compressed.append(msg)
-            elif isinstance(msg, ToolMessage):
-                search_results = self._context_store.search(search_query, limit=3)
-                if search_results:
-                    summary = "\n".join(c["content"] for c in search_results)
-                    compressed.append(
-                        ToolMessage(
-                            content=f"[過去の調査結果から関連情報]\n{summary}",
-                            tool_call_id=msg.tool_call_id,
-                            name=getattr(msg, "name", None),
-                        )
-                    )
-                else:
-                    original = _extract_text_from_content(msg.content)
-                    compressed.append(
-                        ToolMessage(
-                            content=original[:500] + "..." if len(original) > 500 else original,
-                            tool_call_id=msg.tool_call_id,
-                            name=getattr(msg, "name", None),
-                        )
-                    )
-            else:
-                compressed.append(msg)
-
-        return compressed
+        return " ".join(terms) if terms else "loki logs datasource"
 
     @_observe(name="logs_agent_summarize", as_type="span")
     async def _summarize(self, state: AgentState) -> dict[str, Any]:

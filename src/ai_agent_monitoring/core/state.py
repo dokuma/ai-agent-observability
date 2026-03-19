@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Annotated, Any
 
-from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.graph import MessagesState
 from pydantic import BaseModel, Field
 
@@ -100,6 +100,175 @@ def should_stop_tool_loop(
 
 
 _TOOL_OUTPUT_MAX_MESSAGES = 5
+_COMPRESSED_TOOL_MSG_CHARS = 500
+
+
+def filter_agent_messages(
+    messages: Sequence[BaseMessage],
+    agent_identifier: str,
+) -> list[BaseMessage]:
+    """サブエージェント自身のメッセージのみを抽出する.
+
+    orchestrator のメッセージを除外し、指定された agent_identifier を
+    含む SystemMessage 以降のメッセージだけを返す。
+
+    Args:
+        messages: 全メッセージ履歴
+        agent_identifier: エージェント識別文字列（SystemMessage.content 内の一致判定用）
+
+    Returns:
+        エージェント自身のメッセージリスト
+    """
+    agent_start_idx = 0
+    for i, m in enumerate(messages):
+        if isinstance(m, SystemMessage) and agent_identifier in m.content:
+            agent_start_idx = i
+            break
+    return list(messages[agent_start_idx:])
+
+
+def build_context_aware_messages(
+    messages: Sequence[BaseMessage],
+    agent_identifier: str,
+    context_store: Any | None,
+    env_search_query: str,
+    tool_search_query: str,
+) -> list[BaseMessage]:
+    """orchestratorメッセージを除外し、環境情報と過去のツール出力をContextStoreから取得.
+
+    1. エージェント自身のメッセージを抽出（orchestrator除外）
+    2. ContextStoreからplanに関連する環境情報を検索し注入
+    3. 古いToolMessageを最新のAI思考に基づくContextStore検索結果で圧縮
+
+    Args:
+        messages: 全メッセージ履歴
+        agent_identifier: エージェント識別文字列
+        context_store: ContextStoreインスタンス（Noneの場合はフィルタリングのみ）
+        env_search_query: 環境情報検索用のクエリ
+        tool_search_query: 過去のツール出力検索用のクエリ
+
+    Returns:
+        コンテキスト最適化済みメッセージリスト
+    """
+    agent_messages = filter_agent_messages(messages, agent_identifier)
+
+    if not context_store or len(agent_messages) <= 3:
+        return agent_messages
+
+    # --- 環境情報の検索・注入 ---
+    env_chunks = context_store.search(env_search_query, limit=5)
+    env_context_msg: HumanMessage | None = None
+    if env_chunks:
+        env_text = "\n".join(c["content"] for c in env_chunks)
+        env_context_msg = HumanMessage(
+            content=f"[調査対象に関連する環境情報]\n{env_text}"
+        )
+
+    # --- 古い ToolMessage の圧縮 ---
+    compressed = _compress_old_tool_messages(agent_messages, context_store, tool_search_query)
+
+    # 環境情報を SystemMessage + HumanMessage の直後に挿入
+    if env_context_msg:
+        insert_idx = 0
+        for i, m in enumerate(compressed):
+            if isinstance(m, (SystemMessage, HumanMessage)):
+                insert_idx = i + 1
+            else:
+                break
+        compressed.insert(insert_idx, env_context_msg)
+
+    return compressed
+
+
+def _compress_old_tool_messages(
+    messages: list[BaseMessage],
+    context_store: Any,
+    search_query: str,
+) -> list[BaseMessage]:
+    """古いToolMessageの内容をContextStore検索結果で置換して圧縮する.
+
+    最新のAIMessage + ToolMessageペアはそのまま保持し、
+    それ以前のToolMessageの内容を圧縮する。
+
+    Args:
+        messages: エージェントのメッセージリスト
+        context_store: ContextStoreインスタンス
+        search_query: ツール出力検索用のクエリ
+
+    Returns:
+        圧縮済みメッセージリスト
+    """
+    # 最新の AIMessage + ToolMessage ペアのインデックスを特定
+    last_tool_idx = -1
+    for i in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[i], ToolMessage):
+            last_tool_idx = i
+            break
+
+    last_ai_idx = -1
+    for i in range(last_tool_idx, -1, -1):
+        if isinstance(messages[i], AIMessage):
+            last_ai_idx = i
+            break
+
+    protect_from = last_ai_idx if last_ai_idx >= 0 else len(messages)
+
+    # 検索結果をキャッシュ（同じクエリで何度も検索しない）
+    cached_search: list[dict[str, Any]] | None = None
+
+    compressed: list[BaseMessage] = []
+    for i, msg in enumerate(messages):
+        if i >= protect_from:
+            # 最新ペアはそのまま保持
+            compressed.append(msg)
+        elif isinstance(msg, ToolMessage):
+            # 古い ToolMessage を圧縮
+            if cached_search is None:
+                cached_search = context_store.search(search_query, limit=3)
+
+            if cached_search:
+                summary = "\n".join(c["content"] for c in cached_search)
+                compressed.append(
+                    ToolMessage(
+                        content=f"[過去の調査結果から関連情報]\n{summary}",
+                        tool_call_id=msg.tool_call_id,
+                        name=getattr(msg, "name", None),
+                    )
+                )
+            else:
+                original = _extract_text_from_content(msg.content)
+                truncated = (
+                    original[:_COMPRESSED_TOOL_MSG_CHARS] + "..."
+                    if len(original) > _COMPRESSED_TOOL_MSG_CHARS
+                    else original
+                )
+                compressed.append(
+                    ToolMessage(
+                        content=truncated,
+                        tool_call_id=msg.tool_call_id,
+                        name=getattr(msg, "name", None),
+                    )
+                )
+        else:
+            compressed.append(msg)
+
+    return compressed
+
+
+def extract_tool_search_query(messages: Sequence[BaseMessage]) -> str:
+    """最新のAIMessageの思考内容からツール出力検索用クエリを構築する.
+
+    AIMessageのcontentにはLLMの思考（次に何を調べるか等）が含まれるため、
+    これを検索語として使うことで、現在の関心に関連する過去のツール出力を取得できる。
+    """
+    from ai_agent_monitoring.tools.context_store import extract_promql_search_terms
+
+    for m in reversed(messages):
+        if isinstance(m, AIMessage) and isinstance(m.content, str) and m.content:
+            terms = extract_promql_search_terms(m.content)
+            if terms:
+                return " ".join(terms)
+    return ""
 
 
 def _extract_text_from_content(content: Any) -> str:

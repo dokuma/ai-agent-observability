@@ -3,7 +3,7 @@
 import logging
 from typing import Any
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 
@@ -12,12 +12,14 @@ from ai_agent_monitoring.core.models import KubernetesResult, ToolObservation
 from ai_agent_monitoring.core.state import (
     AgentState,
     _extract_text_from_content,
+    build_context_aware_messages,
     extract_tool_observations,
     extract_tool_outputs,
+    extract_tool_search_query,
     should_stop_tool_loop,
 )
 from ai_agent_monitoring.tools.base import MCPClient
-from ai_agent_monitoring.tools.context_store import ContextStore, extract_promql_search_terms
+from ai_agent_monitoring.tools.context_store import ContextStore
 from ai_agent_monitoring.tools.kubernetes import KubernetesMCPTool, create_kubernetes_tools
 
 # Langfuse observe デコレータ（未インストール時はno-op）
@@ -165,44 +167,32 @@ class KubernetesAgent:
             response = await self.llm.ainvoke(setup_messages)
             return {"messages": [*setup_messages, response]}
         else:
-            messages = self._build_context_aware_messages(state, "Kubernetes Agent")
+            messages = self._get_context_aware_messages(state)
 
         response = await self.llm.ainvoke(messages)
         return {"messages": [response]}
 
-    def _build_context_aware_messages(
-        self,
-        state: AgentState,
-        agent_identifier: str,
-    ) -> list[BaseMessage]:
-        """Orchestratorメッセージを除外し、古いToolMessageを圧縮したメッセージリストを構築."""
-        all_messages = list(state["messages"])
-
-        agent_start_idx = 0
-        for i, m in enumerate(all_messages):
-            if isinstance(m, SystemMessage) and agent_identifier in m.content:
-                agent_start_idx = i
-                break
-        agent_messages: list[BaseMessage] = list(all_messages[agent_start_idx:])
-
-        if not self._context_store or len(agent_messages) <= 3:
-            return agent_messages
-
+    def _get_context_aware_messages(self, state: AgentState) -> list[BaseMessage]:
+        """ContextStoreから関連環境情報を取得し、過去のツール出力を圧縮したメッセージを構築."""
         plan = state.get("plan")
-        search_query = self._build_search_query(plan, agent_messages)
-        return self._compress_old_messages(agent_messages, search_query)
+        env_query = self._build_env_search_query(plan)
+        tool_query = extract_tool_search_query(state["messages"])
 
-    def _build_search_query(
-        self,
-        plan: Any,
-        messages: list[BaseMessage],
-    ) -> str:
-        """調査計画と最新のAIMessageからContextStore検索クエリを構築.
+        return build_context_aware_messages(
+            messages=state["messages"],
+            agent_identifier="Kubernetes Agent",
+            context_store=self._context_store,
+            env_search_query=env_query,
+            tool_search_query=tool_query,
+        )
 
-        K8sエージェント用: namespace名、Pod名、リソース種別、
-        インスタンス名を検索語として使用する。
-        これらはツール出力に含まれる識別子と一致するため、
-        FTS5 BM25検索で有効に機能する。
+    @staticmethod
+    def _build_env_search_query(plan: Any) -> str:
+        """調査計画からK8s環境情報検索用クエリを構築.
+
+        plan のターゲット（namespace名、Pod名、リソース種別）を検索語として使い、
+        ContextStoreにインデックスされた環境情報から、調査対象に関連する
+        namespace要約やPod状態を取得する。
         """
         terms: list[str] = []
         if plan:
@@ -214,67 +204,7 @@ class KubernetesAgent:
                 terms.extend(plan.k8s_resource_kinds)
             if hasattr(plan, "target_instances") and plan.target_instances:
                 terms.extend(plan.target_instances)
-
-        # 最新のAIMessageから技術用語を抽出
-        for m in reversed(messages):
-            if isinstance(m, AIMessage) and isinstance(m.content, str) and m.content:
-                # PromQLが含まれる場合はメトリクス名・ラベル値を抽出
-                terms.extend(extract_promql_search_terms(m.content))
-                break
-
-        return " ".join(terms) if terms else "kubernetes pod namespace event"
-
-    def _compress_old_messages(
-        self,
-        messages: list[BaseMessage],
-        search_query: str,
-    ) -> list[BaseMessage]:
-        """古いToolMessageの内容をContextStore検索結果で置換して圧縮."""
-        if not self._context_store:
-            return messages
-
-        last_tool_idx = -1
-        for i in range(len(messages) - 1, -1, -1):
-            if isinstance(messages[i], ToolMessage):
-                last_tool_idx = i
-                break
-
-        last_ai_idx = -1
-        for i in range(last_tool_idx, -1, -1):
-            if isinstance(messages[i], AIMessage):
-                last_ai_idx = i
-                break
-
-        protect_from = last_ai_idx if last_ai_idx >= 0 else len(messages)
-
-        compressed: list[BaseMessage] = []
-        for i, msg in enumerate(messages):
-            if i >= protect_from:
-                compressed.append(msg)
-            elif isinstance(msg, ToolMessage):
-                search_results = self._context_store.search(search_query, limit=3)
-                if search_results:
-                    summary = "\n".join(c["content"] for c in search_results)
-                    compressed.append(
-                        ToolMessage(
-                            content=f"[過去の調査結果から関連情報]\n{summary}",
-                            tool_call_id=msg.tool_call_id,
-                            name=getattr(msg, "name", None),
-                        )
-                    )
-                else:
-                    original = _extract_text_from_content(msg.content)
-                    compressed.append(
-                        ToolMessage(
-                            content=original[:500] + "..." if len(original) > 500 else original,
-                            tool_call_id=msg.tool_call_id,
-                            name=getattr(msg, "name", None),
-                        )
-                    )
-            else:
-                compressed.append(msg)
-
-        return compressed
+        return " ".join(terms) if terms else "kubernetes namespace pod event"
 
     @_observe(name="kubernetes_agent_summarize", as_type="span")
     async def _summarize(self, state: AgentState) -> dict[str, Any]:
