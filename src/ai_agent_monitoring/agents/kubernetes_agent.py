@@ -17,7 +17,7 @@ from ai_agent_monitoring.core.state import (
     should_stop_tool_loop,
 )
 from ai_agent_monitoring.tools.base import MCPClient
-from ai_agent_monitoring.tools.context_store import ContextStore
+from ai_agent_monitoring.tools.context_store import ContextStore, extract_promql_search_terms
 from ai_agent_monitoring.tools.kubernetes import KubernetesMCPTool, create_kubernetes_tools
 
 # Langfuse observe デコレータ（未インストール時はno-op）
@@ -197,24 +197,32 @@ class KubernetesAgent:
         plan: Any,
         messages: list[BaseMessage],
     ) -> str:
-        """調査計画と最新のAIMessageからContextStore検索クエリを構築."""
-        parts: list[str] = []
+        """調査計画と最新のAIMessageからContextStore検索クエリを構築.
+
+        K8sエージェント用: namespace名、Pod名、リソース種別、
+        インスタンス名を検索語として使用する。
+        これらはツール出力に含まれる識別子と一致するため、
+        FTS5 BM25検索で有効に機能する。
+        """
+        terms: list[str] = []
         if plan:
             if hasattr(plan, "target_namespaces") and plan.target_namespaces:
-                parts.extend(plan.target_namespaces[:3])
+                terms.extend(plan.target_namespaces)
             if hasattr(plan, "target_pods") and plan.target_pods:
-                parts.extend(plan.target_pods[:3])
+                terms.extend(plan.target_pods)
             if hasattr(plan, "k8s_resource_kinds") and plan.k8s_resource_kinds:
-                parts.extend(plan.k8s_resource_kinds[:3])
+                terms.extend(plan.k8s_resource_kinds)
             if hasattr(plan, "target_instances") and plan.target_instances:
-                parts.extend(plan.target_instances[:3])
+                terms.extend(plan.target_instances)
 
+        # 最新のAIMessageから技術用語を抽出
         for m in reversed(messages):
             if isinstance(m, AIMessage) and isinstance(m.content, str) and m.content:
-                parts.append(m.content[:200])
+                # PromQLが含まれる場合はメトリクス名・ラベル値を抽出
+                terms.extend(extract_promql_search_terms(m.content))
                 break
 
-        return " ".join(parts) if parts else "kubernetes pod namespace event"
+        return " ".join(terms) if terms else "kubernetes pod namespace event"
 
     def _compress_old_messages(
         self,

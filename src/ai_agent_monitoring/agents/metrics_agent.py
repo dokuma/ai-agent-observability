@@ -17,7 +17,7 @@ from ai_agent_monitoring.core.state import (
     should_stop_tool_loop,
 )
 from ai_agent_monitoring.tools.base import MCPClient
-from ai_agent_monitoring.tools.context_store import ContextStore
+from ai_agent_monitoring.tools.context_store import ContextStore, extract_promql_search_terms
 from ai_agent_monitoring.tools.grafana import create_grafana_tools
 from ai_agent_monitoring.tools.prometheus import create_prometheus_tools
 
@@ -207,23 +207,26 @@ class MetricsAgent:
         plan: Any,
         messages: list[BaseMessage],
     ) -> str:
-        """調査計画と最新のAIMessageからContextStore検索クエリを構築."""
-        parts: list[str] = []
+        """調査計画と最新のAIMessageからContextStore検索クエリを構築.
+
+        MetricsAgent用: PromQLクエリからメトリクス名とラベル値を抽出し、
+        関数名や構文要素を除去した有効な検索語を生成する。
+        """
+        terms: list[str] = []
         if plan:
             if hasattr(plan, "promql_queries") and plan.promql_queries:
-                parts.extend(plan.promql_queries[:3])
-            if hasattr(plan, "logql_queries") and plan.logql_queries:
-                parts.extend(plan.logql_queries[:3])
+                for q in plan.promql_queries:
+                    terms.extend(extract_promql_search_terms(q))
             if hasattr(plan, "target_instances") and plan.target_instances:
-                parts.extend(plan.target_instances[:3])
+                terms.extend(plan.target_instances)
 
-        # 最新のAIMessageの思考内容も検索に活用
+        # 最新のAIMessageからも検索語を抽出
         for m in reversed(messages):
             if isinstance(m, AIMessage) and isinstance(m.content, str) and m.content:
-                parts.append(m.content[:200])
+                terms.extend(extract_promql_search_terms(m.content))
                 break
 
-        return " ".join(parts) if parts else "metrics prometheus query"
+        return " ".join(terms) if terms else "metrics prometheus query"
 
     def _compress_old_messages(
         self,
