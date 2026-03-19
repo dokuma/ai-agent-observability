@@ -18,28 +18,95 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # PromQL の関数名・キーワード（検索語として無意味なため除外）
-_PROMQL_NOISE_WORDS = frozenset({
-    "rate", "irate", "increase", "sum", "avg", "max", "min", "count",
-    "count_values", "topk", "bottomk", "quantile", "histogram_quantile",
-    "by", "without", "on", "ignoring", "group_left", "group_right",
-    "offset", "bool", "and", "or", "unless",
-    "abs", "ceil", "floor", "round", "clamp", "clamp_max", "clamp_min",
-    "sort", "sort_desc", "time", "vector", "scalar",
-    "label_replace", "label_join", "predict_linear", "delta", "idelta",
-    "deriv", "changes", "resets", "absent", "absent_over_time",
-    "stddev", "stdvar", "stddev_over_time", "stdvar_over_time",
-    "avg_over_time", "min_over_time", "max_over_time", "sum_over_time",
-    "count_over_time", "quantile_over_time", "last_over_time",
-})
+_PROMQL_NOISE_WORDS = frozenset(
+    {
+        "rate",
+        "irate",
+        "increase",
+        "sum",
+        "avg",
+        "max",
+        "min",
+        "count",
+        "count_values",
+        "topk",
+        "bottomk",
+        "quantile",
+        "histogram_quantile",
+        "by",
+        "without",
+        "on",
+        "ignoring",
+        "group_left",
+        "group_right",
+        "offset",
+        "bool",
+        "and",
+        "or",
+        "unless",
+        "abs",
+        "ceil",
+        "floor",
+        "round",
+        "clamp",
+        "clamp_max",
+        "clamp_min",
+        "sort",
+        "sort_desc",
+        "time",
+        "vector",
+        "scalar",
+        "label_replace",
+        "label_join",
+        "predict_linear",
+        "delta",
+        "idelta",
+        "deriv",
+        "changes",
+        "resets",
+        "absent",
+        "absent_over_time",
+        "stddev",
+        "stdvar",
+        "stddev_over_time",
+        "stdvar_over_time",
+        "avg_over_time",
+        "min_over_time",
+        "max_over_time",
+        "sum_over_time",
+        "count_over_time",
+        "quantile_over_time",
+        "last_over_time",
+    }
+)
 
 # LogQL の構文キーワード
-_LOGQL_NOISE_WORDS = frozenset({
-    "json", "logfmt", "regexp", "pattern", "unpack", "line_format",
-    "label_format", "unwrap", "decolorize",
-    "count_over_time", "rate", "bytes_rate", "bytes_over_time",
-    "sum", "avg", "max", "min", "count", "topk", "bottomk",
-    "by", "without",
-})
+_LOGQL_NOISE_WORDS = frozenset(
+    {
+        "json",
+        "logfmt",
+        "regexp",
+        "pattern",
+        "unpack",
+        "line_format",
+        "label_format",
+        "unwrap",
+        "decolorize",
+        "count_over_time",
+        "rate",
+        "bytes_rate",
+        "bytes_over_time",
+        "sum",
+        "avg",
+        "max",
+        "min",
+        "count",
+        "topk",
+        "bottomk",
+        "by",
+        "without",
+    }
+)
 
 
 def extract_promql_search_terms(query: str) -> list[str]:
@@ -56,11 +123,11 @@ def extract_promql_search_terms(query: str) -> list[str]:
     label_values = re.findall(r'[=~!]+\s*["\']([^"\']*)["\']', query)
     for v in label_values:
         # 正規表現パターン（.*等）は除外、実際の値のみ
-        if v and len(v) > 1 and not re.match(r'^[.*+?|\\]+$', v):
+        if v and len(v) > 1 and not re.match(r"^[.*+?|\\]+$", v):
             terms.append(v)
 
     # 識別子（メトリクス名、ラベル名）
-    identifiers = re.findall(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b', query)
+    identifiers = re.findall(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\b", query)
     for ident in identifiers:
         if ident.lower() not in _PROMQL_NOISE_WORDS and len(ident) > 2:
             terms.append(ident)
@@ -79,7 +146,7 @@ def extract_logql_search_terms(query: str) -> list[str]:
     # ラベル値: {label="value"}
     label_values = re.findall(r'[=~!]+\s*["\']([^"\']*)["\']', query)
     for v in label_values:
-        if v and len(v) > 1 and not re.match(r'^[.*+?|\\]+$', v):
+        if v and len(v) > 1 and not re.match(r"^[.*+?|\\]+$", v):
             terms.append(v)
 
     # フィルタ文字列: |= "string" or |~ "string" or != "string"

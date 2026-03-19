@@ -160,9 +160,7 @@ def build_context_aware_messages(
     env_context_msg: HumanMessage | None = None
     if env_chunks:
         env_text = "\n".join(c["content"] for c in env_chunks)
-        env_context_msg = HumanMessage(
-            content=f"[調査対象に関連する環境情報]\n{env_text}"
-        )
+        env_context_msg = HumanMessage(content=f"[調査対象に関連する環境情報]\n{env_text}")
 
     # --- 古い ToolMessage の圧縮 ---
     compressed = _compress_old_tool_messages(agent_messages, context_store, tool_search_query)
