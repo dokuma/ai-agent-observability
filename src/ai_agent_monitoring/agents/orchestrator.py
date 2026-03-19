@@ -627,6 +627,10 @@ class OrchestratorAgent:
             except Exception as e:
                 self._log_discovery_error("k8s environment", e)
 
+        # 環境情報を ContextStore にインデックス（サブエージェントの _reason で検索利用）
+        if self._context_store:
+            self._index_environment_to_context_store(env)
+
         # キャッシュに格納
         if self._set_cached_env:
             self._set_cached_env(env)
@@ -795,6 +799,76 @@ class OrchestratorAgent:
             if val:
                 values.append(val.split()[0])
         return values
+
+    def _index_environment_to_context_store(self, env: EnvironmentContext) -> None:
+        """環境情報を ContextStore にインデックスし、サブエージェントで検索可能にする."""
+        cs = self._context_store
+        if cs is None:
+            return
+
+        # Prometheus メトリクス・jobs
+        if env.available_metrics or env.available_jobs:
+            lines: list[str] = []
+            for uid, info in env.prometheus_env_by_uid.items():
+                ds_name = uid
+                for ds in env.prometheus_datasources:
+                    if ds.uid == uid:
+                        ds_name = f"{ds.name} (uid: {uid})"
+                        break
+                if info.metrics:
+                    lines.append(f"Prometheus {ds_name} metrics: {', '.join(info.metrics)}")
+                if info.jobs:
+                    lines.append(f"Prometheus {ds_name} jobs: {', '.join(info.jobs)}")
+                if info.instances:
+                    lines.append(f"Prometheus {ds_name} instances: {', '.join(info.instances)}")
+            if lines:
+                cs.index_text("env_prometheus_metrics", "\n".join(lines))
+
+        # Loki jobs
+        if env.loki_jobs or env.loki_env_by_uid:
+            loki_lines: list[str] = []
+            for uid, loki_info in env.loki_env_by_uid.items():
+                ds_name = uid
+                for ds in env.loki_datasources:
+                    if ds.uid == uid:
+                        ds_name = f"{ds.name} (uid: {uid})"
+                        break
+                if loki_info.jobs:
+                    loki_lines.append(f"Loki {ds_name} jobs: {', '.join(loki_info.jobs)}")
+            if loki_lines:
+                cs.index_text("env_loki", "\n".join(loki_lines))
+
+        # K8s クラスタ情報
+        k8s = env.k8s_env
+        if k8s.namespaces:
+            lines = [f"Kubernetes namespaces: {', '.join(k8s.namespaces)}"]
+            if k8s.node_count:
+                lines.append(f"Node count: {k8s.node_count}")
+            for ns, summary in k8s.namespace_summaries.items():
+                status_parts = [f"{s}: {c}" for s, c in summary.pod_statuses.items()]
+                status_str = ", ".join(status_parts) if status_parts else "不明"
+                line = f"{ns}: Pod {summary.pod_count}個 ({status_str})"
+                if summary.warning_event_count:
+                    line += f", Warning events: {summary.warning_event_count}"
+                lines.append(line)
+            cs.index_text("env_k8s", "\n".join(lines))
+
+        # Datasource UID 情報
+        uid_lines: list[str] = []
+        for ds in env.prometheus_datasources:
+            uid_lines.append(f"Prometheus datasource: {ds.name} uid={ds.uid}")
+        for ds in env.loki_datasources:
+            uid_lines.append(f"Loki datasource: {ds.name} uid={ds.uid}")
+        if uid_lines:
+            cs.index_text("env_datasource_uids", "\n".join(uid_lines))
+
+        # Few-shot 例
+        if env.example_promql_queries:
+            cs.index_text("env_fewshot_promql", "\n".join(env.example_promql_queries))
+        if env.example_logql_queries:
+            cs.index_text("env_fewshot_logql", "\n".join(env.example_logql_queries))
+
+        logger.info("Environment context indexed to ContextStore")
 
     def _log_discovery_error(self, phase: str, exc: Exception) -> None:
         """環境情報収集のエラーログ出力."""
